@@ -1,0 +1,60 @@
+name: Source Audit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check source files and prompts
+        run: |
+          set -euo pipefail
+          required=(
+            config.py media.py pipeline.py prompts.py router.py schemas.py storage.py utils.py
+            prompts/forensic_analysis_prompt.txt
+            prompts/research_prompt.txt
+            prompts/editorial_prompt.txt
+            prompts/reels_creative_prompt.txt
+            prompts/caption_prompt.txt
+            prompts/threads_promptu.txt
+            prompts/qa_prompt.txt
+            prompts/guncellik_talimati.txt
+          )
+          missing=0
+          for f in "${required[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              missing=1
+            else
+              echo "OK: $f"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Compile Python source
+        run: |
+          set -euo pipefail
+          python -m py_compile config.py media.py pipeline.py prompts.py router.py schemas.py storage.py utils.py
+          echo "PYTHON_COMPILE_OK"
+
+      - name: Verify prompt placeholders
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          checks = {
+              'prompts/forensic_analysis_prompt.txt': ['{ek_notlar_bolumu}', '{sure_saniye}'],
+              'prompts/research_prompt.txt': ['{guncellik_talimati}'],
+              'prompts/reels_creative_prompt.txt': ['{sure_saniye}', '{kelime_sayisi}', '{bilgi_orani}'],
+          }
+          for path, needles in checks.items():
+              text = Path(path).read_text(encoding='utf-8')
+              for needle in needles:
+                  if needle not in text:
+                      raise SystemExit(f'Missing expected placeholder {needle} in {path}')
+          print('PROMPT_PLACEHOLDERS_OK')
+          PY
