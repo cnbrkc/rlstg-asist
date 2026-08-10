@@ -10,6 +10,13 @@ class SmartRouter:
     def __init__(self) -> None:
         self.blacklist = {}
         self._last_request_had_quota = False
+        # Keep SDK clients alive for the whole pipeline run. Creating a short-lived
+        # client for every request can leave the underlying HTTP client closed while
+        # the SDK is still retrying/reading a response in GitHub Actions.
+        self.clients = {}
+        for mail, api_key in API_KEYS.items():
+            if api_key and api_key.strip():
+                self.clients[mail] = genai.Client(api_key=api_key.strip())
 
     def _is_banned(self, mail: str, model: str) -> bool:
         now=time.time(); bl=self.blacklist
@@ -58,8 +65,11 @@ class SmartRouter:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
             for mail,api_key in API_KEYS.items():
                 if self._is_banned(mail,model_adi): continue
+                client = self.clients.get(mail)
+                if client is None:
+                    continue
                 try:
-                    response=genai.Client(api_key=api_key).models.generate_content(model=model_adi,contents=contents,config=config)
+                    response=client.models.generate_content(model=model_adi,contents=contents,config=config)
                     log_ekle(f"✅ Başarılı → {mail} + {model_adi}"); return response,f"{mail}+{model_adi}"
                 except Exception as e:
                     son_hata=e; aksiyon=self._handle_hata(mail,model_adi,str(e),log_ekle)
