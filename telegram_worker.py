@@ -21,7 +21,9 @@ def api(method, params=None):
 
 
 def send_message(chat_id, text):
-    api("sendMessage", {"chat_id": chat_id, "text": text})
+    result = api("sendMessage", {"chat_id": chat_id, "text": text})
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram sendMessage failed: {result}")
 
 
 def download_file(file_id, destination):
@@ -33,7 +35,7 @@ def download_file(file_id, destination):
     urllib.request.urlretrieve(url, destination)
 
 
-def export_new_videos(paths):
+def export_outputs(paths, chat_ids):
     output = os.environ.get("GITHUB_OUTPUT")
     if not output:
         return
@@ -41,6 +43,10 @@ def export_new_videos(paths):
         fh.write("new_videos<<EOF\n")
         for path in paths:
             fh.write(f"{path}\n")
+        fh.write("EOF\n")
+        fh.write("chat_id<<EOF\n")
+        if chat_ids:
+            fh.write(f"{chat_ids[-1]}\n")
         fh.write("EOF\n")
 
 
@@ -57,10 +63,11 @@ def main():
     updates = result.get("result", [])
     if not updates:
         print("No new Telegram messages.")
-        export_new_videos([])
+        export_outputs([], [])
         return
 
     new_videos = []
+    chat_ids = []
 
     for update in updates:
         update_id = update["update_id"]
@@ -82,6 +89,7 @@ def main():
                 send_message(chat_id, "📥 Videonu aldım. İndirmeyi başlatıyorum...")
                 download_file(file_id, destination)
                 new_videos.append(str(destination))
+                chat_ids.append(str(chat_id))
                 size_mb = destination.stat().st_size / (1024 * 1024)
                 send_message(chat_id, f"✅ Video GitHub Actions'a ulaştı.\n\n📁 {filename}\n📦 {size_mb:.1f} MB\n\nPipeline başlatılıyor...")
             elif document and (document.get("mime_type") or "").startswith("video/"):
@@ -91,6 +99,7 @@ def main():
                 send_message(chat_id, "📥 Video dosyasını aldım. İndirmeyi başlatıyorum...")
                 download_file(file_id, destination)
                 new_videos.append(str(destination))
+                chat_ids.append(str(chat_id))
                 size_mb = destination.stat().st_size / (1024 * 1024)
                 send_message(chat_id, f"✅ Video GitHub Actions'a ulaştı.\n\n📁 {destination.name}\n📦 {size_mb:.1f} MB\n\nPipeline başlatılıyor...")
             elif message.get("text") == "/start":
@@ -102,7 +111,7 @@ def main():
 
         OFFSET_FILE.write_text(str(update_id + 1))
 
-    export_new_videos(new_videos)
+    export_outputs(new_videos, chat_ids)
 
 
 if __name__ == "__main__":
