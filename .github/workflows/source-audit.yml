@@ -10,7 +10,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check source files and prompts
+      - name: Check source files and all original prompts
         run: |
           set -euo pipefail
           required=(
@@ -23,6 +23,9 @@ jobs:
             prompts/threads_promptu.txt
             prompts/qa_prompt.txt
             prompts/guncellik_talimati.txt
+            prompts/kurallar.txt
+            prompts/sistem_talimati.txt
+            prompts/video_analiz_promptu.txt
           )
           missing=0
           for f in "${required[@]}"; do
@@ -34,6 +37,40 @@ jobs:
             fi
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Verify original prompt integrity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          expected = {
+              'prompts/caption_prompt.txt': '8e3e69e22ba7aab28c8eecaefb4dcefc0e0d9d03',
+              'prompts/editorial_prompt.txt': 'cbdcce3039a2e3a8247163fba1ec03726e83acff',
+              'prompts/forensic_analysis_prompt.txt': '8de3fa25e29e191fd86ee440ca6736e41a838c2a',
+              'prompts/guncellik_talimati.txt': 'f8198ba9d1ff516434b7d78f36084348da1f2ea3',
+              'prompts/kurallar.txt': '54fd07c4e8d31551119378125cfd4c6cc51a80ca',
+              'prompts/qa_prompt.txt': '1a801c5c51ae9aa4d738aada1affa3f54e062d3c',
+              'prompts/reels_creative_prompt.txt': '2bd751adea02bc0b08ce3e5a4a140ab8133be29d',
+              'prompts/research_prompt.txt': '2f0c13971fb126316e78404216172e98e5e907be',
+              'prompts/sistem_talimati.txt': '595be616fa394048f358a5c261d5d1c804a234bc',
+              'prompts/threads_promptu.txt': '17321f241ad3e26b17f8cad7526e3da7a147d060',
+              'prompts/video_analiz_promptu.txt': '1ec1b2b30d4f45b871972f2590121fb01c5794ec',
+          }
+
+          def git_blob_sha(path: Path) -> str:
+              data = path.read_bytes()
+              payload = f'blob {len(data)}\\0'.encode() + data
+              return hashlib.sha1(payload).hexdigest()
+
+          for path, expected_sha in expected.items():
+              actual = git_blob_sha(Path(path))
+              if actual != expected_sha:
+                  raise SystemExit(f'PROMPT_CHANGED: {path} expected={expected_sha} actual={actual}')
+              print(f'PROMPT_EXACT: {path}')
+          print('ALL_ORIGINAL_PROMPTS_EXACT')
+          PY
 
       - name: Compile Python source
         run: |
@@ -50,6 +87,8 @@ jobs:
               'prompts/forensic_analysis_prompt.txt': ['{ek_notlar_bolumu}', '{sure_saniye}'],
               'prompts/research_prompt.txt': ['{guncellik_talimati}'],
               'prompts/reels_creative_prompt.txt': ['{sure_saniye}', '{kelime_sayisi}', '{bilgi_orani}'],
+              'prompts/sistem_talimati.txt': ['{sure_saniye}', '{kelime_sayisi}', '{bilgi_orani}'],
+              'prompts/video_analiz_promptu.txt': ['{ek_notlar_bolumu}', '{guncellik_talimati}'],
           }
           for path, needles in checks.items():
               text = Path(path).read_text(encoding='utf-8')
