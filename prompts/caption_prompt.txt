@@ -1,1 +1,11 @@
-{{CONTENTS}}
+# Caption Prompt
+
+Create a concise, engaging Turkish Instagram Reels caption from the supplied automotive news context.
+
+Requirements:
+- Do not invent facts.
+- Keep the opening sentence attention-grabbing.
+- Preserve exact model, brand, figures, dates, and claims from the verified context.
+- Write naturally in Turkish.
+- Add relevant hashtags at the end.
+- Avoid generic filler and clickbait that changes the factual meaning.
