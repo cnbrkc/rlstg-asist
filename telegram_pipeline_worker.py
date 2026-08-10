@@ -32,10 +32,6 @@ def send_video(path, caption):
     r.raise_for_status()
 
 
-def latest_inputs():
-    return sorted(Path("data").glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
-
-
 def video_duration(path):
     try:
         out = subprocess.check_output(
@@ -100,11 +96,14 @@ def process(path):
 
 
 def main():
-    inputs = latest_inputs()
+    raw = os.environ.get("VIDEO_FILES", "").strip()
+    inputs = [Path(line.strip()) for line in raw.splitlines() if line.strip()]
     if not inputs:
-        print("No input videos in data/.")
+        print("No new input videos from Telegram intake.")
         return
     for path in inputs:
+        if not path.exists():
+            raise FileNotFoundError(f"Telegram intake output not found: {path}")
         print(f"Processing {path}")
         process(path)
 
