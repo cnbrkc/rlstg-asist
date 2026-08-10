@@ -1,0 +1,37 @@
+name: Gemini API Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gemini-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Gemini SDK
+        run: pip install --disable-pip-version-check -q google-genai
+
+      - name: Test Gemini API
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from google import genai
+
+          key = os.environ.get('GEMINI_API_KEY', '').strip()
+          if not key:
+              raise SystemExit('GEMINI_API_KEY secret bulunamadı.')
+
+          client = genai.Client(api_key=key)
+          response = client.models.generate_content(
+              model='gemini-2.5-flash',
+              contents='Reply with exactly: GEMINI_OK'
+          )
+          print('Gemini yanıtı:', getattr(response, 'text', ''))
+          PY
