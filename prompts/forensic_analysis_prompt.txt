@@ -1,1 +1,1 @@
-%s
+Analyze the supplied video as a forensic automotive observer. Identify only what can be visually/audio-visually observed. Do not invent facts. Return structured JSON matching the provided response schema. Identify brand/model if reasonably visible, observed facts, unknowns, possible inferences, research needs, and visual opportunities.
