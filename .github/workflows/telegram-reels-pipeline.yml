@@ -1,0 +1,65 @@
+name: Telegram Reels Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_file:
+        description: 'Path of uploaded Telegram video artifact/file'
+        required: true
+        type: string
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install --disable-pip-version-check -r requirements.txt
+          else
+            pip install --disable-pip-version-check google-genai requests
+          fi
+
+      - name: Compile check
+        run: python -m compileall -q .
+
+      - name: Run Telegram pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_FILE: ${{ inputs.video_file }}
+        run: |
+          set -euo pipefail
+          test -f "$VIDEO_FILE"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from pipeline import pipeline_calistir
+
+          video = Path(os.environ['VIDEO_FILE']).resolve()
+          result = pipeline_calistir(
+              video_path=str(video),
+              secilen_ses_ingilizce=False,
+              icerik_tonu='haber',
+              sure_saniye=None,
+              video_analiz_notlari='',
+              metin_uretim_notlari='',
+          )
+          print('PIPELINE_RESULT:', result)
+          PY
