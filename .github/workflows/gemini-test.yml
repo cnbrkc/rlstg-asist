@@ -30,7 +30,7 @@ jobs:
 
           client = genai.Client(api_key=key)
           response = client.models.generate_content(
-              model='gemini-2.5-flash',
+              model='gemini-3.5-flash',
               contents='Reply with exactly: GEMINI_OK'
           )
           print('Gemini yanıtı:', getattr(response, 'text', ''))
