@@ -11,12 +11,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Normalize Git working tree without changing repository content
-        run: |
-          set -euo pipefail
-          git config core.autocrlf false
-          git restore --source=HEAD --worktree -- .
+          persist-credentials: false
 
       - name: Check source files and all original prompts
         run: |
@@ -46,12 +41,11 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
 
-      - name: Verify prompt integrity against checked-out Git commit
+      - name: Verify prompt integrity from exact Git blobs
         run: |
           set -euo pipefail
           echo "AUDIT_COMMIT=$(git rev-parse HEAD)"
           echo "AUDIT_BRANCH=$(git branch --show-current || true)"
-          git status --short
           python - <<'PY'
           import hashlib
           import subprocess
@@ -72,20 +66,19 @@ jobs:
           ]
 
           def blob_sha(data: bytes) -> str:
-              payload = f'blob {len(data)}\\0'.encode() + data
-              return hashlib.sha1(payload).hexdigest()
+              return hashlib.sha1(f'blob {len(data)}\\0'.encode() + data).hexdigest()
 
           for name in files:
-              path = Path(name)
-              working = blob_sha(path.read_bytes())
-              committed = subprocess.check_output(
-                  ['git', 'rev-parse', f'HEAD:{name}'], text=True
-              ).strip()
-              if working != committed:
-                  raise SystemExit(
-                      f'WORKTREE_CHANGED: {name} committed={committed} working={working}'
-                  )
-              print(f'PROMPT_EXACT: {name} sha={committed}')
+              committed_bytes = subprocess.check_output(['git', 'show', f'HEAD:{name}'])
+              committed_sha = subprocess.check_output(['git', 'rev-parse', f'HEAD:{name}'], text=True).strip()
+              calculated_sha = blob_sha(committed_bytes)
+              if calculated_sha != committed_sha:
+                  raise SystemExit(f'GIT_BLOB_HASH_ERROR: {name} committed={committed_sha} calculated={calculated_sha}')
+              Path(name).write_bytes(committed_bytes)
+              working_sha = blob_sha(Path(name).read_bytes())
+              if working_sha != committed_sha:
+                  raise SystemExit(f'WORKTREE_CHANGED: {name} committed={committed_sha} working={working_sha}')
+              print(f'PROMPT_EXACT: {name} sha={committed_sha}')
 
           print('ALL_ORIGINAL_PROMPTS_EXACT')
           PY
