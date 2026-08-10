@@ -72,11 +72,12 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     _ilerleme(ilerlemeyi_guncelle,7); log_ekle('🔍 Son kalite kontrol (QA)...')
     qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log_ekle); state['qa_state_final']=qa_state
     _ilerleme(ilerlemeyi_guncelle,8); log_ekle('🎧 Ses üretiliyor...')
-    ses_dosyasi=gecici_ses_yolu(); ses_basarili,kullanilan_ses_modeli=router.ses_uret(reels_state.get('seslendirme_metni',''),secilen_ses_ingilizce,ses_dosyasi,log_ekle,hiz_carpani=SES_HIZ_CARPANI)
+    ses_adi = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Puck'
+    ses_dosyasi=gecici_ses_yolu(); ses_basarili,kullanilan_ses_modeli=router.ses_uret(reels_state.get('seslendirme_metni',''),ses_adi,ses_dosyasi,log_ekle,hiz_carpani=SES_HIZ_CARPANI)
     if ses_basarili and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi
     _ilerleme(ilerlemeyi_guncelle,9); log_ekle('🎬 Videoya AI sesi ekleniyor (FFmpeg)...')
     output=gecici_dosya_yolu('output','mp4')
     render_ok=ses_basarili and video_ve_sesi_birlestir(temp_input_video,ses_dosyasi,output,log_ekle)
     final=output if render_ok and os.path.exists(output) else ''
     log_ekle('🏁 Pipeline tamamlandı.')
-    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':secilen_ses_ingilizce,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'qa_result':qa_state,'pipeline_state':state}
+    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'qa_result':qa_state,'pipeline_state':state}
