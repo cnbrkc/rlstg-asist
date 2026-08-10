@@ -1,12 +1,11 @@
-name: Telegram Reels Pipeline
+name: Telegram Reels Auto Pipeline
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'data/*.mp4'
   workflow_dispatch:
-    inputs:
-      video_file:
-        description: 'Path of uploaded Telegram video artifact/file'
-        required: true
-        type: string
 
 jobs:
   pipeline:
@@ -16,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,38 +29,15 @@ jobs:
           sudo apt-get install -y ffmpeg
 
       - name: Install dependencies
-        run: |
-          if [ -f requirements.txt ]; then
-            pip install --disable-pip-version-check -r requirements.txt
-          else
-            pip install --disable-pip-version-check google-genai requests
-          fi
+        run: pip install --disable-pip-version-check -r requirements.txt
 
       - name: Compile check
         run: python -m compileall -q .
 
-      - name: Run Telegram pipeline
+      - name: Run Telegram reels pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          VIDEO_FILE: ${{ inputs.video_file }}
-        run: |
-          set -euo pipefail
-          test -f "$VIDEO_FILE"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from pipeline import pipeline_calistir
-
-          video = Path(os.environ['VIDEO_FILE']).resolve()
-          result = pipeline_calistir(
-              video_path=str(video),
-              secilen_ses_ingilizce=False,
-              icerik_tonu='haber',
-              sure_saniye=None,
-              video_analiz_notlari='',
-              metin_uretim_notlari='',
-          )
-          print('PIPELINE_RESULT:', result)
-          PY
+        run: python telegram_pipeline_worker.py
