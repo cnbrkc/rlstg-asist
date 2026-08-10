@@ -12,6 +12,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Normalize Git working tree without changing repository content
+        run: |
+          set -euo pipefail
+          git config core.autocrlf false
+          git restore --source=HEAD --worktree -- .
+
       - name: Check source files and all original prompts
         run: |
           set -euo pipefail
