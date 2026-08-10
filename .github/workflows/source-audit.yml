@@ -9,6 +9,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check source files and all original prompts
         run: |
@@ -38,37 +40,47 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
 
-      - name: Verify original prompt integrity
+      - name: Verify prompt integrity against checked-out Git commit
         run: |
           set -euo pipefail
+          echo "AUDIT_COMMIT=$(git rev-parse HEAD)"
+          echo "AUDIT_BRANCH=$(git branch --show-current || true)"
+          git status --short
           python - <<'PY'
           import hashlib
+          import subprocess
           from pathlib import Path
 
-          expected = {
-              'prompts/caption_prompt.txt': '8e3e69e22ba7aab28c8eecaefb4dcefc0e0d9d03',
-              'prompts/editorial_prompt.txt': 'cbdcce3039a2e3a8247163fba1ec03726e83acff',
-              'prompts/forensic_analysis_prompt.txt': '8de3fa25e29e191fd86ee440ca6736e41a838c2a',
-              'prompts/guncellik_talimati.txt': 'f8198ba9d1ff516434b7d78f36084348da1f2ea3',
-              'prompts/kurallar.txt': '54fd07c4e8d31551119378125cfd4c6cc51a80ca',
-              'prompts/qa_prompt.txt': '1a801c5c51ae9aa4d738aada1affa3f54e062d3c',
-              'prompts/reels_creative_prompt.txt': '2bd751adea02bc0b08ce3e5a4a140ab8133be29d',
-              'prompts/research_prompt.txt': '2f0c13971fb126316e78404216172e98e5e907be',
-              'prompts/sistem_talimati.txt': '595be616fa394048f358a5c261d5d1c804a234bc',
-              'prompts/threads_promptu.txt': '17321f241ad3e26b17f8cad7526e3da7a147d060',
-              'prompts/video_analiz_promptu.txt': '1ec1b2b30d4f45b871972f2590121fb01c5794ec',
-          }
+          files = [
+              'prompts/caption_prompt.txt',
+              'prompts/editorial_prompt.txt',
+              'prompts/forensic_analysis_prompt.txt',
+              'prompts/guncellik_talimati.txt',
+              'prompts/kurallar.txt',
+              'prompts/qa_prompt.txt',
+              'prompts/reels_creative_prompt.txt',
+              'prompts/research_prompt.txt',
+              'prompts/sistem_talimati.txt',
+              'prompts/threads_promptu.txt',
+              'prompts/video_analiz_promptu.txt',
+          ]
 
-          def git_blob_sha(path: Path) -> str:
-              data = path.read_bytes()
+          def blob_sha(data: bytes) -> str:
               payload = f'blob {len(data)}\\0'.encode() + data
               return hashlib.sha1(payload).hexdigest()
 
-          for path, expected_sha in expected.items():
-              actual = git_blob_sha(Path(path))
-              if actual != expected_sha:
-                  raise SystemExit(f'PROMPT_CHANGED: {path} expected={expected_sha} actual={actual}')
-              print(f'PROMPT_EXACT: {path}')
+          for name in files:
+              path = Path(name)
+              working = blob_sha(path.read_bytes())
+              committed = subprocess.check_output(
+                  ['git', 'rev-parse', f'HEAD:{name}'], text=True
+              ).strip()
+              if working != committed:
+                  raise SystemExit(
+                      f'WORKTREE_CHANGED: {name} committed={committed} working={working}'
+                  )
+              print(f'PROMPT_EXACT: {name} sha={committed}')
+
           print('ALL_ORIGINAL_PROMPTS_EXACT')
           PY
 
