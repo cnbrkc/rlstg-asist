@@ -1,0 +1,4 @@
+google-genai>=2.14.0
+opencv-python-headless
+imageio-ffmpeg
+requests>=2.31.0
