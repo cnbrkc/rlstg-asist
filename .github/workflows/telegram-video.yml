@@ -21,11 +21,12 @@ jobs:
           python-version: "3.11"
 
       - name: Poll Telegram and download new videos
+        id: intake
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python telegram_worker.py
 
-      - name: Save Telegram offset and downloaded test files
+      - name: Save Telegram offset and downloaded files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -36,3 +37,27 @@ jobs:
             git commit -m "Process Telegram video input"
             git push
           fi
+
+      - name: Setup FFmpeg
+        if: ${{ steps.intake.outputs.new_videos != '' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        if: ${{ steps.intake.outputs.new_videos != '' }}
+        run: pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Compile check
+        if: ${{ steps.intake.outputs.new_videos != '' }}
+        run: python -m compileall -q .
+
+      - name: Run Reels pipeline
+        if: ${{ steps.intake.outputs.new_videos != '' }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_FILES: ${{ steps.intake.outputs.new_videos }}
+        run: python telegram_pipeline_worker.py
