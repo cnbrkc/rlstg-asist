@@ -84,7 +84,31 @@ def video_suresini_al(video_yolu: str) -> float:
 
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
     if not ses_yolu or not os.path.exists(ses_yolu): return False
-    komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-c:a","aac","-shortest",cikti_yolu]
+
+    # TTS tarafında SES_HIZ_CARPANI (şu an 1.2x) uygulanıyor.
+    # Ardından burada video ile son TTS süresi karşılaştırılır. Arada anlamlı
+    # fark varsa görüntü, sesi kesip biçmek yerine sese tam oturacak şekilde
+    # kontrollü olarak hızlandırılır/yavaşlatılır. 0.5x–1.5x sınırları
+    # korunur; küçük farklarda videoya gereksiz hız filtresi uygulanmaz.
+    video_sure = video_suresini_al(video_yolu)
+    ses_sure = _ses_suresini_al(ses_yolu)
+    video_filtresi = None
+    if video_sure > 0 and ses_sure > 0:
+        oran = video_sure / ses_sure
+        if abs(oran - 1.0) >= 0.02:
+            uygulanan_oran = max(MIN_VIDEO_YAVASLATMA, min(MAKS_VIDEO_HIZLANDIRMA, oran))
+            if abs(uygulanan_oran - 1.0) >= 0.005:
+                video_filtresi = f"setpts=PTS/{uygulanan_oran:.6f}"
+                log_ekle(f"🎚️ Ses/video süre uyumu: video {video_sure:.2f}s → ses {ses_sure:.2f}s | görüntü hızı {uygulanan_oran:.2f}x")
+            if abs(oran - uygulanan_oran) > 0.01:
+                log_ekle(f"⚠️ Süre farkı {oran:.2f}x sınırın dışında; güvenli {uygulanan_oran:.2f}x sınırı kullanıldı.")
+        else:
+            log_ekle(f"🎚️ Ses/video süre uyumu: fark küçük ({abs(video_sure-ses_sure):.2f}s), hız değişimi yapılmadı.")
+
+    komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu]
+    if video_filtresi:
+        komut += ["-filter:v", video_filtresi]
+    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-c:a","aac","-shortest",cikti_yolu]
     try:
         r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
         if r.returncode!=0:
