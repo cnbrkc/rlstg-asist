@@ -15,9 +15,27 @@ TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 BASE = f"https://api.telegram.org/bot{TOKEN}"
 
+PIPELINE_STEPS = [
+    "🎥 Forensic video analizi",
+    "🔎 Research / Fact Lock",
+    "🧠 Editorial Brain",
+    "🎙️ Reels Creative",
+    "📝 Caption + Hashtag",
+    "🧵 Threads",
+    "🔍 QA kalite kontrol",
+    "🎧 Autonoe TTS",
+    "🎬 FFmpeg video render",
+]
+
 
 def send_message(text):
     r = requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": text}, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+
+def edit_message(message_id, text):
+    r = requests.post(f"{BASE}/editMessageText", data={"chat_id": CHAT_ID, "message_id": message_id, "text": text}, timeout=60)
     r.raise_for_status()
 
 
@@ -47,64 +65,120 @@ def video_duration(path):
 def _format_title_options(titles):
     if not titles:
         return "🎯 BAŞLIK SEÇENEKLERİ\n\nBaşlık seçeneği üretilemedi."
-
     lines = ["🎯 BAŞLIK SEÇENEKLERİ", ""]
     for i, title in enumerate(titles, 1):
         if isinstance(title, dict):
-            title = (
-                title.get("title")
-                or title.get("baslik")
-                or title.get("başlık")
-                or title.get("text")
-                or title.get("metin")
-                or str(title)
-            )
+            title = title.get("title") or title.get("baslik") or title.get("başlık") or title.get("text") or title.get("metin") or str(title)
         lines.append(f"{i}️⃣ {str(title).strip()}")
     return "\n".join(lines)
 
 
+def _loading_text(done, current=None, warnings=0, errors=0):
+    total = len(PIPELINE_STEPS)
+    filled = min(done, total)
+    bar = "█" * filled + "░" * (total - filled)
+    lines = ["⏳ REELS PIPELINE", "", f"{bar}  {done}/{total}"]
+    if current:
+        lines += ["", f"🔄 {current}"]
+    if warnings or errors:
+        lines += ["", f"⚠️ Uyarı: {warnings}   ❌ Hata: {errors}"]
+    return "\n".join(lines)
+
+
+def _final_report(step_status, warnings, errors, result):
+    lines = ["📊 PIPELINE RAPORU", ""]
+    for i, name in enumerate(PIPELINE_STEPS):
+        lines.append(f"{step_status.get(i, '⚪')} {i + 1}/9 {name}")
+    lines += [
+        "",
+        f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}",
+        "⚡ TTS hız: 1.20x",
+        f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}",
+        f"⚠️ Uyarı: {len(warnings)}",
+        f"❌ Hata: {len(errors)}",
+    ]
+    if warnings:
+        lines += ["", "⚠️ UYARILAR"]
+        lines.extend(f"• {x}" for x in warnings[:8])
+    if errors:
+        lines += ["", "❌ HATALAR"]
+        lines.extend(f"• {x}" for x in errors[:8])
+    return "\n".join(lines)[:4090]
+
+
 def process(path):
-    send_message(f"📥 Video alındı. Reels pipeline başlıyor...\n\n📁 {path.name}")
+    initial = send_message(_loading_text(0, "Video alındı, pipeline başlatılıyor..."))
+    loading_id = initial["result"]["message_id"]
+
     raw = path.read_bytes()
     duration = video_duration(path)
     mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
     router = SmartRouter()
+    step_status = {}
+    warnings = []
+    errors = []
 
     def log(msg):
-        send_message(msg)
+        text = str(msg).strip()
+        print(text)
+        lower = text.lower()
+        if "⚠️" in text or "uyarı" in lower or "warning" in lower:
+            warnings.append(text)
+        if "❌" in text or "hata" in lower or "error" in lower:
+            errors.append(text)
 
     def progress(n, total, msg):
-        send_message(f"{n}/{total}  {msg}")
+        step_status[n - 1] = "🟢"
+        current = PIPELINE_STEPS[n - 1] if 0 < n <= len(PIPELINE_STEPS) else str(msg)
+        try:
+            edit_message(loading_id, _loading_text(n - 1, f"Tamamlandı → {current}", len(warnings), len(errors)))
+        except Exception as exc:
+            print(f"Loading mesajı güncellenemedi: {exc}")
 
-    result = pipeline_calistir(
-        router=router,
-        video_bytes=raw,
-        mime_type=mime,
-        temp_input_video=str(path),
-        video_analiz_notlari="",
-        metin_uretim_notlari="",
-        sure_saniye=duration,
-        icerik_tonu=TON_DENGELI,
-        secilen_ses_ingilizce="Autonoe",
-        log_ekle=log,
-        ilerlemeyi_guncelle=progress,
-    )
+    try:
+        result = pipeline_calistir(
+            router=router,
+            video_bytes=raw,
+            mime_type=mime,
+            temp_input_video=str(path),
+            video_analiz_notlari="",
+            metin_uretim_notlari="",
+            sure_saniye=duration,
+            icerik_tonu=TON_DENGELI,
+            secilen_ses_ingilizce="Autonoe",
+            log_ekle=log,
+            ilerlemeyi_guncelle=progress,
+        )
+    except Exception as exc:
+        errors.append(str(exc))
+        try:
+            edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}))
+        except Exception:
+            pass
+        raise
 
     final = result.get("final_video")
     if not final or not Path(final).exists():
+        errors.append("Pipeline tamamlandı ancak final video üretilemedi.")
+        edit_message(loading_id, _final_report(step_status, warnings, errors, result))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
-    # 1. MESAJ: Video + Instagram/Facebook açıklaması + hemen altında hashtag'ler
+    result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "Süre kontrolü yapıldı")
+    for i in range(len(PIPELINE_STEPS)):
+        step_status.setdefault(i, "🟢")
+    edit_message(loading_id, _final_report(step_status, warnings, errors, result))
+
+    # 2. MESAJ: Video + Instagram/Facebook açıklaması + hemen altında hashtag'ler
     caption = result.get("reels_aciklamasi") or ""
     hashtags = result.get("reels_hashtagleri") or []
     if hashtags:
         caption += "\n\n" + " ".join("#" + str(x).lstrip("#") for x in hashtags)
     send_video(final, caption[:1024])
 
-    # 2. MESAJ: Başlık seçenekleri
+    # 3. MESAJ: Başlık seçenekleri
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
 
-    # 3. MESAJ: Threads açıklaması
+    # 4. MESAJ: Threads açıklaması
     threads = result.get("threads_aciklamasi") or ""
     send_message(f"THREADS AÇIKLAMASI\n\n{threads}" if threads else "THREADS AÇIKLAMASI\n\nAçıklama üretilemedi.")
 
@@ -116,6 +190,8 @@ def process(path):
         "title_options": result.get("kapak_basliklari", []),
         "threads": threads,
         "qa": result.get("qa_result", {}),
+        "warnings": warnings,
+        "errors": errors,
     }
     Path("pipeline_result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
