@@ -2,11 +2,25 @@ name: Telegram Video Intake
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/5 * * * *"
-  push:
-    paths:
-      - ".github/workflows/telegram-video.yml"
+    inputs:
+      telegram_file_id:
+        description: Telegram file_id
+        required: true
+        type: string
+      telegram_chat_id:
+        description: Telegram chat_id
+        required: true
+        type: string
+      telegram_filename:
+        description: Video filename
+        required: false
+        default: telegram_video.mp4
+        type: string
+      telegram_update_id:
+        description: Telegram update_id
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -23,13 +37,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Poll Telegram and download new videos
-        id: intake
+      - name: Download Telegram video
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: python telegram_worker.py
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          TELEGRAM_FILENAME: ${{ inputs.telegram_filename }}
+        run: python telegram_webhook_intake.py
 
-      - name: Save Telegram offset and downloaded files
+      - name: Save video to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -42,25 +58,21 @@ jobs:
           fi
 
       - name: Setup FFmpeg
-        if: ${{ steps.intake.outputs.new_videos != '' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
-        if: ${{ steps.intake.outputs.new_videos != '' }}
         run: pip install --disable-pip-version-check -r requirements.txt
 
       - name: Compile check
-        if: ${{ steps.intake.outputs.new_videos != '' }}
         run: python -m compileall -q .
 
       - name: Run Reels pipeline
-        if: ${{ steps.intake.outputs.new_videos != '' }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ steps.intake.outputs.chat_id }}
-          VIDEO_FILES: ${{ steps.intake.outputs.new_videos }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          VIDEO_FILES: data/${{ inputs.telegram_filename }}
         run: python telegram_pipeline_worker.py
