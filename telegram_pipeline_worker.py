@@ -85,7 +85,7 @@ def process(path):
         metin_uretim_notlari="",
         sure_saniye=duration,
         icerik_tonu=TON_DENGELI,
-        secilen_ses_ingilizce="Puck",
+        secilen_ses_ingilizce="Autonoe",
         log_ekle=log,
         ilerlemeyi_guncelle=progress,
     )
