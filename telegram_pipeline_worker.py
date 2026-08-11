@@ -22,16 +22,18 @@ PIPELINE_STEPS = [
 ]
 TON_MAP = {"eglence": TON_EGLENCE, "dengeli": TON_DENGELI, "bilgi": TON_BILGI, "teknik": TON_TEKNIK}
 TON_LABELS = {"eglence": "🎭 Eğlence Ağırlıklı", "dengeli": "⚖️ Dengeli", "bilgi": "🧠 Bilgi Ağırlıklı", "teknik": "📊 Teknik / Detaylı"}
+TELEGRAM_TEXT_LIMIT = 4096
+TELEGRAM_VIDEO_CAPTION_LIMIT = 1024
 
 def send_message(text):
-    r = requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": text}, timeout=60); r.raise_for_status(); return r.json()
+    r = requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60); r.raise_for_status(); return r.json()
 
 def edit_message(message_id, text):
-    r = requests.post(f"{BASE}/editMessageText", data={"chat_id": CHAT_ID, "message_id": message_id, "text": text}, timeout=60); r.raise_for_status()
+    r = requests.post(f"{BASE}/editMessageText", data={"chat_id": CHAT_ID, "message_id": message_id, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60); r.raise_for_status()
 
 def send_video(path, caption):
     with open(path, "rb") as fh:
-        r = requests.post(f"{BASE}/sendVideo", data={"chat_id": CHAT_ID, "caption": caption}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
+        r = requests.post(f"{BASE}/sendVideo", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
     r.raise_for_status()
 
 def video_duration(path):
@@ -60,13 +62,32 @@ def _loading_text(done, current=None, warnings=0, errors=0):
     if warnings or errors: lines += ["",f"⚠️ Uyarı: {warnings}   ❌ Hata: {errors}"]
     return "\n".join(lines)
 
+def _extract_media_lines(warnings):
+    return [x for x in warnings if x.startswith("📐 ") or x.startswith("🎚️ ")]
+
 def _final_report(step_status,warnings,errors,result,tone_key):
     lines=["📊 PIPELINE RAPORU",""]
     for i,name in enumerate(PIPELINE_STEPS): lines.append(f"{step_status.get(i,'⚪')} {i+1}/9 {name}")
     lines += ["",f"🎯 İçerik türü: {TON_LABELS.get(tone_key,tone_key)}",f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}","⚡ TTS hız: 1.20x",f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}",f"⚠️ Uyarı: {len(warnings)}",f"❌ Hata: {len(errors)}"]
+    media_lines=_extract_media_lines(warnings)
+    if media_lines:
+        lines += ["","🎥 MEDYA TEŞHİSİ"]
+        lines.extend(media_lines)
     if warnings: lines += ["","⚠️ UYARILAR"]; lines.extend(f"• {x}" for x in warnings[:8])
     if errors: lines += ["","❌ HATALAR"]; lines.extend(f"• {x}" for x in errors[:8])
-    return "\n".join(lines)[:4090]
+    return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
+
+def _caption_with_hashtags(description, hashtags):
+    desc = str(description or "").strip()
+    tags = " ".join("#" + str(x).lstrip("#").strip() for x in (hashtags or []) if str(x).strip())
+    if not tags:
+        return desc[:TELEGRAM_VIDEO_CAPTION_LIMIT], bool(desc) and len(desc) > TELEGRAM_VIDEO_CAPTION_LIMIT
+    suffix = "\n\n" + tags
+    if len(suffix) >= TELEGRAM_VIDEO_CAPTION_LIMIT:
+        return suffix[-TELEGRAM_VIDEO_CAPTION_LIMIT:], bool(desc)
+    available = TELEGRAM_VIDEO_CAPTION_LIMIT - len(suffix)
+    truncated = len(desc) > available
+    return desc[:available].rstrip() + suffix, truncated
 
 def process(path):
     initial=send_message(_loading_text(0,"Video alındı, pipeline başlatılıyor...")); loading_id=initial["result"]["message_id"]
@@ -76,6 +97,7 @@ def process(path):
         text=str(msg).strip(); print(text); lower=text.lower()
         if "⚠️" in text or "uyarı" in lower or "warning" in lower: warnings.append(text)
         if "❌" in text or "hata" in lower or "error" in lower: errors.append(text)
+        if text.startswith("📐 ") or text.startswith("🎚️ "): warnings.append(text)
     def progress(n,total,msg):
         step_status[n-1]="🟢"; current=PIPELINE_STEPS[n-1] if 0<n<=len(PIPELINE_STEPS) else str(msg)
         try: edit_message(loading_id,_loading_text(n-1,f"Tamamlandı → {current}",len(warnings),len(errors)))
@@ -91,14 +113,17 @@ def process(path):
     if not final or not Path(final).exists():
         errors.append("Pipeline tamamlandı ancak final video üretilemedi."); edit_message(loading_id,_final_report(step_status,warnings,errors,result,tone_key)); raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
     result["sync_note"]=next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()),"Süre kontrolü yapıldı")
+    caption=result.get("reels_aciklamasi") or ""; hashtags=result.get("reels_hashtagleri") or []
+    if not caption.strip(): warnings.append("⚠️ Instagram/Facebook açıklaması boş üretildi.")
+    if not hashtags: warnings.append("⚠️ Hashtag listesi boş üretildi.")
+    video_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
+    if caption_truncated: warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; hashtagler korunarak sona alındı.")
     for i in range(len(PIPELINE_STEPS)): step_status.setdefault(i,"🟢")
     edit_message(loading_id,_final_report(step_status,warnings,errors,result,tone_key))
-    caption=result.get("reels_aciklamasi") or ""; hashtags=result.get("reels_hashtagleri") or []
-    if hashtags: caption += "\n\n"+" ".join("#"+str(x).lstrip("#") for x in hashtags)
-    send_video(final,caption[:1024])
+    send_video(final,video_caption)
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
     threads=result.get("threads_aciklamasi") or ""; send_message(f"THREADS AÇIKLAMASI\n\n{threads}" if threads else "THREADS AÇIKLAMASI\n\nAçıklama üretilemedi.")
-    Path("pipeline_result.json").write_text(json.dumps({"source":path.name,"final_video":Path(final).name,"content_tone":tone_key,"seslendirme":result.get("seslendirme_metni",""),"caption":caption,"title_options":result.get("kapak_basliklari",[]),"threads":threads,"qa":result.get("qa_result",{}),"warnings":warnings,"errors":errors},ensure_ascii=False,indent=2),encoding="utf-8")
+    Path("pipeline_result.json").write_text(json.dumps({"source":path.name,"final_video":Path(final).name,"content_tone":tone_key,"seslendirme":result.get("seslendirme_metni",""),"caption":caption,"caption_telegram":video_caption,"title_options":result.get("kapak_basliklari",[]),"threads":threads,"qa":result.get("qa_result",{}),"warnings":warnings,"errors":errors},ensure_ascii=False,indent=2),encoding="utf-8")
 
 def main():
     raw=os.environ.get("VIDEO_FILES","").strip(); inputs=[Path(line.strip()) for line in raw.splitlines() if line.strip()]
