@@ -21,6 +21,16 @@ on:
         required: false
         default: ""
         type: string
+      content_tone:
+        description: Selected content tone
+        required: true
+        default: dengeli
+        type: choice
+        options:
+          - eglence
+          - dengeli
+          - bilgi
+          - teknik
 
 permissions:
   contents: write
@@ -75,4 +85,5 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
           VIDEO_FILES: data/${{ inputs.telegram_filename }}
+          CONTENT_TONE: ${{ inputs.content_tone }}
         run: python telegram_pipeline_worker.py
