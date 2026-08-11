@@ -29,11 +29,8 @@ export default {
     try { update = await request.json(); }
     catch { return new Response("Bad JSON", { status: 400 }); }
 
-    // User selected the content style.
     const callback = update?.callback_query;
-    if (callback) {
-      return await handleCallback(callback, env);
-    }
+    if (callback) return await handleCallback(callback, env);
 
     const message = update?.message;
     const chatId = message?.chat?.id;
@@ -50,10 +47,7 @@ export default {
       filename = message.document.file_name || `telegram_${update.update_id}.mp4`;
     } else {
       if (message.text === "/start") {
-        await telegram(env, "sendMessage", {
-          chat_id: chatId,
-          text: "🤖 Reels Asistanı hazır. Bana bir video gönder."
-        });
+        await telegram(env, "sendMessage", { chat_id: chatId, text: "🤖 Reels Asistanı hazır. Bana bir video gönder." });
       }
       return new Response("OK", { status: 200 });
     }
@@ -65,10 +59,7 @@ export default {
     const saved = await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Queue Telegram video ${updateId}`);
     if (!saved.ok) {
       const body = await saved.text();
-      await telegram(env, "sendMessage", {
-        chat_id: chatId,
-        text: `❌ Video kuyruğa alınamadı.\n\n${body.slice(0, 1000)}`
-      });
+      await telegram(env, "sendMessage", { chat_id: chatId, text: `❌ Video kuyruğa alınamadı.\n\n${body.slice(0, 1000)}` });
       return new Response("Pending save failed", { status: 502 });
     }
 
@@ -87,7 +78,7 @@ export default {
 
     await telegram(env, "sendMessage", {
       chat_id: chatId,
-      text: "📥 Videonu aldım.\n\n🎯 İçerik türünü seç, seçimine göre ilgili prompt kuralları uygulanarak üretim başlayacak:",
+      text: "📥 Videonu aldım.\n\n🎯 İçerik türünü seç, seçimine göre üretim başlayacak:",
       reply_markup: keyboard
     });
 
@@ -108,35 +99,22 @@ async function handleCallback(callback, env) {
   const tone = match[1];
   const updateId = match[2];
   const pendingPath = `data/pending/${updateId}.json`;
-  const pendingResponse = await githubGet(env, pendingPath);
 
-  if (!pendingResponse.ok) {
-    await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "Bu video artık beklemede değil." });
-    return new Response("OK", { status: 200 });
-  }
+  try {
+    const pendingResponse = await githubGet(env, pendingPath);
+    if (!pendingResponse.ok) {
+      await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `Video beklemede değil (${pendingResponse.status}).` });
+      await safeEdit(env, chatId, callback.message.message_id, `❌ Video bilgisi alınamadı.\n\nGitHub: ${pendingResponse.status}`);
+      return new Response("Pending lookup failed", { status: 502 });
+    }
 
-  const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
-  const labels = {
-    eglence: "🎭 Eğlence Ağırlıklı",
-    dengeli: "⚖️ Dengeli",
-    bilgi: "🧠 Bilgi Ağırlıklı",
-    teknik: "📊 Teknik / Detaylı"
-  };
+    const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
+    const labels = { eglence: "🎭 Eğlence Ağırlıklı", dengeli: "⚖️ Dengeli", bilgi: "🧠 Bilgi Ağırlıklı", teknik: "📊 Teknik / Detaylı" };
 
-  await telegram(env, "answerCallbackQuery", {
-    callback_query_id: callback.id,
-    text: `${labels[tone]} seçildi. Pipeline başlıyor.`
-  });
+    await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `${labels[tone]} seçildi. Pipeline başlıyor.` });
+    await safeEdit(env, chatId, callback.message.message_id, `🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline başlatılıyor...\n\n🔄 GitHub Actions bekleniyor...`);
 
-  await telegram(env, "editMessageText", {
-    chat_id: chatId,
-    message_id: callback.message.message_id,
-    text: `🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline başlatılıyor...`
-  });
-
-  const dispatch = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/telegram-video.yml/dispatches`,
-    {
+    const dispatch = await fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/telegram-video.yml/dispatches`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
@@ -144,37 +122,52 @@ async function handleCallback(callback, env) {
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "rlstg-asist-telegram-webhook"
       },
-      body: JSON.stringify({
-        ref: "main",
-        inputs: {
-          telegram_file_id: pending.file_id,
-          telegram_chat_id: String(pending.chat_id),
-          telegram_filename: pending.filename,
-          telegram_update_id: updateId,
-          content_tone: tone
-        }
-      })
-    }
-  );
-
-  if (!dispatch.ok) {
-    const body = await dispatch.text();
-    await telegram(env, "editMessageText", {
-      chat_id: chatId,
-      message_id: callback.message.message_id,
-      text: `❌ GitHub pipeline başlatılamadı.\n\n${body.slice(0, 1000)}`
+      body: JSON.stringify({ ref: "main", inputs: {
+        telegram_file_id: pending.file_id,
+        telegram_chat_id: String(pending.chat_id),
+        telegram_filename: pending.filename,
+        telegram_update_id: updateId,
+        content_tone: tone
+      }})
     });
-    return new Response("GitHub dispatch failed", { status: 502 });
-  }
 
-  // Delete the one-time pending record after successful dispatch.
-  const pendingMeta = await githubGet(env, pendingPath);
-  if (pendingMeta.ok) {
-    const meta = await pendingMeta.json();
-    await githubDelete(env, pendingPath, meta.sha, `Remove processed Telegram video ${updateId}`);
-  }
+    if (!dispatch.ok) {
+      const body = await dispatch.text();
+      await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `GitHub hatası ${dispatch.status}` });
+      await safeEdit(env, chatId, callback.message.message_id, `❌ GitHub pipeline başlatılamadı.\n\nHTTP ${dispatch.status}\n${body.slice(0, 1500)}`);
+      return new Response("GitHub dispatch failed", { status: 502 });
+    }
 
-  return new Response("OK", { status: 200 });
+    await safeEdit(env, chatId, callback.message.message_id, `🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline çalışıyor...\n\n🟢 GitHub Actions tetiklendi.`);
+
+    const pendingMeta = await githubGet(env, pendingPath);
+    if (pendingMeta.ok) {
+      const meta = await pendingMeta.json();
+      const deleted = await githubDelete(env, pendingPath, meta.sha, `Remove processed Telegram video ${updateId}`);
+      if (!deleted.ok) console.log("Pending cleanup failed", deleted.status, await deleted.text());
+    }
+
+    return new Response("OK", { status: 200 });
+  } catch (error) {
+    const detail = String(error?.message || error).slice(0, 1500);
+    try {
+      await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "Pipeline başlatılırken hata oluştu." });
+      await safeEdit(env, chatId, callback.message.message_id, `❌ PIPELINE BAŞLATILAMADI\n\n${detail}`);
+    } catch (notifyError) {
+      console.log("Callback error notification failed", String(notifyError));
+    }
+    console.log("Callback handler error", detail);
+    return new Response("Callback handler failed", { status: 500 });
+  }
+}
+
+async function safeEdit(env, chatId, messageId, text) {
+  try {
+    return await telegram(env, "editMessageText", { chat_id: chatId, message_id: messageId, text });
+  } catch (error) {
+    console.log("editMessageText failed", String(error));
+    return null;
+  }
 }
 
 async function githubHeaders(env) {
@@ -187,9 +180,7 @@ async function githubHeaders(env) {
 }
 
 async function githubGet(env, path) {
-  return fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/contents/${path}`, {
-    headers: await githubHeaders(env)
-  });
+  return fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/contents/${path}`, { headers: await githubHeaders(env) });
 }
 
 async function githubPut(env, path, text, message) {
@@ -211,9 +202,7 @@ async function githubDelete(env, path, sha, message) {
 function base64Encode(text) {
   const bytes = new TextEncoder().encode(text);
   let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);
 }
 
@@ -225,9 +214,7 @@ async function decodeGitHubContent(json) {
 
 async function telegram(env, method, payload) {
   const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload)
   });
   const text = await response.text();
   let data;
