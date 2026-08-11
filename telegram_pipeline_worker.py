@@ -44,6 +44,25 @@ def video_duration(path):
         return None
 
 
+def _format_title_options(titles):
+    if not titles:
+        return "🎯 BAŞLIK SEÇENEKLERİ\n\nBaşlık seçeneği üretilemedi."
+
+    lines = ["🎯 BAŞLIK SEÇENEKLERİ", ""]
+    for i, title in enumerate(titles, 1):
+        if isinstance(title, dict):
+            title = (
+                title.get("title")
+                or title.get("baslik")
+                or title.get("başlık")
+                or title.get("text")
+                or title.get("metin")
+                or str(title)
+            )
+        lines.append(f"{i}️⃣ {str(title).strip()}")
+    return "\n".join(lines)
+
+
 def process(path):
     send_message(f"📥 Video alındı. Reels pipeline başlıyor...\n\n📁 {path.name}")
     raw = path.read_bytes()
@@ -75,24 +94,30 @@ def process(path):
     if not final or not Path(final).exists():
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
+    # 1. MESAJ: Video + Instagram/Facebook açıklaması + hemen altında hashtag'ler
     caption = result.get("reels_aciklamasi") or ""
     hashtags = result.get("reels_hashtagleri") or []
     if hashtags:
         caption += "\n\n" + " ".join("#" + str(x).lstrip("#") for x in hashtags)
-
-    send_message("✅ Pipeline tamamlandı. Final video Telegram'a gönderiliyor...")
     send_video(final, caption[:1024])
+
+    # 2. MESAJ: Başlık seçenekleri
+    send_message(_format_title_options(result.get("kapak_basliklari") or []))
+
+    # 3. MESAJ: Threads açıklaması
+    threads = result.get("threads_aciklamasi") or ""
+    send_message(f"THREADS AÇIKLAMASI\n\n{threads}" if threads else "THREADS AÇIKLAMASI\n\nAçıklama üretilemedi.")
 
     summary = {
         "source": path.name,
         "final_video": Path(final).name,
         "seslendirme": result.get("seslendirme_metni", ""),
         "caption": caption,
-        "threads": result.get("threads_aciklamasi", ""),
+        "title_options": result.get("kapak_basliklari", []),
+        "threads": threads,
         "qa": result.get("qa_result", {}),
     }
     Path("pipeline_result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    send_message("📝 Caption ve Threads çıktıları hazır. Detaylar Actions logunda; final video yukarıda.")
 
 
 def main():
