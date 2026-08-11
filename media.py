@@ -1,5 +1,5 @@
 """Ses ve video işleme fonksiyonları (ffmpeg, hızlandırma, birleştirme)."""
-import os, re, wave, math, shutil, subprocess, tempfile, uuid
+import os, re, wave, math, shutil, subprocess, tempfile, uuid, json
 from config import SES_OMRU_SANIYE, VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
 
 _GECICI_SES_DOSYALARI = []
@@ -79,17 +79,45 @@ def _video_bilgi_al(video_yolu: str) -> dict:
         except Exception: pass
     return bilgi
 
+def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
+    """Teşhis amaçlı medya özelliklerini alır; pipeline davranışını değiştirmez."""
+    sonuc={"width":0,"height":0,"fps":0.0,"duration":0.0,"video_bitrate":0,"audio_sample_rate":0,"audio_channels":0,"audio_bitrate":0,"audio_codec":"","video_codec":""}
+    try:
+        p=subprocess.run([FFMPEG_BIN,"-i",dosya_yolu],capture_output=True,text=True,timeout=30)
+        stderr=p.stderr or ""
+        mv=re.search(r"Video: ([^,\s]+).*?(\d+)x(\d+).*?(\d+(?:\.\d+)?) fps",stderr,re.S)
+        if mv:
+            sonuc["video_codec"]=mv.group(1); sonuc["width"]=int(mv.group(2)); sonuc["height"]=int(mv.group(3)); sonuc["fps"]=float(mv.group(4))
+        ma=re.search(r"Audio: ([^,\s]+).*?(\d+) Hz,\s*([^,\n]+)",stderr,re.S)
+        if ma:
+            sonuc["audio_codec"]=ma.group(1); sonuc["audio_sample_rate"]=int(ma.group(2));
+            ch=ma.group(3).lower(); sonuc["audio_channels"]=2 if "stereo" in ch else (1 if "mono" in ch else 0)
+        md=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",stderr)
+        if md: sonuc["duration"]=int(md.group(1))*3600+int(md.group(2))*60+float(md.group(3))
+        mb=re.search(r"bitrate:\s*(\d+) kb/s",stderr)
+        if mb: sonuc["video_bitrate"]=int(mb.group(1))
+    except Exception:
+        pass
+    return sonuc
+
+def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:
+    b=_ffprobe_bilgi_al(dosya_yolu)
+    fps=f"{b['fps']:.3f}" if b['fps'] else "?"
+    sure=f"{b['duration']:.2f}s" if b['duration'] else "?"
+    coz=f"{b['width']}x{b['height']}" if b['width'] and b['height'] else "?"
+    ses=f"{b['audio_sample_rate']} Hz / {b['audio_channels']}ch / {b['audio_codec'] or '?'}" if b['audio_sample_rate'] else "ses yok"
+    log_ekle(f"📐 {etiket}: {coz} | {fps} FPS | {sure} | 🎧 {ses}")
+    return b
+
 def video_suresini_al(video_yolu: str) -> float:
     return float(_video_bilgi_al(video_yolu).get("duration",0.0))
 
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
     if not ses_yolu or not os.path.exists(ses_yolu): return False
 
-    # TTS tarafında SES_HIZ_CARPANI (şu an 1.2x) uygulanıyor.
-    # Ardından burada video ile son TTS süresi karşılaştırılır. Arada anlamlı
-    # fark varsa görüntü, sesi kesip biçmek yerine sese tam oturacak şekilde
-    # kontrollü olarak hızlandırılır/yavaşlatılır. 0.5x–1.5x sınırları
-    # korunur; küçük farklarda videoya gereksiz hız filtresi uygulanmaz.
+    medya_raporu(video_yolu, "INPUT", log_ekle)
+    medya_raporu(ses_yolu, "TTS 1.20x SONRASI", log_ekle)
+
     video_sure = video_suresini_al(video_yolu)
     ses_sure = _ses_suresini_al(ses_yolu)
     video_filtresi = None
@@ -113,6 +141,7 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
         r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
         if r.returncode!=0:
             log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-500:]}"); return False
+        medya_raporu(cikti_yolu, "OUTPUT", log_ekle)
         return os.path.exists(cikti_yolu)
     except Exception as e: log_ekle(f"⚠️ Video render hatası: {e}"); return False
 
