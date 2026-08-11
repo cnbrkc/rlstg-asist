@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from config import TON_DENGELI
+from config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from pipeline import pipeline_calistir
 from router import SmartRouter
 
@@ -26,6 +26,19 @@ PIPELINE_STEPS = [
     "🎧 Autonoe TTS",
     "🎬 FFmpeg video render",
 ]
+
+TON_MAP = {
+    "eglence": TON_EGLENCE,
+    "dengeli": TON_DENGELI,
+    "bilgi": TON_BILGI,
+    "teknik": TON_TEKNIK,
+}
+TON_LABELS = {
+    "eglence": "🎭 Eğlence Ağırlıklı",
+    "dengeli": "⚖️ Dengeli",
+    "bilgi": "🧠 Bilgi Ağırlıklı",
+    "teknik": "📊 Teknik / Detaylı",
+}
 
 
 def send_message(text):
@@ -85,12 +98,13 @@ def _loading_text(done, current=None, warnings=0, errors=0):
     return "\n".join(lines)
 
 
-def _final_report(step_status, warnings, errors, result):
+def _final_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 PIPELINE RAPORU", ""]
     for i, name in enumerate(PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i + 1}/9 {name}")
     lines += [
         "",
+        f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}",
         f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}",
         "⚡ TTS hız: 1.20x",
         f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}",
@@ -117,6 +131,10 @@ def process(path):
     step_status = {}
     warnings = []
     errors = []
+    tone_key = os.environ.get("CONTENT_TONE", "dengeli").strip().lower()
+    if tone_key not in TON_MAP:
+        tone_key = "dengeli"
+    selected_tone = TON_MAP[tone_key]
 
     def log(msg):
         text = str(msg).strip()
@@ -144,7 +162,7 @@ def process(path):
             video_analiz_notlari="",
             metin_uretim_notlari="",
             sure_saniye=duration,
-            icerik_tonu=TON_DENGELI,
+            icerik_tonu=selected_tone,
             secilen_ses_ingilizce="Autonoe",
             log_ekle=log,
             ilerlemeyi_guncelle=progress,
@@ -152,7 +170,7 @@ def process(path):
     except Exception as exc:
         errors.append(str(exc))
         try:
-            edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}))
+            edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
         except Exception:
             pass
         raise
@@ -160,31 +178,29 @@ def process(path):
     final = result.get("final_video")
     if not final or not Path(final).exists():
         errors.append("Pipeline tamamlandı ancak final video üretilemedi.")
-        edit_message(loading_id, _final_report(step_status, warnings, errors, result))
+        edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
     result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "Süre kontrolü yapıldı")
     for i in range(len(PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
-    edit_message(loading_id, _final_report(step_status, warnings, errors, result))
+    edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
 
-    # 2. MESAJ: Video + Instagram/Facebook açıklaması + hemen altında hashtag'ler
     caption = result.get("reels_aciklamasi") or ""
     hashtags = result.get("reels_hashtagleri") or []
     if hashtags:
         caption += "\n\n" + " ".join("#" + str(x).lstrip("#") for x in hashtags)
     send_video(final, caption[:1024])
 
-    # 3. MESAJ: Başlık seçenekleri
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
 
-    # 4. MESAJ: Threads açıklaması
     threads = result.get("threads_aciklamasi") or ""
     send_message(f"THREADS AÇIKLAMASI\n\n{threads}" if threads else "THREADS AÇIKLAMASI\n\nAçıklama üretilemedi.")
 
     summary = {
         "source": path.name,
         "final_video": Path(final).name,
+        "content_tone": tone_key,
         "seslendirme": result.get("seslendirme_metni", ""),
         "caption": caption,
         "title_options": result.get("kapak_basliklari", []),
