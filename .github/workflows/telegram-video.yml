@@ -117,10 +117,10 @@ jobs:
             done
           fi
 
-      - name: Setup FFmpeg and OCR
+      - name: Setup FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
+          sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
         run: pip install --disable-pip-version-check -r requirements.txt
@@ -138,4 +138,4 @@ jobs:
           TEXT_INPUT: ${{ inputs.telegram_text }}
           VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
           CONTENT_TONE: ${{ inputs.content_tone }}
-        run: python telegram_pipeline_worker.py
+        run: python telegram_pipeline_runner.py
