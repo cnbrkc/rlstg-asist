@@ -1,5 +1,5 @@
 """Ses ve video işleme fonksiyonları (ffmpeg, hızlandırma, birleştirme)."""
-import os, re, wave, math, shutil, subprocess, tempfile, uuid, json
+import os, re, wave, shutil, subprocess, tempfile, uuid, json
 from config import SES_OMRU_SANIYE, VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
 
 _GECICI_SES_DOSYALARI = []
@@ -65,14 +65,23 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
     except Exception as e: log_ekle(f"⚠️ ffmpeg beklenmeyen hata: {e}"); return False
 
 def _video_bilgi_al(video_yolu: str) -> dict:
+    # OpenCV yerine ffprobe kullanılır; böylece her Telegram işinde ağır cv2 bağımlılığı
+    # kurulmaz ve medya süresi/FPS tespiti tek bir güvenilir araç üzerinden yapılır.
     bilgi={"fps":0.0,"frames":0,"width":0,"height":0,"duration":0.0}
     try:
-        import cv2
-        cap=cv2.VideoCapture(video_yolu)
-        if cap.isOpened():
-            bilgi["fps"]=float(cap.get(cv2.CAP_PROP_FPS)); bilgi["frames"]=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); bilgi["width"]=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); bilgi["height"]=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            if bilgi["fps"]>0: bilgi["duration"]=bilgi["frames"]/bilgi["fps"]
-            cap.release()
+        ffprobe=shutil.which("ffprobe") or FFMPEG_BIN.replace("ffmpeg","ffprobe")
+        p=subprocess.run([ffprobe,"-v","error","-select_streams","v:0","-show_entries","stream=width,height,avg_frame_rate,nb_frames,duration","-of","json",video_yolu],capture_output=True,text=True,timeout=30)
+        data=json.loads(p.stdout or "{}")
+        s=(data.get("streams") or [{}])[0]
+        bilgi["width"]=int(s.get("width") or 0); bilgi["height"]=int(s.get("height") or 0)
+        raw=s.get("avg_frame_rate") or "0/1"
+        try:
+            n,d=raw.split("/",1); bilgi["fps"]=float(n)/float(d) if float(d) else 0.0
+        except Exception: pass
+        try: bilgi["frames"]=int(s.get("nb_frames") or 0)
+        except Exception: pass
+        try: bilgi["duration"]=float(s.get("duration") or 0.0)
+        except Exception: pass
     except Exception: pass
     if bilgi["duration"]<=0:
         try:
@@ -83,7 +92,6 @@ def _video_bilgi_al(video_yolu: str) -> dict:
     return bilgi
 
 def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
-    """Teşhis amaçlı medya özelliklerini alır; pipeline davranışını değiştirmez."""
     sonuc={"width":0,"height":0,"fps":0.0,"fps_rational":"","duration":0.0,"video_bitrate":0,"audio_sample_rate":0,"audio_channels":0,"audio_bitrate":0,"audio_codec":"","video_codec":""}
     try:
         ffprobe=shutil.which("ffprobe") or FFMPEG_BIN.replace("ffmpeg","ffprobe")
@@ -120,11 +128,9 @@ def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
             try: sonuc["duration"]=float((data.get("format") or {}).get("duration") or 0.0)
             except Exception: pass
     except Exception:
-        try:
-            eski=_video_bilgi_al(dosya_yolu)
-            for key in ("width","height","fps","duration"):
-                if eski.get(key): sonuc[key]=eski[key]
-        except Exception: pass
+        eski=_video_bilgi_al(dosya_yolu)
+        for key in ("width","height","fps","duration"):
+            if eski.get(key): sonuc[key]=eski[key]
     return sonuc
 
 def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:
@@ -138,7 +144,7 @@ def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:
     return b
 
 def video_suresini_al(video_yolu: str) -> float:
-    return float(_video_bilgi_al(video_yolu).get("duration",0.0))
+    return float(_ffprobe_bilgi_al(video_yolu).get("duration",0.0))
 
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
     if not ses_yolu or not os.path.exists(ses_yolu): return False
@@ -156,14 +162,14 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
         else: log_ekle(f"🎚️ Ses/video süre uyumu: fark küçük ({abs(video_sure-ses_sure):.2f}s), hız değişimi yapılmadı.")
     komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu]
     if video_filtresi: komut += ["-filter:v",video_filtresi]
-    source_fps=input_bilgi.get("fps_rational") or (f"{input_bilgi['fps']:.6f}" if input_bilgi.get("fps",0)>0 else "")
-    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF)]
-    if source_fps: komut += ["-r",source_fps,"-fps_mode","cfr"]
-    komut += ["-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE,"-shortest",cikti_yolu]
+    # Kaynak FPS'ini yeniden örneklemiyoruz. FFmpeg mevcut zaman damgalarını H.264'e
+    # doğrudan taşır; böylece 30/60 FPS gibi kaynaklar gereksiz yere değişmez ve
+    # önceki best_input assertion hatasına yol açan -r/fps_mode kombinasyonu yoktur.
+    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE,"-shortest",cikti_yolu]
     try:
         r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
-        if r.returncode!=0: log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-500:]}"); return False
-        medya_raporu(cikti_yolu,"OUTPUT",log_ekle); return os.path.exists(cikti_yolu)
+        if r.returncode!=0: log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-800:]}"); return False
+        medya_raporu(cikti_yolu,"OUTPUT",log_ekle); return os.path.exists(cikti_yolu) and os.path.getsize(cikti_yolu)>0
     except Exception as e: log_ekle(f"⚠️ Video render hatası: {e}"); return False
 
 def _ses_suresini_al(dosya_yolu: str) -> float:
