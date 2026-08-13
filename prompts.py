@@ -12,19 +12,37 @@ def _oku(ad):
     with open(os.path.join(_PROMPT_DIR,ad),encoding="utf-8") as f:return f.read()
 
 
+def _otorite_talimati():
+    if not _AKTIF_VIDEO_ANALIZ_NOTU.strip():
+        return ""
+    return (
+        "\n\n🚨 KULLANICI FACT LOCK — MUTLAK ÖNCELİK 🚨\n"
+        "Aşağıdaki VİDEO ANALİZ NOTU kullanıcı tarafından doğrudan verilmiştir. "
+        "Bu notta yer alan kesin marka/model/variant ve diğer olgusal bilgiler "
+        "videodan yaptığın görsel/işitsel çıkarımdan daha yüksek önceliklidir. "
+        "Çelişki görürsen kullanıcı bilgisini DOĞRU kabul et; onu değiştirme, "
+        "başka modele dönüştürme, UNKNOWN/INFERENCE yapma ve sonraki aşamalara "
+        "değiştirilmiş hâlini taşıma. Kullanıcı bilgisi sonraki tüm aşamalarda "
+        "aynen korunmalıdır.\n\n"
+        "--- KULLANICI VİDEO ANALİZ NOTU ---\n"
+        f"{_AKTIF_VIDEO_ANALIZ_NOTU.strip()}\n"
+        "--- KULLANICI VİDEO ANALİZ NOTU SONU ---\n"
+    )
+
+
 def forensic_analiz_promptunu_olustur(ek_notlar="",sure_saniye=0):
     global _AKTIF_VIDEO_ANALIZ_NOTU
     _AKTIF_VIDEO_ANALIZ_NOTU = ek_notlar or ""
     template=_oku("forensic_analysis_prompt.txt")
-    return template.replace("{ek_notlar_bolumu}", ek_notlar or "").replace("{sure_saniye}", str(sure_saniye))
+    return template.replace("{ek_notlar_bolumu}", _otorite_talimati()).replace("{sure_saniye}", str(sure_saniye))
 
 
-def research_promptunu_olustur(): return _oku("research_prompt.txt")+"\n"+_oku("guncellik_talimati.txt")
-def editorial_promptunu_olustur(): return _oku("editorial_prompt.txt")
-def reels_creative_promptunu_olustur(sure_saniye,icerik_tonu,kelime_hizi_orani=None): return _oku("reels_creative_prompt.txt")+f"\nHedef süre: {sure_saniye} saniye. Ton: {icerik_tonu}. Kelime oranı: {kelime_hizi_orani or 2.4}."
-def caption_promptunu_olustur(): return _oku("caption_prompt.txt")
-def threads_promptunu_olustur(): return _oku("threads_promptu.txt")
-def qa_promptunu_olustur(): return _oku("qa_prompt.txt")
+def research_promptunu_olustur(): return _oku("research_prompt.txt")+"\n"+_oku("guncellik_talimati.txt")+_otorite_talimati()
+def editorial_promptunu_olustur(): return _oku("editorial_prompt.txt")+_otorite_talimati()
+def reels_creative_promptunu_olustur(sure_saniye,icerik_tonu,kelime_hizi_orani=None): return _oku("reels_creative_prompt.txt")+f"\nHedef süre: {sure_saniye} saniye. Ton: {icerik_tonu}. Kelime oranı: {kelime_hizi_orani or 2.4}."+_otorite_talimati()
+def caption_promptunu_olustur(): return _oku("caption_prompt.txt")+_otorite_talimati()
+def threads_promptunu_olustur(): return _oku("threads_promptu.txt")+_otorite_talimati()
+def qa_promptunu_olustur(): return _oku("qa_prompt.txt")+_otorite_talimati()
 
 
 def durumu_metne_donustur(baslik,deger):
