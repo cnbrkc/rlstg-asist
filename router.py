@@ -59,22 +59,36 @@ class SmartRouter:
         log_ekle(f"⚠️ {mail}+{model}: {scope}")
         return "break_model" if scope in ("model","model_config") else "continue"
 
-    def _make_request(self,model_listesi:List[str],contents:Any,config,log_ekle,stop_on_quota=False):
+    def _make_request(self,model_listesi:List[str],contents:Any,config,log_ekle,stop_on_quota=False,son_fallback=True):
         son_hata=None; self._last_request_had_quota=False
-        for model_adi in model_listesi:
+        modeller=list(model_listesi or [])
+        if son_fallback and "gemini-3.1-flash-lite" not in modeller:
+            modeller.append("gemini-3.1-flash-lite")
+        for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
             for mail,api_key in API_KEYS.items():
                 if self._is_banned(mail,model_adi): continue
                 client = self.clients.get(mail)
                 if client is None:
                     continue
-                try:
-                    response=client.models.generate_content(model=model_adi,contents=contents,config=config)
-                    log_ekle(f"✅ Başarılı → {mail} + {model_adi}"); return response,f"{mail}+{model_adi}"
-                except Exception as e:
-                    son_hata=e; aksiyon=self._handle_hata(mail,model_adi,str(e),log_ekle)
-                    if stop_on_quota and aksiyon=="quota": raise
-                    if aksiyon in ("break_model","quota"): break
+                _503_deneme=0
+                while True:
+                    try:
+                        response=client.models.generate_content(model=model_adi,contents=contents,config=config)
+                        log_ekle(f"✅ Başarılı → {mail} + {model_adi}"); return response,f"{mail}+{model_adi}"
+                    except Exception as e:
+                        son_hata=e
+                        hata_metni=str(e)
+                        if ("503" in hata_metni or "unavailable" in hata_metni.lower()) and _503_deneme < 2:
+                            _503_deneme += 1
+                            bekleme=5 if _503_deneme == 1 else 10
+                            log_ekle(f"⏳ {mail}+{model_adi}: 503 geçici hata, {bekleme}s sonra tekrar deneniyor ({_503_deneme}/2)")
+                            time.sleep(bekleme)
+                            continue
+                        aksiyon=self._handle_hata(mail,model_adi,hata_metni,log_ekle)
+                        if stop_on_quota and aksiyon=="quota": raise
+                        if aksiyon in ("break_model","quota"): break
+                        break
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
 
     def metin_uret(self,icerik:Any,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=True):
@@ -114,7 +128,7 @@ class SmartRouter:
     def ses_uret(self,metin:str,ses_adi:str,cikti_dosyasi:str,log_ekle,hiz_carpani:float=1.0)->Tuple[bool,Optional[str]]:
         config=types.GenerateContentConfig(response_modalities=["AUDIO"],speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=ses_adi))))
         try:
-            response,info=self._make_request(SES_MODELLERI,self._tts_performans_promptu_olustur(metin,ses_adi),config,log_ekle)
+            response,info=self._make_request(SES_MODELLERI,self._tts_performans_promptu_olustur(metin,ses_adi),config,log_ekle,son_fallback=False)
             audio=self._tts_response_audio_bytes(response)
             if abs(hiz_carpani-1.0)<.001: wav_yaz(cikti_dosyasi,audio); return True,info
             raw=gecici_dosya_yolu("ses_ham","wav"); wav_yaz(raw,audio)
