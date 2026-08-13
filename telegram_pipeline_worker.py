@@ -2,11 +2,8 @@ import json
 import mimetypes
 import os
 import subprocess
-import sys
-import tempfile
 from pathlib import Path
 
-import cv2
 import requests
 
 from config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
@@ -47,111 +44,31 @@ def edit_message(message_id, text):
 
 def send_video(path, caption):
     with open(path, "rb") as fh:
-        r = requests.post(
-            f"{BASE}/sendVideo",
-            data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]},
-            files={"video": (Path(path).name, fh, "video/mp4")},
-            timeout=300,
-        )
+        r = requests.post(f"{BASE}/sendVideo", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
     r.raise_for_status()
 
 
 def send_audio(path, caption=""):
     with open(path, "rb") as fh:
-        r = requests.post(
-            f"{BASE}/sendAudio",
-            data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_AUDIO_CAPTION_LIMIT]},
-            files={"audio": (Path(path).name, fh, "audio/mpeg")},
-            timeout=300,
-        )
+        r = requests.post(f"{BASE}/sendAudio", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_AUDIO_CAPTION_LIMIT]}, files={"audio": (Path(path).name, fh, "audio/mpeg")}, timeout=300)
     r.raise_for_status()
 
 
 def _telegram_audio_path(source):
-    """Telegram sendAudio accepts MP3/M4A; keep the generated TTS source untouched."""
     source = Path(source)
     if source.suffix.lower() in {".mp3", ".m4a"}:
         return source, False
     target = source.with_name(source.stem + ".telegram.mp3")
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(source), "-codec:a", "libmp3lame", "-q:a", "2", str(target)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=120,
-    )
+    subprocess.run(["ffmpeg", "-y", "-i", str(source), "-codec:a", "libmp3lame", "-q:a", "2", str(target)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
     return target, True
 
 
 def video_duration(path):
     try:
-        out = subprocess.check_output(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-            text=True,
-            timeout=30,
-        )
+        out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], text=True, timeout=30)
         return float(out.strip())
     except Exception:
         return None
-
-
-def _extract_video_ocr(path):
-    """Extract visible on-screen text from sampled frames as forensic evidence.
-
-    This is deliberately supplemental evidence: the original video is still sent
-    to Gemini unchanged. OCR is used to prevent obvious model/variant labels such
-    as EV2 from being silently missed by video sampling.
-    """
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        return ""
-    try:
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
-        if frame_count <= 0:
-            return ""
-        duration = frame_count / fps if fps > 0 else 0
-        sample_count = min(12, max(6, int(round(duration * 1.5)))) if duration else 8
-        sample_count = min(sample_count, frame_count)
-        indices = sorted({int(round(i * (frame_count - 1) / max(sample_count - 1, 1))) for i in range(sample_count)})
-        texts = []
-        with tempfile.TemporaryDirectory(prefix="rlstg_ocr_") as tmp:
-            for n, index in enumerate(indices):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, index)
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    continue
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                scale = 2.5 if max(gray.shape) < 1600 else 1.5
-                gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-                gray = cv2.GaussianBlur(gray, (3, 3), 0)
-                processed = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11)
-                image_path = Path(tmp) / f"frame_{n}.png"
-                cv2.imwrite(str(image_path), processed)
-                try:
-                    result = subprocess.run(
-                        ["tesseract", str(image_path), "stdout", "--psm", "11", "-l", "eng", "-c", "preserve_interword_spaces=1"],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                        check=False,
-                    )
-                except FileNotFoundError:
-                    return ""
-                text = " ".join(line.strip() for line in result.stdout.splitlines() if line.strip())
-                if text:
-                    texts.append(text)
-        unique = []
-        seen = set()
-        for text in texts:
-            key = text.casefold()
-            if key not in seen:
-                seen.add(key)
-                unique.append(text)
-        return "\n".join(f"Frame OCR {i + 1}: {text}" for i, text in enumerate(unique[:20]))
-    finally:
-        cap.release()
 
 
 def _format_title_options(titles):
@@ -191,25 +108,14 @@ def _final_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 PIPELINE RAPORU", ""]
     for i, name in enumerate(PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/9 {name}")
-    lines += [
-        "",
-        f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}",
-        f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}",
-        "⚡ TTS hız: 1.20x",
-        f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}",
-        f"⚠️ Uyarı: {len(warnings)}",
-        f"❌ Hata: {len(errors)}",
-    ]
+    lines += ["", f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}", f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}", "⚡ TTS hız: 1.20x", f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}"]
     media_lines = _extract_media_lines(warnings)
     if media_lines:
-        lines += ["", "🎥 MEDYA TEŞHİSİ"]
-        lines.extend(media_lines)
+        lines += ["", "🎥 MEDYA TEŞHİSİ"] + media_lines
     if warnings:
-        lines += ["", "⚠️ UYARILAR"]
-        lines.extend(f"• {x}" for x in warnings[:8])
+        lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:8]]
     if errors:
-        lines += ["", "❌ HATALAR"]
-        lines.extend(f"• {x}" for x in errors[:8])
+        lines += ["", "❌ HATALAR"] + [f"• {x}" for x in errors[:8]]
     return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
 
 
@@ -226,24 +132,11 @@ def _final_text_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
     for i, name in enumerate(TEXT_PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/8 {name}")
-    lines += [
-        "",
-        f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}",
-        f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}",
-        "⚡ TTS hız: 1.20x",
-        "🎬 Video render: atlandı (text-only)",
-        f"⚠️ Uyarı: {len(warnings)}",
-        f"❌ Hata: {len(errors)}",
-        "",
-        "🔍 QA SONUCU",
-        _qa_text(result.get("qa_result"))[:2200],
-    ]
+    lines += ["", f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}", f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}", "⚡ TTS hız: 1.20x", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
     if warnings:
-        lines += ["", "⚠️ UYARILAR"]
-        lines.extend(f"• {x}" for x in warnings[:6])
+        lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:6]]
     if errors:
-        lines += ["", "❌ HATALAR"]
-        lines.extend(f"• {x}" for x in errors[:6])
+        lines += ["", "❌ HATALAR"] + [f"• {x}" for x in errors[:6]]
     return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
 
 
@@ -274,19 +167,13 @@ def process(path):
     tone_key = tone_key if tone_key in TON_MAP else "dengeli"
     selected_tone = TON_MAP[tone_key]
     user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
-    ocr_evidence = _extract_video_ocr(path)
-    video_note_parts = []
-    if user_video_note:
-        video_note_parts.append(f"KULLANICI TELEGRAM NOTU (ÖNCELİKLİ):\n{user_video_note}")
-    if ocr_evidence:
-        video_note_parts.append(
-            "KARELERDEN OTOMATİK OCR KANITI (yardımcı gözlem; video ile çapraz kontrol et):\n" + ocr_evidence
-        )
-    video_note = "\n\n".join(video_note_parts)
+    # Telegram video caption'ı zaten kullanıcının analiz notudur. Ek OCR/Tesseract
+    # taraması yapılmaz; bu hem gereksiz gecikmeyi hem de yanlış OCR çıkarımlarını önler.
+    video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
 
     def log(msg):
         text = str(msg).strip()
-        print(text)
+        print(text, flush=True)
         lower = text.lower()
         if "⚠️" in text or "uyarı" in lower or "warning" in lower:
             warnings.append(text)
@@ -301,22 +188,10 @@ def process(path):
         try:
             edit_message(loading_id, _loading_text(n - 1, f"Tamamlandı → {current}", len(warnings), len(errors)))
         except Exception as exc:
-            print(f"Loading mesajı güncellenemedi: {exc}")
+            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
 
     try:
-        result = pipeline_calistir(
-            router=router,
-            video_bytes=raw,
-            mime_type=mime,
-            temp_input_video=str(path),
-            video_analiz_notlari=video_note,
-            metin_uretim_notlari=video_note,
-            sure_saniye=duration,
-            icerik_tonu=selected_tone,
-            secilen_ses_ingilizce="Autonoe",
-            log_ekle=log,
-            ilerlemeyi_guncelle=progress,
-        )
+        result = pipeline_calistir(router=router, video_bytes=raw, mime_type=mime, temp_input_video=str(path), video_analiz_notlari=video_note, metin_uretim_notlari=video_note, sure_saniye=duration, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
         try:
@@ -348,28 +223,7 @@ def process(path):
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
     threads = result.get("threads_aciklamasi") or ""
     send_message(f"THREADS AÇIKLAMASI\n\n{threads}" if threads else "THREADS AÇIKLAMASI\n\nAçıklama üretilemedi.")
-    Path("pipeline_result.json").write_text(
-        json.dumps(
-            {
-                "source": path.name,
-                "final_video": Path(final).name,
-                "content_tone": tone_key,
-                "video_note": user_video_note,
-                "ocr_evidence": ocr_evidence,
-                "seslendirme": result.get("seslendirme_metni", ""),
-                "caption": caption,
-                "caption_telegram": video_caption,
-                "title_options": result.get("kapak_basliklari", []),
-                "threads": threads,
-                "qa": result.get("qa_result", {}),
-                "warnings": warnings,
-                "errors": errors,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def process_text(text):
@@ -386,7 +240,7 @@ def process_text(text):
 
     def log(msg):
         text_msg = str(msg).strip()
-        print(text_msg)
+        print(text_msg, flush=True)
         lower = text_msg.lower()
         if "⚠️" in text_msg or "uyarı" in lower or "warning" in lower:
             warnings.append(text_msg)
@@ -399,17 +253,10 @@ def process_text(text):
         try:
             edit_message(loading_id, _loading_text(n - 1, f"Tamamlandı → {current}", len(warnings), len(errors), steps=TEXT_PIPELINE_STEPS))
         except Exception as exc:
-            print(f"Loading mesajı güncellenemedi: {exc}")
+            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
 
     try:
-        result = metin_pipeline_calistir(
-            router=router,
-            metin=text,
-            icerik_tonu=selected_tone,
-            secilen_ses_ingilizce="Autonoe",
-            log_ekle=log,
-            ilerlemeyi_guncelle=progress,
-        )
+        result = metin_pipeline_calistir(router=router, metin=text, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
         try:
@@ -422,7 +269,7 @@ def process_text(text):
     if not result.get("ses_basarili") or not audio or not Path(audio).exists():
         errors.append("Text-only pipeline tamamlandı ancak Autonoe ses dosyası üretilemedi.")
         edit_message(loading_id, _final_text_report(step_status, warnings, errors, result, tone_key))
-        raise RuntimeError("Text-only pipeline tamamlandı ancak ses dosyası üretilemedi.")
+        raise RuntimeError("Text-only pipeline tamamlandı ancak Autonoe ses dosyası üretilemedi.")
 
     caption = result.get("reels_aciklamasi") or ""
     hashtags = result.get("reels_hashtagleri") or []
@@ -449,54 +296,26 @@ def process_text(text):
                 pass
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
     threads = result.get("threads_aciklamasi") or ""
-    social_bundle = (
-        "📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n"
-        f"{social_caption}\n\n"
-        "🧵 THREADS AÇIKLAMASI\n\n"
-        f"{threads if threads else 'Açıklama üretilemedi.'}"
-    )
+    social_bundle = "📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n" + f"{social_caption}\n\n" + "🧵 THREADS AÇIKLAMASI\n\n" + f"{threads if threads else 'Açıklama üretilemedi.'}"
     send_message(social_bundle)
-
-    Path("pipeline_result.json").write_text(
-        json.dumps(
-            {
-                "mode": "text",
-                "source": "telegram_text",
-                "content_tone": tone_key,
-                "input_text": text,
-                "seslendirme": result.get("seslendirme_metni", ""),
-                "audio": Path(audio).name,
-                "caption": caption,
-                "caption_telegram": social_caption,
-                "title_options": result.get("kapak_basliklari", []),
-                "threads": threads,
-                "qa": result.get("qa_result", {}),
-                "warnings": warnings,
-                "errors": errors,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    Path("pipeline_result.json").write_text(json.dumps({"mode": "text", "source": "telegram_text", "content_tone": tone_key, "input_text": text, "seslendirme": result.get("seslendirme_metni", ""), "audio": Path(audio).name, "caption": caption, "caption_telegram": social_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
     raw = os.environ.get("VIDEO_FILES", "").strip()
     inputs = [Path(line.strip()) for line in raw.splitlines() if line.strip()]
     text = os.environ.get("TEXT_INPUT", "").strip()
-
     if inputs and text:
         raise ValueError("Aynı çalıştırmada hem video hem text input verilemez.")
     if inputs:
         for path in inputs:
             if not path.exists():
                 raise FileNotFoundError(f"Telegram intake output not found: {path}")
-            print(f"Processing video: {path}")
+            print(f"Processing video: {path}", flush=True)
             process(path)
         return
     if text:
-        print("Processing Telegram text-only input")
+        print("Processing Telegram text-only input", flush=True)
         process_text(text)
         return
     raise ValueError("Telegram video veya text input bulunamadı.")
