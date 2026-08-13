@@ -37,29 +37,39 @@ export default {
     if (!chatId) return new Response("OK", { status: 200 });
 
     let fileId = null;
-    let filename = "telegram_video.mp4";
+    let filename = "";
+    let videoNote = "";
+    let textInput = "";
+    let inputType = "text";
 
     if (message.video) {
       fileId = message.video.file_id;
       filename = `telegram_${update.update_id}.mp4`;
+      videoNote = String(message.caption || "").trim();
+      inputType = "video";
     } else if (message.document && (message.document.mime_type || "").startsWith("video/")) {
       fileId = message.document.file_id;
       filename = message.document.file_name || `telegram_${update.update_id}.mp4`;
+      videoNote = String(message.caption || "").trim();
+      inputType = "video";
+    } else if (message.text && message.text !== "/start") {
+      textInput = String(message.text).trim();
+      inputType = "text";
     } else {
       if (message.text === "/start") {
-        await telegram(env, "sendMessage", { chat_id: chatId, text: "🤖 Reels Asistanı hazır. Bana bir video gönder." });
+        await telegram(env, "sendMessage", { chat_id: chatId, text: "🤖 Reels Asistanı hazır.\n\n🎥 Video gönderirsen videoyu düzenleyip final videoyu üretirim.\n📝 Sadece metin gönderirsen ses + açıklama + başlık + Threads üretirim.\n\nVideoya açıklama/not eklemek için videoyu Telegram'da açıklamayla birlikte gönder." });
       }
       return new Response("OK", { status: 200 });
     }
 
     const updateId = String(update.update_id);
     const pendingPath = `data/pending/${updateId}.json`;
-    const pending = { file_id: fileId, chat_id: String(chatId), filename };
+    const pending = { file_id: fileId, chat_id: String(chatId), filename, video_note: videoNote, text_input: textInput, input_type: inputType };
 
-    const saved = await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Queue Telegram video ${updateId}`);
+    const saved = await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Queue Telegram ${inputType} ${updateId}`);
     if (!saved.ok) {
       const body = await saved.text();
-      await telegram(env, "sendMessage", { chat_id: chatId, text: `❌ Video kuyruğa alınamadı.\n\n${body.slice(0, 1000)}` });
+      await telegram(env, "sendMessage", { chat_id: chatId, text: `❌ Girdi kuyruğa alınamadı.\n\n${body.slice(0, 1000)}` });
       return new Response("Pending save failed", { status: 502 });
     }
 
@@ -76,11 +86,10 @@ export default {
       ]
     };
 
-    await telegram(env, "sendMessage", {
-      chat_id: chatId,
-      text: "📥 Videonu aldım.\n\n🎯 İçerik türünü seç, seçimine göre üretim başlayacak:",
-      reply_markup: keyboard
-    });
+    const intro = inputType === "video"
+      ? `📥 Videonu aldım.${videoNote ? `\n📝 Notunu da aldım: ${videoNote}` : ""}\n\n🎯 İçerik türünü seç, seçimine göre üretim başlayacak:`
+      : "📝 Metnini aldım.\n\n🎯 İçerik türünü seç, seçimine göre ses + açıklama + başlık + Threads üretilecek:";
+    await telegram(env, "sendMessage", { chat_id: chatId, text: intro, reply_markup: keyboard });
 
     return new Response("OK", { status: 200 });
   }
@@ -103,16 +112,17 @@ async function handleCallback(callback, env) {
   try {
     const pendingResponse = await githubGet(env, pendingPath);
     if (!pendingResponse.ok) {
-      await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `Video beklemede değil (${pendingResponse.status}).` });
-      await safeEdit(env, chatId, callback.message.message_id, `❌ Video bilgisi alınamadı.\n\nGitHub: ${pendingResponse.status}`);
+      await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `Girdi beklemede değil (${pendingResponse.status}).` });
+      await safeEdit(env, chatId, callback.message.message_id, `❌ Girdi bilgisi alınamadı.\n\nGitHub: ${pendingResponse.status}`);
       return new Response("Pending lookup failed", { status: 502 });
     }
 
     const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
     const labels = { eglence: "🎭 Eğlence Ağırlıklı", dengeli: "⚖️ Dengeli", bilgi: "🧠 Bilgi Ağırlıklı", teknik: "📊 Teknik / Detaylı" };
+    const isVideo = pending.input_type === "video" && !!pending.file_id;
 
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `${labels[tone]} seçildi. Pipeline başlıyor.` });
-    await safeEdit(env, chatId, callback.message.message_id, `🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline başlatılıyor...\n\n🔄 GitHub Actions bekleniyor...`);
+    await safeEdit(env, chatId, callback.message.message_id, `${isVideo ? "🎥 Video" : "📝 Metin"}\n🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline başlatılıyor...\n\n🔄 GitHub Actions bekleniyor...`);
 
     const dispatch = await fetch(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/telegram-video.yml/dispatches`, {
       method: "POST",
@@ -123,11 +133,13 @@ async function handleCallback(callback, env) {
         "User-Agent": "rlstg-asist-telegram-webhook"
       },
       body: JSON.stringify({ ref: "main", inputs: {
-        telegram_file_id: pending.file_id,
+        telegram_file_id: pending.file_id || "",
         telegram_chat_id: String(pending.chat_id),
-        telegram_filename: pending.filename,
+        telegram_filename: pending.filename || "",
         telegram_update_id: updateId,
-        content_tone: tone
+        content_tone: tone,
+        video_note: pending.video_note || "",
+        text_input: pending.text_input || ""
       }})
     });
 
@@ -138,12 +150,12 @@ async function handleCallback(callback, env) {
       return new Response("GitHub dispatch failed", { status: 502 });
     }
 
-    await safeEdit(env, chatId, callback.message.message_id, `🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline çalışıyor...\n\n🟢 GitHub Actions tetiklendi.`);
+    await safeEdit(env, chatId, callback.message.message_id, `${isVideo ? "🎥 Video" : "📝 Metin"}\n🎯 İçerik türü: ${labels[tone]}\n\n⏳ Reels pipeline çalışıyor...\n\n🟢 GitHub Actions tetiklendi.`);
 
     const pendingMeta = await githubGet(env, pendingPath);
     if (pendingMeta.ok) {
       const meta = await pendingMeta.json();
-      const deleted = await githubDelete(env, pendingPath, meta.sha, `Remove processed Telegram video ${updateId}`);
+      const deleted = await githubDelete(env, pendingPath, meta.sha, `Remove processed Telegram input ${updateId}`);
       if (!deleted.ok) console.log("Pending cleanup failed", deleted.status, await deleted.text());
     }
 
