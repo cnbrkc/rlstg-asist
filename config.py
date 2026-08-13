@@ -10,12 +10,38 @@ for _i, _key in enumerate(os.environ.get("GEMINI_API_KEYS", "").split(","), 1):
     _key = _key.strip()
     if _key:
         API_KEYS.setdefault(f"GEMINI_API_KEY_{_i}", _key)
+# Ayrıca ayrı GitHub Actions Secret'ları olarak tanımlanan
+# GEMINI_API_KEY_1, GEMINI_API_KEY_2, ... anahtarlarını da destekle.
+for _i in range(1, 21):
+    _key = os.environ.get(f"GEMINI_API_KEY_{_i}", "").strip()
+    if _key:
+        API_KEYS.setdefault(f"GEMINI_API_KEY_{_i}", _key)
 if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
-VIDEO_ANALIZ_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
-METIN_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
-ARAMA_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
+# 3.x modelleri ana tercih olarak korunur. 2.5 modelleri, 3.x tarafında
+# geçici 503/yüksek talep durumlarında son güvenli yedeklerdir.
+VIDEO_ANALIZ_MODELLERI = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
+METIN_MODELLERI = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
+ARAMA_MODELLERI = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
 SES_MODELLERI = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 
 COOLDOWN_SUNUCU = 15 * 60
