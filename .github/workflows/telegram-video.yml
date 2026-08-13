@@ -117,10 +117,10 @@ jobs:
             done
           fi
 
-      - name: Setup FFmpeg
+      - name: Setup FFmpeg and OCR
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
 
       - name: Install Python dependencies
         run: pip install --disable-pip-version-check -r requirements.txt
