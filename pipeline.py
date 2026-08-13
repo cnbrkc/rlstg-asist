@@ -81,3 +81,39 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     final=output if render_ok and os.path.exists(output) else ''
     log_ekle('🏁 Pipeline tamamlandı.')
     return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'qa_result':qa_state,'pipeline_state':state}
+
+def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, log_ekle, ilerlemeyi_guncelle=None, sure_saniye=30):
+    """Telegram'dan yalnızca metin geldiğinde mevcut editoryal motoru kullanır.
+    Mevcut prompt dosyaları değiştirilmez. Video-forensic yerine kullanıcı metni
+    gözlem kaynağı olarak state'e yerleştirilir. Video render edilmez; TTS ve
+    tüm metin çıktıları üretilir.
+    """
+    metin=(metin or '').strip()
+    if not metin: raise ValueError('Metin girdisi boş.')
+    state={}
+    video_state={'video_identity':{'brand':'UNKNOWN','exact_model':'UNKNOWN','confidence':'unknown','source':'telegram_text'},'observed_facts':[metin],'unknowns':[],'possible_inference':[],'viral_arastirma_ihtiyaclari':['Metindeki araç/konu kimliğini ve güncel iddiaları doğrula.'],'visual_opportunities':['Metin tabanlı üretim; video görsel zaman çizelgesi yok.'],'timeline':[]}
+    state['video_state']=video_state
+    _ilerleme(ilerlemeyi_guncelle,1,'📝 Metin girdisi')
+    log_ekle('📝 Metin girdisi işleniyor (video analizi atlanıyor)...')
+    _ilerleme(ilerlemeyi_guncelle,2,'🔎 Research / Fact Lock')
+    fact_state,_=_research_calistir(router,video_state,log_ekle); state['fact_state']=fact_state
+    _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain')
+    editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle); state['editorial_state']=editorial_state
+    _ilerleme(ilerlemeyi_guncelle,4,'🎙️ Reels Creative')
+    reels_state,model_reels=_reels_creative_calistir(router,editorial_state,fact_state,video_state,metin,sure_saniye,icerik_tonu,log_ekle); state['reels_state']=reels_state
+    _ilerleme(ilerlemeyi_guncelle,5,'📝 Caption + hashtag')
+    try: caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log_ekle)
+    except Exception as e: log_ekle(f'⚠️ Caption üretilemedi: {str(e)[:150]}'); caption_state,model_caption={'reels_aciklamasi':'','reels_hashtagleri':[]},'hata'
+    state['caption_state']=caption_state
+    _ilerleme(ilerlemeyi_guncelle,6,'🧵 Threads')
+    try: threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log_ekle)
+    except Exception as e: log_ekle(f'⚠️ Threads üretilemedi: {str(e)[:150]}'); threads_state,model_threads={'threads_aciklamasi':''},'hata'
+    state['threads_state']=threads_state
+    _ilerleme(ilerlemeyi_guncelle,7,'🔍 QA')
+    qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log_ekle); state['qa_state_final']=qa_state
+    _ilerleme(ilerlemeyi_guncelle,8,'🎧 Autonoe TTS')
+    ses_adi = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
+    ses_dosyasi=gecici_ses_yolu(); ses_basarili,kullanilan_ses_modeli=router.ses_uret(reels_state.get('seslendirme_metni',''),ses_adi,ses_dosyasi,log_ekle,hiz_carpani=SES_HIZ_CARPANI)
+    if ses_basarili and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi
+    log_ekle('🏁 Metin üretimi tamamlandı; video render atlandı.')
+    return {'mode':'text','seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'qa_result':qa_state,'pipeline_state':state}
