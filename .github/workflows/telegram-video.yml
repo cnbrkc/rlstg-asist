@@ -4,8 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       telegram_file_id:
-        description: Telegram file_id
-        required: true
+        description: Telegram file_id (video mode)
+        required: false
+        default: ""
+        type: string
+      telegram_text:
+        description: Telegram text input (text-only mode)
+        required: false
+        default: ""
         type: string
       telegram_chat_id:
         description: Telegram chat_id
@@ -18,6 +24,11 @@ on:
         type: string
       telegram_update_id:
         description: Telegram update_id
+        required: false
+        default: ""
+        type: string
+      video_note:
+        description: Optional Telegram video caption/note
         required: false
         default: ""
         type: string
@@ -43,6 +54,25 @@ jobs:
   telegram-video:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate input mode
+        env:
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          TELEGRAM_TEXT: ${{ inputs.telegram_text }}
+        run: |
+          set -euo pipefail
+          has_video=0
+          has_text=0
+          [ -n "$TELEGRAM_FILE_ID" ] && has_video=1
+          [ -n "$TELEGRAM_TEXT" ] && has_text=1
+          if [ "$has_video" -eq 1 ] && [ "$has_text" -eq 1 ]; then
+            echo "Video and text inputs cannot be used together."
+            exit 1
+          fi
+          if [ "$has_video" -eq 0 ] && [ "$has_text" -eq 0 ]; then
+            echo "Either telegram_file_id or telegram_text is required."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -54,6 +84,7 @@ jobs:
           python-version: "3.11"
 
       - name: Download Telegram video
+        if: ${{ inputs.telegram_file_id != '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
@@ -62,6 +93,7 @@ jobs:
         run: python telegram_webhook_intake.py
 
       - name: Save video to repository
+        if: ${{ inputs.telegram_file_id != '' }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -102,6 +134,8 @@ jobs:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
-          VIDEO_FILES: data/${{ inputs.telegram_filename }}
+          VIDEO_FILES: ${{ inputs.telegram_file_id != '' && format('data/{0}', inputs.telegram_filename) || '' }}
+          TEXT_INPUT: ${{ inputs.telegram_text }}
+          VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
           CONTENT_TONE: ${{ inputs.content_tone }}
         run: python telegram_pipeline_worker.py
