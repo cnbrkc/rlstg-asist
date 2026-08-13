@@ -3,8 +3,10 @@ import mimetypes
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+import cv2
 import requests
 
 from config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
@@ -92,6 +94,64 @@ def video_duration(path):
         return float(out.strip())
     except Exception:
         return None
+
+
+def _extract_video_ocr(path):
+    """Extract visible on-screen text from sampled frames as forensic evidence.
+
+    This is deliberately supplemental evidence: the original video is still sent
+    to Gemini unchanged. OCR is used to prevent obvious model/variant labels such
+    as EV2 from being silently missed by video sampling.
+    """
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        return ""
+    try:
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+        if frame_count <= 0:
+            return ""
+        duration = frame_count / fps if fps > 0 else 0
+        sample_count = min(12, max(6, int(round(duration * 1.5)))) if duration else 8
+        sample_count = min(sample_count, frame_count)
+        indices = sorted({int(round(i * (frame_count - 1) / max(sample_count - 1, 1))) for i in range(sample_count)})
+        texts = []
+        with tempfile.TemporaryDirectory(prefix="rlstg_ocr_") as tmp:
+            for n, index in enumerate(indices):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                scale = 2.5 if max(gray.shape) < 1600 else 1.5
+                gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                gray = cv2.GaussianBlur(gray, (3, 3), 0)
+                processed = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11)
+                image_path = Path(tmp) / f"frame_{n}.png"
+                cv2.imwrite(str(image_path), processed)
+                try:
+                    result = subprocess.run(
+                        ["tesseract", str(image_path), "stdout", "--psm", "11", "-l", "eng", "-c", "preserve_interword_spaces=1"],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
+                    )
+                except FileNotFoundError:
+                    return ""
+                text = " ".join(line.strip() for line in result.stdout.splitlines() if line.strip())
+                if text:
+                    texts.append(text)
+        unique = []
+        seen = set()
+        for text in texts:
+            key = text.casefold()
+            if key not in seen:
+                seen.add(key)
+                unique.append(text)
+        return "\n".join(f"Frame OCR {i + 1}: {text}" for i, text in enumerate(unique[:20]))
+    finally:
+        cap.release()
 
 
 def _format_title_options(titles):
@@ -213,7 +273,16 @@ def process(path):
     tone_key = os.environ.get("CONTENT_TONE", "dengeli").strip().lower()
     tone_key = tone_key if tone_key in TON_MAP else "dengeli"
     selected_tone = TON_MAP[tone_key]
-    video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
+    user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
+    ocr_evidence = _extract_video_ocr(path)
+    video_note_parts = []
+    if user_video_note:
+        video_note_parts.append(f"KULLANICI TELEGRAM NOTU (ÖNCELİKLİ):\n{user_video_note}")
+    if ocr_evidence:
+        video_note_parts.append(
+            "KARELERDEN OTOMATİK OCR KANITI (yardımcı gözlem; video ile çapraz kontrol et):\n" + ocr_evidence
+        )
+    video_note = "\n\n".join(video_note_parts)
 
     def log(msg):
         text = str(msg).strip()
@@ -241,7 +310,7 @@ def process(path):
             mime_type=mime,
             temp_input_video=str(path),
             video_analiz_notlari=video_note,
-            metin_uretim_notlari="",
+            metin_uretim_notlari=video_note,
             sure_saniye=duration,
             icerik_tonu=selected_tone,
             secilen_ses_ingilizce="Autonoe",
@@ -285,7 +354,8 @@ def process(path):
                 "source": path.name,
                 "final_video": Path(final).name,
                 "content_tone": tone_key,
-                "video_note": video_note,
+                "video_note": user_video_note,
+                "ocr_evidence": ocr_evidence,
                 "seslendirme": result.get("seslendirme_metni", ""),
                 "caption": caption,
                 "caption_telegram": video_caption,
@@ -429,15 +499,8 @@ def main():
         print("Processing Telegram text-only input")
         process_text(text)
         return
-    print("No new Telegram video or text input.")
+    raise ValueError("Telegram video veya text input bulunamadı.")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as exc:
-        print(f"Pipeline worker error: {exc}", file=sys.stderr)
-        try:
-            send_message(f"❌ Pipeline hata verdi:\n\n{str(exc)[:3500]}")
-        finally:
-            raise
+    main()
