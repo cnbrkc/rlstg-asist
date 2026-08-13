@@ -59,10 +59,27 @@ def send_audio(path, caption=""):
         r = requests.post(
             f"{BASE}/sendAudio",
             data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_AUDIO_CAPTION_LIMIT]},
-            files={"audio": (Path(path).name, fh, "audio/wav")},
+            files={"audio": (Path(path).name, fh, "audio/mpeg")},
             timeout=300,
         )
     r.raise_for_status()
+
+
+def _telegram_audio_path(source):
+    """Telegram sendAudio accepts MP3/M4A; keep the generated TTS source untouched."""
+    source = Path(source)
+    if source.suffix.lower() in {".mp3", ".m4a"}:
+        return source, False
+    target = source.with_name(source.stem + ".telegram.mp3")
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(source), "-codec:a", "libmp3lame", "-q:a", "2", str(target)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=120,
+    )
+    return target, True
 
 
 def video_duration(path):
@@ -345,13 +362,21 @@ def process_text(text):
         warnings.append("⚠️ Hashtag listesi boş üretildi.")
     social_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
     if caption_truncated:
-        warnings.append(f"⚠️ Telegram metin sınırı nedeniyle Instagram açıklaması kısaltıldı.")
+        warnings.append("⚠️ Telegram metin sınırı nedeniyle Instagram açıklaması kısaltıldı.")
 
     for i in range(len(TEXT_PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
     edit_message(loading_id, _final_text_report(step_status, warnings, errors, result, tone_key))
 
-    send_audio(audio, "🎧 Autonoe TTS — 1.20x")
+    telegram_audio, cleanup_audio = _telegram_audio_path(audio)
+    try:
+        send_audio(telegram_audio, "🎧 Autonoe TTS — 1.20x")
+    finally:
+        if cleanup_audio:
+            try:
+                telegram_audio.unlink(missing_ok=True)
+            except Exception:
+                pass
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
     threads = result.get("threads_aciklamasi") or ""
     social_bundle = (
