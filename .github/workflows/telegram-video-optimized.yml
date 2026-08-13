@@ -1,0 +1,143 @@
+name: Telegram Video Intake Optimized
+
+on:
+  workflow_dispatch:
+    inputs:
+      telegram_file_id:
+        description: Telegram file_id (video mode)
+        required: false
+        default: ""
+        type: string
+      telegram_text:
+        description: Telegram text input (text-only mode)
+        required: false
+        default: ""
+        type: string
+      telegram_chat_id:
+        description: Telegram chat_id
+        required: true
+        type: string
+      telegram_filename:
+        description: Video filename
+        required: false
+        default: telegram_video.mp4
+        type: string
+      telegram_update_id:
+        description: Telegram update_id
+        required: false
+        default: ""
+        type: string
+      video_note:
+        description: Telegram video caption / user analysis note
+        required: false
+        default: ""
+        type: string
+      content_tone:
+        description: Selected content tone
+        required: true
+        default: dengeli
+        type: choice
+        options:
+          - eglence
+          - dengeli
+          - bilgi
+          - teknik
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-video-intake
+  cancel-in-progress: false
+
+jobs:
+  telegram-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate input mode
+        env:
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          TELEGRAM_TEXT: ${{ inputs.telegram_text }}
+        run: |
+          set -euo pipefail
+          has_video=0
+          has_text=0
+          [ -n "$TELEGRAM_FILE_ID" ] && has_video=1
+          [ -n "$TELEGRAM_TEXT" ] && has_text=1
+          if [ "$has_video" -eq 1 ] && [ "$has_text" -eq 1 ]; then
+            echo "Video and text inputs cannot be used together."
+            exit 1
+          fi
+          if [ "$has_video" -eq 0 ] && [ "$has_text" -eq 0 ]; then
+            echo "Either telegram_file_id or telegram_text is required."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            .github
+            cloudflare
+            data/pending
+            prompts
+            config.py
+            media.py
+            pipeline.py
+            pipeline_result.py
+            prompts.py
+            router.py
+            schemas.py
+            telegram_pipeline_worker.py
+            telegram_pipeline_runner.py
+            telegram_webhook_intake.py
+            requirements.txt
+            research.py
+            tts.py
+            utils.py
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download Telegram video
+        if: ${{ inputs.telegram_file_id != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
+          TELEGRAM_FILENAME: ${{ inputs.telegram_filename }}
+        run: python telegram_webhook_intake.py
+
+      - name: Ensure FFmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          else
+            ffmpeg -version | head -n 1
+          fi
+
+      - name: Install Python dependencies
+        run: pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Compile check
+        run: python -m compileall -q config.py media.py pipeline.py prompts.py router.py schemas.py telegram_pipeline_worker.py telegram_pipeline_runner.py telegram_webhook_intake.py research.py tts.py utils.py
+
+      - name: Run Reels pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          VIDEO_FILES: ${{ inputs.telegram_file_id != '' && format('data/{0}', inputs.telegram_filename) || '' }}
+          TEXT_INPUT: ${{ inputs.telegram_text }}
+          VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
+          CONTENT_TONE: ${{ inputs.content_tone }}
+          PYTHONUNBUFFERED: "1"
+        run: python telegram_pipeline_worker.py
