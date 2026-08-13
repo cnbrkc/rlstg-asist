@@ -1,0 +1,8 @@
+# Telegram runtime media — never commit user videos or generated outputs.
+data/*.mp4
+data/*.mov
+data/*.webm
+*.telegram.mp3
+pipeline_result.json
+__pycache__/
+*.pyc
