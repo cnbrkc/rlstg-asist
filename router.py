@@ -10,9 +10,6 @@ class SmartRouter:
     def __init__(self) -> None:
         self.blacklist = {}
         self._last_request_had_quota = False
-        # Keep SDK clients alive for the whole pipeline run. Creating a short-lived
-        # client for every request can leave the underlying HTTP client closed while
-        # the SDK is still retrying/reading a response in GitHub Actions.
         self.clients = {}
         for mail, api_key in API_KEYS.items():
             if api_key and api_key.strip():
@@ -42,7 +39,12 @@ class SmartRouter:
         return 0
     def _parse_hata(self,hata_metni:str)->Tuple[str,int]:
         m=(hata_metni or "").lower()
-        if "404" in m or "not_found" in m or "model not found" in m: return "model",COOLDOWN_BULUNAMADI
+        if "404" in m or "not_found" in m or "model not found" in m:
+            # Gemini may report model availability as key/user-specific. Do not
+            # blacklist the model globally in that case; let the next API key try it.
+            if "no longer available to new users" in m or "new users" in m:
+                return "model_key",COOLDOWN_BULUNAMADI
+            return "model",COOLDOWN_BULUNAMADI
         if "limit: 0" in m or 'limit": 0' in m: return "free_tier_yok",COOLDOWN_FREE_TIER_YOK
         if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m: return "quota",0
         if "400" in m or "invalid_argument" in m or "unsupported" in m: return "model_config",COOLDOWN_BULUNAMADI
@@ -55,6 +57,10 @@ class SmartRouter:
             self._last_request_had_quota=True; delay=self._retry_delay_cikar(hata_metni)
             if delay>0: time.sleep(min(delay,60)); return "retry"
             self._ban(mail,model,COOLDOWN_SUNUCU,"combo"); return "quota"
+        if scope=="model_key":
+            self._ban(mail,model,cooldown,"combo")
+            log_ekle(f"⚠️ {mail}+{model}: bu key/model erişimi yok; sonraki key deneniyor.")
+            return "continue"
         self._ban(mail,model,cooldown,"model" if scope in ("model","model_config") else "combo")
         log_ekle(f"⚠️ {mail}+{model}: {scope}")
         return "break_model" if scope in ("model","model_config") else "continue"
@@ -62,28 +68,29 @@ class SmartRouter:
     def _make_request(self,model_listesi:List[str],contents:Any,config,log_ekle,stop_on_quota=False,son_fallback=True):
         son_hata=None; self._last_request_had_quota=False
         modeller=list(model_listesi or [])
-        if son_fallback and "gemini-3.1-flash-lite" not in modeller:
-            modeller.append("gemini-3.1-flash-lite")
+        if son_fallback:
+            for fallback in ["gemini-3.1-flash-lite","gemini-2.5-flash","gemini-2.5-flash-lite"]:
+                if fallback not in modeller: modeller.append(fallback)
+        # If an entire model family is returning 503, do not spend another full
+        # retry cycle on every key before reaching the next family. A single
+        # transient retry per key is enough; the next model remains the fallback.
         for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
             for mail,api_key in API_KEYS.items():
                 if self._is_banned(mail,model_adi): continue
                 client = self.clients.get(mail)
-                if client is None:
-                    continue
+                if client is None: continue
                 _503_deneme=0
                 while True:
                     try:
                         response=client.models.generate_content(model=model_adi,contents=contents,config=config)
                         log_ekle(f"✅ Başarılı → {mail} + {model_adi}"); return response,f"{mail}+{model_adi}"
                     except Exception as e:
-                        son_hata=e
-                        hata_metni=str(e)
-                        if ("503" in hata_metni or "unavailable" in hata_metni.lower()) and _503_deneme < 2:
+                        son_hata=e; hata_metni=str(e)
+                        if ("503" in hata_metni or "unavailable" in hata_metni.lower()) and _503_deneme < 1:
                             _503_deneme += 1
-                            bekleme=5 if _503_deneme == 1 else 10
-                            log_ekle(f"⏳ {mail}+{model_adi}: 503 geçici hata, {bekleme}s sonra tekrar deneniyor ({_503_deneme}/2)")
-                            time.sleep(bekleme)
+                            log_ekle(f"⏳ {mail}+{model_adi}: 503 geçici hata, 5s sonra tekrar deneniyor (1/1)")
+                            time.sleep(5)
                             continue
                         aksiyon=self._handle_hata(mail,model_adi,hata_metni,log_ekle)
                         if stop_on_quota and aksiyon=="quota": raise
@@ -99,8 +106,7 @@ class SmartRouter:
             response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=arama_kullan)
         except Exception:
             if arama_kullan and self._last_request_had_quota:
-                self._clear_cooldowns(model_listesi)
-                kwargs.pop("tools",None)
+                self._clear_cooldowns(model_listesi); kwargs.pop("tools",None)
                 response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle)
             else: raise
         return guvenli_json_yukle(getattr(response,"text","")),info
@@ -115,7 +121,6 @@ class SmartRouter:
 
     def _tts_performans_promptu_olustur(self,metin:str,ses_adi:str)->str:
         return f"Speak naturally in Turkish as a professional automotive presenter. Voice: {ses_adi}. Keep the transcript exactly as provided. Add no extra words.\n\nTRANSCRIPT:\n{metin}"
-
     def _tts_response_audio_bytes(self,response):
         try:
             for cand in getattr(response,"candidates",[]) or []:
@@ -124,7 +129,6 @@ class SmartRouter:
                     if data: return data
         except Exception: pass
         raise ValueError("TTS yanıtında audio bulunamadı")
-
     def ses_uret(self,metin:str,ses_adi:str,cikti_dosyasi:str,log_ekle,hiz_carpani:float=1.0)->Tuple[bool,Optional[str]]:
         config=types.GenerateContentConfig(response_modalities=["AUDIO"],speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=ses_adi))))
         try:
