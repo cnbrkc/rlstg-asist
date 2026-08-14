@@ -40,8 +40,6 @@ class SmartRouter:
     def _parse_hata(self,hata_metni:str)->Tuple[str,int]:
         m=(hata_metni or "").lower()
         if "404" in m or "not_found" in m or "model not found" in m:
-            # Gemini may report model availability as key/user-specific. Do not
-            # blacklist the model globally in that case; let the next API key try it.
             if "no longer available to new users" in m or "new users" in m:
                 return "model_key",COOLDOWN_BULUNAMADI
             return "model",COOLDOWN_BULUNAMADI
@@ -71,9 +69,6 @@ class SmartRouter:
         if son_fallback:
             for fallback in ["gemini-3.1-flash-lite","gemini-2.5-flash","gemini-2.5-flash-lite"]:
                 if fallback not in modeller: modeller.append(fallback)
-        # If an entire model family is returning 503, do not spend another full
-        # retry cycle on every key before reaching the next family. A single
-        # transient retry per key is enough; the next model remains the fallback.
         for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
             for mail,api_key in API_KEYS.items():
@@ -89,7 +84,9 @@ class SmartRouter:
                         son_hata=e; hata_metni=str(e)
                         if ("503" in hata_metni or "unavailable" in hata_metni.lower()) and _503_deneme < 1:
                             _503_deneme += 1
-                            log_ekle(f"⏳ {mail}+{model_adi}: 503 geçici hata, 5s sonra tekrar deneniyor (1/1)")
+                            # Transient retry is informational; it must not be
+                            # counted as a pipeline error when the retry succeeds.
+                            log_ekle(f"⏳ {mail}+{model_adi}: geçici 503, 5s sonra tekrar deneniyor (1/1)")
                             time.sleep(5)
                             continue
                         aksiyon=self._handle_hata(mail,model_adi,hata_metni,log_ekle)
