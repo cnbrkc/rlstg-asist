@@ -53,14 +53,23 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
         carpanlar=[]; kalan=hiz_carpani
         while kalan>2.0: carpanlar.append(2.0); kalan/=2.0
         while kalan<0.5: carpanlar.append(0.5); kalan/=0.5
-        carpanlar.append(round(kalan,4)); atempo_str=",".join(f"atempo={c}" for c in carpanlar)
-    else: atempo_str=f"atempo={hiz_carpani}"
-    audio_filter=f"{atempo_str},aresample={FINAL_AUDIO_SAMPLE_RATE}:resampler=soxr:precision=28"
-    komut=[FFMPEG_BIN,"-y","-i",giris_dosyasi,"-filter:a",audio_filter,"-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-sample_fmt","s16",cikti_dosyasi]
+        carpanlar.append(round(kalan,4)); atempo_filtreleri=carpanlar
+    else:
+        atempo_filtreleri=[hiz_carpani]
+    # -filter:a yerine açık bir filter_complex graph + map kullanılır. Bazı
+    # FFmpeg 7.x build'lerinde WAV -> WAV + filter:a kombinasyonu
+    # "Assertion best_input >= 0" ile çökebiliyor. Açık input/output map'i
+    # filter graph'ının hangi akışı kullandığını kesinleştirir.
+    filtreler=[f"atempo={c}" for c in atempo_filtreleri]
+    filtreler.append(f"aresample={FINAL_AUDIO_SAMPLE_RATE}:resampler=soxr:precision=28")
+    audio_filter=",".join(filtreler)
+    komut=[FFMPEG_BIN,"-y","-i",giris_dosyasi,"-filter_complex",f"[0:a]{audio_filter}[aout]","-map","[aout]","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-sample_fmt","s16","-c:a","pcm_s16le",cikti_dosyasi]
     try:
         sonuc=subprocess.run(komut,capture_output=True,text=True,timeout=120)
         if sonuc.returncode!=0:
-            log_ekle(f"⚠️ ffmpeg hata: {sonuc.stderr[-300:] if sonuc.stderr else 'bilinmeyen'}"); return False
+            log_ekle(f"⚠️ ffmpeg hata: {sonuc.stderr[-500:] if sonuc.stderr else 'bilinmeyen'}"); return False
+        if not os.path.exists(cikti_dosyasi) or os.path.getsize(cikti_dosyasi)<=44:
+            log_ekle("⚠️ ffmpeg çıktı dosyası boş/geçersiz."); return False
         return True
     except Exception as e: log_ekle(f"⚠️ ffmpeg beklenmeyen hata: {e}"); return False
 
