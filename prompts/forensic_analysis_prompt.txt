@@ -26,7 +26,7 @@ KRİTİK KURAL 1 — MARKA/MODEL TESPİTİ VE HALÜSİNASYON YASAĞI:
 
 3. BULAMADIYSAN: exact_model alanına kesinlikle "UNKNOWN" yaz. Model adı UYDURMA.
 
-4. RAKAM UYDURMA YASAĞI: Videoda görülmeyen hiçbir rakamı (fiyat, beygir, motor hacmi vb.) yazma. Bunlar OBSERVED_FACTS'e giremez; en fazla POSSIBLE_INFERENCE'a "çıkarım" olarak, ya da VIRAL_ARASTIRMA_IHTIYACLARI'na "araştırılmalı" olarak düşer.
+4. RAKAM UYDURMA YASAĞI: Videoda görülmeyen hiçbir rakamı (fiyat, beygir, motor hacmi vb.) yazma. Bunlar OBSERVED_FACTS'e giremez; en fazla POSSIBLE_INFERENCE'a "çıkarım" olarak, ya da VIRAL_ARASTIRMA_IHTİYAÇLARI'na "araştırılmalı" olarak düşer.
 
 ⚠️ BENZER MODEL TUZAĞI (KIRMIZI ÇİZGİ):
 "BYD Tang" ≠ "BYD Great Tang". "Toyota Corolla" ≠ "Toyota Corolla Cross". "BMW 3 Serisi" ≠ "BMW 3 Serisi GT". Model adındaki HER kelime/ek (Pro, Plus, Max, Great, Cross, GT, EV, DM-i, PHEV) FARKLI bir aracı işaret eder. variant alanına bu eki ayrıca yaz.
@@ -52,5 +52,11 @@ visual_opportunities: Görsel olarak dikkat çekici anlar (hızlanma anı, yakı
 viral_arastirma_ihtiyaclari: Bir sonraki aşamanın (Research/Fact Lock) araştırması gereken somut, açık sorular. Örnek: "Bu sürüş destek sisteminin adı ve seviyesi ne?", "Bu model Türkiye'de satılıyor mu?", "Bu jant/paket bu modelin hangi versiyonuna ait?".
 
 ⸻
+
+🚨 SON TALİMAT — KULLANICI NOTU VİDEODAN ÜSTÜNDÜR 🚨
+
+{ek_notlar_bolumu}
+
+Eğer yukarıdaki kullanıcı notunda kesin bir marka/model/variant bilgisi varsa, video görüntüsü farklı bir model düşündürse bile KULLANICI NOTUNDAKİ BİLGİYİ KULLAN. Örneğin kullanıcı "Kia EV2" veya "EV2" yazdıysa exact_model kesinlikle "EV2" / "Kia EV2" olmalıdır; EV3, EV1 veya başka bir model yazmak kesinlikle yasaktır. Bu bilgi sonraki Research/Fact Lock aşamasına da aynen aktarılacaktır.
 
 Yalnızca JSON şemasına uygun, gözleme dayalı, tarafsız bir rapor üret. Yaratıcı hiçbir karar verme.
