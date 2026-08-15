@@ -1,8 +1,9 @@
 """Duo conversation script normalization.
 
 This module is intentionally isolated from the production TTS/render path.
-It converts the already-planned conversation map into a validated speaker
-script that the future multi-speaker TTS stage can consume.
+It converts the planned conversation map into a validated speaker script that
+future multi-speaker TTS can consume, while keeping the legacy single-voice
+representation available.
 """
 
 from typing import Any, Dict, List
@@ -15,26 +16,25 @@ _ALLOWED_PURPOSES = {
 }
 
 
+def _mode(strategy: Dict[str, Any]) -> str:
+    """Accept both the model's Turkish field and normalized strategy output."""
+    raw = strategy or {}
+    value = raw.get("uygunluk") or raw.get("anlatim_modu") or raw.get("mode") or "DUO"
+    value = str(value).upper().strip()
+    return value if value in _ALLOWED_MODES else "DUO"
+
+
 def normalize_conversation_map(strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Return a safe, ordered conversation map without changing editorial content."""
-    strategy = strategy or {}
-    mode = str(strategy.get("uygunluk") or strategy.get("anlatim_modu") or "DUO").upper()
-    if mode not in _ALLOWED_MODES:
-        mode = "DUO"
-
-    selected = strategy.get("konusma_haritasi") or []
+    mode = _mode(strategy)
+    selected = (strategy or {}).get("konusma_haritasi") or (strategy or {}).get("conversation_map") or []
     if not isinstance(selected, list):
         selected = []
 
-    if mode == "SOLO_FEMALE":
-        allowed = {"female"}
-    elif mode == "SOLO_MALE":
-        allowed = {"male"}
-    else:
-        allowed = _ALLOWED_SPEAKERS
+    allowed = {"female"} if mode == "SOLO_FEMALE" else {"male"} if mode == "SOLO_MALE" else _ALLOWED_SPEAKERS
 
     normalized: List[Dict[str, Any]] = []
-    for index, item in enumerate(selected, start=1):
+    for item in selected:
         if not isinstance(item, dict):
             continue
         speaker = str(item.get("speaker", "")).lower().strip()
@@ -75,10 +75,7 @@ def validate_script_segments(segments: Any, mode: str = "DUO") -> List[Dict[str,
         text = str(item.get("text", "")).strip()
         if speaker not in allowed or not text:
             continue
-        result.append({
-            "speaker": speaker,
-            "text": text,
-        })
+        result.append({"speaker": speaker, "text": text})
     return result
 
 
