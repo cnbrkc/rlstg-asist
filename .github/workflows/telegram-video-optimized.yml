@@ -83,7 +83,12 @@ jobs:
             cloudflare
             data/pending
             prompts
+            character_profiles.py
             config.py
+            duo_audio.py
+            duo_script.py
+            duo_script_engine.py
+            duo_strategy.py
             media.py
             pipeline.py
             prompts.py
@@ -124,7 +129,7 @@ jobs:
         run: pip install --disable-pip-version-check -r requirements.txt
 
       - name: Compile check
-        run: python -m compileall -q config.py media.py pipeline.py prompts.py router.py schemas.py telegram_pipeline_worker.py telegram_webhook_intake.py research.py tts.py utils.py
+        run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py telegram_pipeline_worker.py telegram_webhook_intake.py research.py tts.py utils.py
 
       - name: Run Reels pipeline
         env:
