@@ -13,6 +13,7 @@ from media import gecici_ses_yolu, gecici_dosya_yolu, temp_dosya_temizle, video_
 from duo_strategy import normalize_duo_strategy
 from duo_script import normalize_conversation_map
 from duo_script_engine import build_duo_generation_contract, build_generation_prompt, validate_generated_duo
+from duo_audio import duo_ses_uret
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
 
@@ -56,7 +57,7 @@ def _duo_plan_hazirla(reels_state):
     return strategy
 
 def _duo_script_calistir(router, duo_plan, editorial_state, fact_state, video_state, log):
-    """Conversation Map'ten gerçek speaker script üretir; legacy VO'yu değiştirmez."""
+    """Conversation Map'ten gerçek speaker script üretir."""
     contract = build_duo_generation_contract(duo_plan)
     editorial = durumu_metne_donustur('EDITORIAL', editorial_state)
     facts = durumu_metne_donustur('FACT LOCK', fact_state)
@@ -71,6 +72,15 @@ def _duo_script_calistir(router, duo_plan, editorial_state, fact_state, video_st
     except Exception as exc:
         log(f'⚠️ Duo script üretimi başarısız; legacy tek sesli akış korunuyor: {str(exc)[:180]}')
         return {"contract": contract, "segments": [], "model": "hata", "status": "fallback", "error": str(exc)[:180]}
+
+def _duo_ses_veya_legacy_uret(router, duo_script, legacy_text, legacy_voice, log, output_path):
+    """Duo hazırsa Autonoe+Charon timeline üretir; hata halinde eski TTS'e döner."""
+    if duo_script and duo_script.get('status') == 'ready' and duo_script.get('segments'):
+        ok, info, _ = duo_ses_uret(router, duo_script['segments'], output_path, log, hiz_carpani=SES_HIZ_CARPANI)
+        if ok and os.path.exists(output_path):
+            return True, info, 'DUO'
+    ok, info = router.ses_uret(legacy_text, legacy_voice, output_path, log, hiz_carpani=SES_HIZ_CARPANI)
+    return ok, info, 'LEGACY'
 
 def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}')
@@ -100,15 +110,17 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     _ilerleme(ilerlemeyi_guncelle,7); log_ekle('🔍 Son kalite kontrol (QA)...')
     qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log_ekle,duo_plan,duo_script); state['qa_state_final']=qa_state
     _ilerleme(ilerlemeyi_guncelle,8); log_ekle('🎧 Ses üretiliyor...')
-    ses_adi = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Puck'
-    ses_dosyasi=gecici_ses_yolu(); ses_basarili,kullanilan_ses_modeli=router.ses_uret(reels_state.get('seslendirme_metni',''),ses_adi,ses_dosyasi,log_ekle,hiz_carpani=SES_HIZ_CARPANI)
+    legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Autonoe'
+    ses_dosyasi=gecici_ses_yolu()
+    ses_basarili,kullanilan_ses_modeli,ses_modu=_duo_ses_veya_legacy_uret(router,duo_script,reels_state.get('seslendirme_metni',''),legacy_voice,log_ekle,ses_dosyasi)
+    state['ses_modu']=ses_modu
     if ses_basarili and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi
     _ilerleme(ilerlemeyi_guncelle,9); log_ekle('🎬 Videoya AI sesi ekleniyor (FFmpeg)...')
     output=gecici_dosya_yolu('output','mp4')
     render_ok=ses_basarili and video_ve_sesi_birlestir(temp_input_video,ses_dosyasi,output,log_ekle)
     final=output if render_ok and os.path.exists(output) else ''
     log_ekle('🏁 Pipeline tamamlandı.')
-    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'pipeline_state':state}
+    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'pipeline_state':state}
 
 def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, log_ekle, ilerlemeyi_guncelle=None, sure_saniye=30):
     metin=(metin or '').strip()
@@ -132,9 +144,11 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     state['threads_state']=threads_state
     _ilerleme(ilerlemeyi_guncelle,7,'🔍 QA')
     qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log_ekle,duo_plan,duo_script); state['qa_state_final']=qa_state
-    _ilerleme(ilerlemeyi_guncelle,8,'🎧 Autonoe TTS')
-    ses_adi = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
-    ses_dosyasi=gecici_ses_yolu(); ses_basarili,kullanilan_ses_modeli=router.ses_uret(reels_state.get('seslendirme_metni',''),ses_adi,ses_dosyasi,log_ekle,hiz_carpani=SES_HIZ_CARPANI)
+    _ilerleme(ilerlemeyi_guncelle,8,'🎧 Ses üretiliyor...')
+    legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
+    ses_dosyasi=gecici_ses_yolu()
+    ses_basarili,kullanilan_ses_modeli,ses_modu=_duo_ses_veya_legacy_uret(router,duo_script,reels_state.get('seslendirme_metni',''),legacy_voice,log_ekle,ses_dosyasi)
+    state['ses_modu']=ses_modu
     if ses_basarili and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi
     log_ekle('🏁 Metin üretimi tamamlandı; video render atlandı.')
-    return {'mode':'text','seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'pipeline_state':state}
+    return {'mode':'text','seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'pipeline_state':state}
