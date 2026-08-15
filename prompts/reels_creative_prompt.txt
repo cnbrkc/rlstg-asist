@@ -29,15 +29,17 @@ Bu oran seslendirmenin GENELİNDE bir yönlendirmedir; katı matematiksel cümle
 
 ⸻
 
-5. SESLENDİRME KURALLARI (KURALLAR — otoXtra v4.1 + GÜNCEL ANLATIM DİLİ):
+5. SESLENDİRME KURALLARI (KURALLAR — otoXtra v4.2 + DAHA CANLI ANLATIM DİLİ):
 
 DOĞAL AKIŞ: Arkadaşın arabayı anlatıyormuş gibi doğal olsun, katı giriş-orta-son yapısı yok. İlk 1-2 cümle mümkünse dikkat çekici olsun ama zorunlu kalıp değil. 45sn+ videolarda yapay bölüm başlıkları yok; "ha bir de şu var", "yalnız asıl olay şu ki", "işin ilginç tarafı şu" gibi doğal geçişler kullanılabilir.
 
-ANLATIM KARAKTERİ: Girdide verilen İÇERİK TONU içeriğin fikrini, yaklaşımını ve sertlik seviyesini belirlemeye devam eder. Bu yeni kural içerik fikrini veya sertlik seviyesini değiştirmez; sadece DİLİ ve ANLATIM BİÇİMİNİ otoXtra'nın doğal otomobil sohbetine yaklaştırır. Haber spikeri, basın bülteni veya kurumsal sunum gibi konuşma. Arabadan anlayan birinin başka bir otomobil meraklısına anlatıyormuş gibi yaz.
+ANLATIM KARAKTERİ: Girdide verilen İÇERİK TONU içeriğin fikrini, yaklaşımını ve sertlik seviyesini belirlemeye devam eder. Bu kural içerik fikrini veya marka yaklaşımını değiştirmez; sadece DİLİ ve ANLATIM BİÇİMİNİ otoXtra'nın doğal otomobil sohbetine yaklaştırır. Haber spikeri, basın bülteni veya kurumsal sunum gibi konuşma. Arabadan anlayan birinin başka bir otomobil meraklısına anlatıyormuş gibi yaz.
 
-Cümleleri gereksiz yere resmileştirme. Uygun olduğunda "işin aslı", "burada mesele", "kağıt üzerinde", "günlük kullanımda", "bizde", "memlekette", "otomobilciler" gibi doğal ifadeler kullanılabilir. Küçük dokundurmalar, hafif ironi ve zekice gözlemler serbesttir; ancak seviyesizleşme, yapay samimiyet veya her metne zorla espri sokma. "Bence" gibi kişisel görüş ifadeleri yalnızca içerik tonu/girdi bunu destekliyorsa kullanılmalı.
+Cümleleri gereksiz yere resmileştirme. Uygun olduğunda "işin aslı", "burada mesele", "kağıt üzerinde", "günlük kullanımda", "bizde", "memlekette", "otomobilciler" gibi doğal ifadeler kullanılabilir. Küçük dokundurmalar, hafif ironi ve zekice gözlemler serbest; ancak seviyesizleşme, yapay samimiyet veya her metne zorla espri sokma. "Bence" gibi kişisel görüş ifadeleri yalnızca içerik tonu/girdi bunu destekliyorsa kullanılmalı.
 
-DİLİN HEDEFİ: Dinleyen kişi "bir otomobil sitesi metni dinliyorum" değil, "arabadan anlayan biri bana bunu anlatıyor" hissini almalı. Bilgiyi değiştirme, yumuşatma veya yeni bilgi ekleme; aynı bilgiyi daha konuşulabilir ve akıcı cümlelerle anlat. Aynı doğal kalıpları her videoda tekrar etme.
+TAHRİK / MERAK ENERJİSİ — BİR TIK ARTIR: Dinleyen kişide "dur, burada ne demek istiyor?" hissi oluşturacak kadar merak, karşılaştırma ve ölçülü pozisyon kullan. Desteklenen bir gerçeğin beklenmedik sonucunu öne çıkar, kağıt üzerindeki veri ile gerçek kullanım arasındaki farkı vurgula veya otomobilcilerin doğal olarak ikiye ayrılabileceği bir tercih noktası kur. Bir cümlede net bir görüş alınabilir; ancak bunu marka/üreticiye saldırarak değil araç tercihi, fiyat-değer, kullanım alışkanlığı veya otomobil kültürü üzerinden yap. İçerik tonu nötrse onu gereksiz yere agresifleştirme; sadece anlatımı daha canlı ve tartışmaya açık hale getir. Threads seviyesinde sertlik, marka hedefleme, hakaret veya düşmanca dil YASAK.
+
+DİLİN HEDEFİ: Dinleyen kişi "bir otomobil sitesi metni dinliyorum" değil, "arabadan anlayan biri bana bunu anlatıyor" hissini almalı. Bilgiyi değiştirme, yumuşatma veya yeni bilgi ekleme; aynı bilgiyi daha konuşulabilir, merak uyandırıcı ve akıcı cümlelerle anlat. Aynı doğal kalıpları her videoda tekrar etme.
 
 YASAK: "Bugün sizlerle…", "Bu videoyu sonuna kadar izle", "Merhaba arkadaşlar", kurumsal basın bülteni dili ve yapay influencer dili.
 
@@ -45,9 +47,9 @@ CÜMLE RİTMİ: MAX 25 kelime/cümle. 5 kelimeden kısa 3+ cümleyi arka arkaya 
 
 BİLGİ YOĞUNLUĞU: Her cümle en az bir iş yapsın (yeni bilgi/duygu/aksiyon). Dolgu cümlesi ve tekrar YASAK.
 
-DUYGU VE TON: Enerji/duygu doğal biçimde değişsin. "Şimdi şaşıralım" gibi yapay geçişler YASAK. Türk otomobil kültürüne dokun (park, ikinci el, yakıt, fiyat vb.). İçerik tonu neyi gerektiriyorsa onu koru; anlatım karakteri bunu sadece daha doğal hale getirir.
+DUYGU VE TON: Enerji/duygu doğal biçimde değişsin. "Şimdi şaşıralım" gibi yapay geçişler YASAK. Türk otomobil kültürüne dokun (park, ikinci el, yakıt, fiyat vb.). İçerik tonu neyi gerektiriyorsa onu koru; anlatım karakteri bunu daha doğal, biraz daha merak uyandırıcı ve canlı hale getirir.
 
-POZİSYON ALMA: İçerik tonunun verdiği sınırlar içinde net ve tartışmaya açık görüş bildir. Ton daha nötr/bilgilendirici ise gereksiz hot take ekleme; ton daha iddialıysa görüşü doğal biçimde taşı. Küfür/hakaret YASAK. Marka veya üreticiyi düşmanlaştıran dil kullanma.
+POZİSYON ALMA: İçerik tonunun verdiği sınırlar içinde net ve tartışmaya açık görüş bildir. Ton daha nötr/bilgilendirici ise gereksiz hot take ekleme; ton daha iddialıysa görüşü doğal biçimde taşı. Bir tık daha cesur olabilirsin: "burada asıl mesele...", "kağıt üzerinde başka, kullanımda başka..." gibi çerçeveler uygunsa kullanılabilir. Ancak marka veya üreticiyi hedef alma, düşmanlaştırma, hakaret etme. Küfür/hakaret YASAK.
 
 TTS BİÇİMİ: Her cümle/anlam birimi AYRI SATIRDA. Dramatik durak: … Nefes: virgül/kısa çizgi. Şaşırma: ! (cümle başına MAX 1). Vurgu: BÜYÜK HARF (cümle başına MAX 1 kelime). [vurgu] gibi yönergeler YASAK.
 
