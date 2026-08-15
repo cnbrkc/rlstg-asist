@@ -10,6 +10,8 @@ from prompts import (forensic_analiz_promptunu_olustur, research_promptunu_olust
                      reels_creative_promptunu_olustur, caption_promptunu_olustur, threads_promptunu_olustur,
                      qa_promptunu_olustur, durumu_metne_donustur, girdi_birlestir)
 from media import gecici_ses_yolu, gecici_dosya_yolu, temp_dosya_temizle, video_ve_sesi_birlestir, _ses_suresini_al
+from duo_strategy import normalize_duo_strategy
+from duo_script import normalize_conversation_map
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
 
@@ -51,6 +53,17 @@ def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,capti
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}')
     return router.metin_uret(content,qa_promptunu_olustur(),QA_SCHEMA,log,arama_kullan=False)
 
+def _duo_plan_hazirla(reels_state):
+    """Reels Creative'in duo kararını güvenli biçimde pipeline state'ine bağlar.
+
+    Bu aşamada plan yalnızca metadata olarak tutulur; mevcut tek sesli TTS
+    metni değiştirilmez. Böylece yeni mimari production akışını bozmadan
+    gerçek multi-speaker TTS için hazır hale gelir.
+    """
+    strategy = normalize_duo_strategy(reels_state)
+    strategy["conversation_map"] = normalize_conversation_map(reels_state)
+    return strategy
+
 def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz_notlari,metin_uretim_notlari,sure_saniye,icerik_tonu,secilen_ses_ingilizce,log_ekle,ilerlemeyi_guncelle=None):
     state={}
     _ilerleme(ilerlemeyi_guncelle,1); log_ekle('🎥 Video analiz ediliyor (Forensic)...')
@@ -61,6 +74,7 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin_uretim_notlari,log_ekle); state['editorial_state']=editorial_state
     _ilerleme(ilerlemeyi_guncelle,4); log_ekle('🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover)...')
     reels_state,model_reels=_reels_creative_calistir(router,editorial_state,fact_state,video_state,metin_uretim_notlari,sure_saniye,icerik_tonu,log_ekle); state['reels_state']=reels_state
+    duo_plan = _duo_plan_hazirla(reels_state); state['duo_plan'] = duo_plan
     _ilerleme(ilerlemeyi_guncelle,5); log_ekle('📝 Caption + hashtag hazırlanıyor...')
     try: caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log_ekle)
     except Exception as e: log_ekle(f'⚠️ Caption üretilemedi: {str(e)[:150]}'); caption_state,model_caption={'reels_aciklamasi':'','reels_hashtagleri':[]},'hata'
@@ -80,7 +94,7 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     render_ok=ses_basarili and video_ve_sesi_birlestir(temp_input_video,ses_dosyasi,output,log_ekle)
     final=output if render_ok and os.path.exists(output) else ''
     log_ekle('🏁 Pipeline tamamlandı.')
-    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'qa_result':qa_state,'pipeline_state':state}
+    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'qa_result':qa_state,'pipeline_state':state}
 
 def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, log_ekle, ilerlemeyi_guncelle=None, sure_saniye=30):
     """Telegram'dan yalnızca metin geldiğinde mevcut editoryal motoru kullanır.
@@ -101,6 +115,7 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle); state['editorial_state']=editorial_state
     _ilerleme(ilerlemeyi_guncelle,4,'🎙️ Reels Creative')
     reels_state,model_reels=_reels_creative_calistir(router,editorial_state,fact_state,video_state,metin,sure_saniye,icerik_tonu,log_ekle); state['reels_state']=reels_state
+    duo_plan = _duo_plan_hazirla(reels_state); state['duo_plan'] = duo_plan
     _ilerleme(ilerlemeyi_guncelle,5,'📝 Caption + hashtag')
     try: caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log_ekle)
     except Exception as e: log_ekle(f'⚠️ Caption üretilemedi: {str(e)[:150]}'); caption_state,model_caption={'reels_aciklamasi':'','reels_hashtagleri':[]},'hata'
@@ -116,4 +131,4 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     ses_dosyasi=gecici_ses_yolu(); ses_basarili,kullanilan_ses_modeli=router.ses_uret(reels_state.get('seslendirme_metni',''),ses_adi,ses_dosyasi,log_ekle,hiz_carpani=SES_HIZ_CARPANI)
     if ses_basarili and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi
     log_ekle('🏁 Metin üretimi tamamlandı; video render atlandı.')
-    return {'mode':'text','seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'qa_result':qa_state,'pipeline_state':state}
+    return {'mode':'text','seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':ses_adi,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'qa_result':qa_state,'pipeline_state':state}
