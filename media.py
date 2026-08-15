@@ -165,6 +165,28 @@ def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:
 def video_suresini_al(video_yolu: str) -> float:
     return float(_ffprobe_bilgi_al(video_yolu).get("duration",0.0))
 
+def _kalite_filtresi_olustur(input_bilgi: dict, log_ekle) -> tuple[str | None, int | None]:
+    """Kaynak çözünürlüğünü küçültmeden, hafif bir perceptual kalite geçişi hazırlar.
+
+    AI super-resolution (Real-ESRGAN) araştırıldı; ancak GitHub-hosted runner'da
+    GPU garantisi olmadığı için her videoda CPU tabanlı frame-by-frame inference
+    çalıştırmak pipeline süresini gereksiz yere uzatabilir. Bunun yerine final
+    render'da hafif Lanczos ölçekleme + kontrollü unsharp kullanıyoruz.
+    Bu gerçek detay üretmez; kaynak zaten düşükse sadece algılanan netliği artırır.
+    """
+    width=int(input_bilgi.get("width") or 0); height=int(input_bilgi.get("height") or 0)
+    if width<=0 or height<=0:
+        return None, None
+    # Telegram sıkıştırması nedeniyle beklenenden düşük bir kaynak gelirse
+    # 576x1024'e kontrollü Lanczos upscale yapılır; gerçek detay geri getirilemez.
+    target_w, target_h = 576, 1024
+    if width < target_w and height < target_h:
+        filtre=f"scale={target_w}:{target_h}:flags=lanczos,unsharp=5:5:0.30:5:5:0.0"
+        log_ekle(f"✨ Hafif kalite geçişi: {width}x{height} → {target_w}x{target_h} (Lanczos + kontrollü netlik)")
+        return filtre, target_w
+    # Normal kaynaklarda çözünürlüğü değiştirmeden sadece hafif netlik.
+    return "unsharp=5:5:0.30:5:5:0.0", width
+
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
     if not ses_yolu or not os.path.exists(ses_yolu): return False
     input_bilgi=medya_raporu(video_yolu,"INPUT",log_ekle)
@@ -179,9 +201,17 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
                 log_ekle(f"🎚️ Ses/video süre uyumu: video {video_sure:.2f}s → ses {ses_sure:.2f}s | görüntü hızı {uygulanan_oran:.2f}x")
             if abs(oran-uygulanan_oran)>0.01: log_ekle(f"⚠️ Süre farkı {oran:.2f}x sınırın dışında; güvenli {uygulanan_oran:.2f}x sınırı kullanıldı.")
         else: log_ekle(f"🎚️ Ses/video süre uyumu: fark küçük ({abs(video_sure-ses_sure):.2f}s), hız değişimi yapılmadı.")
+
+    kalite_filtresi, _ = _kalite_filtresi_olustur(input_bilgi, log_ekle)
+    if kalite_filtresi:
+        video_filtresi = f"{video_filtresi},{kalite_filtresi}" if video_filtresi else kalite_filtresi
+
+    # Kaynak FPS'i koru. Önceki render implicit olarak 25 FPS'e düşebiliyordu.
+    # Böylece 30 FPS giriş 30 FPS olarak çıkar; setpts yalnızca zaman ölçeğini değiştirir.
+    output_fps = input_bilgi.get("fps") or 30.0
     komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu]
     if video_filtresi: komut += ["-filter:v",video_filtresi]
-    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE,"-shortest",cikti_yolu]
+    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-r",f"{output_fps:.6f}","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE,"-shortest",cikti_yolu]
     try:
         r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
         if r.returncode!=0: log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-800:]}"); return False
