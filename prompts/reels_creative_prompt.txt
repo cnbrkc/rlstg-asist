@@ -29,13 +29,55 @@ Bu oran seslendirmenin GENELİNDE bir yönlendirmedir; katı matematiksel cümle
 
 ⸻
 
-5. SESLENDİRME KURALLARI (KURALLAR — otoXtra v4.2 + DAHA CANLI ANLATIM DİLİ):
+5. YENİ ANLATIM MİMARİSİ — TEK SES / İKİ SES KARARI:
+
+Bu pipeline artık otoXtra'nın iki karakterli anlatımına hazırlanıyor. Yalnızca İKİ karakter vardır:
+- FEMALE = eşimi temsil eden kadın karakter. Mevcut ses kimliği ileride Autonoe olacaktır.
+- MALE = beni temsil eden erkek karakter. Erkek ses daha sonraki aşamada seçilecektir.
+
+ÜÇÜNCÜ SES, anlatıcı veya yardımcı karakter YOK.
+
+ÖNEMLİ: Her videoda iki karakteri konuşturmak zorunda değilsin. Anlatım modu içerik türü, hikâye, vurucu detaylar, içerik tonu ve doğal akışa göre AI tarafından seçilir.
+
+Kullanılabilecek modlar:
+- SOLO_FEMALE: yalnızca kadın karakter konuşur.
+- SOLO_MALE: yalnızca erkek karakter konuşur.
+- DUO: iki karakter konuşur.
+
+Genel editoryal tercih DUO'dur. Sistem uzun vadede yaklaşık olarak içeriklerin çoğunda duo üretmeye eğilimli olmalıdır; örnek bir sezgisel dağılım 10 videoda yaklaşık 6 DUO, 2 SOLO_FEMALE, 2 SOLO_MALE olabilir. BU BİR SABİT ORAN DEĞİLDİR ve kod seviyesinde zorlanmamalıdır. İçerik açıkça solo anlatımı daha güçlü kılıyorsa solo seçmek, sırf oran tutturmaktan DAHA DOĞRUDUR.
+
+DUO seçildiğinde iki karakterin eşit konuşması gerekmez. Kadın veya erkek içerikte daha fazla alan alabilir. Konuşma oranını içerik belirler; matematiksel eşitlik hedefleme.
+
+AI şu kararları üretmelidir:
+- anlatim_modu
+- hook_speaker
+- kadın/erkek yaklaşık yaratıcı ağırlığı
+- interaction_level
+- humor_level
+- tension_level
+- konuşmanın merkezindeki en güçlü vurucu detay
+- ending_speaker
+- bu seçimin kısa gerekçesi
+
+TENSION/ATışMA yalnızca içerik doğal olarak buna uygunsa kullanılabilir. Her DUO videosunu karı-koca atışmasına çevirme. Bazen aynı fikirde olmalı, bazen biri diğerinin görüşünü tamamlamalı, bazen kısa bir karşı çıkış olmalı, bazen hiç doğrudan etkileşim olmamalı.
+
+Diyalog BİLGİDEN DOĞMALIDIR. Sırf iki kişi konuşsun diye yapay replik ekleme.
+
+Önce cümleleri yazmadan KONUSMA HARİTASI çıkar. Haritada her segment için konuşmacı + amaç + işlenecek detay + duygu belirt. Amaçlar hook, fact, reaction, challenge, explanation, counterpoint, transition, punchline veya closing olabilir. Harita kısa, işlevsel ve içerikten türemiş olmalıdır.
+
+Solo modda haritada yalnızca seçilen karakter bulunur. Duo modda yalnızca gerçekten değer katan konuşma dönüşleri bulunur; gereksiz ping-pong YASAK.
+
+⸻
+
+6. SESLENDİRME KURALLARI (KURALLAR — otoXtra v4.2 + DAHA CANLI ANLATIM DİLİ):
 
 DOĞAL AKIŞ: Arkadaşın arabayı anlatıyormuş gibi doğal olsun, katı giriş-orta-son yapısı yok. İlk 1-2 cümle mümkünse dikkat çekici olsun ama zorunlu kalıp değil. 45sn+ videolarda yapay bölüm başlıkları yok; "ha bir de şu var", "yalnız asıl olay şu ki", "işin ilginç tarafı şu" gibi doğal geçişler kullanılabilir.
 
 ANLATIM KARAKTERİ: Girdide verilen İÇERİK TONU içeriğin fikrini, yaklaşımını ve sertlik seviyesini belirlemeye devam eder. Bu kural içerik fikrini veya marka yaklaşımını değiştirmez; sadece DİLİ ve ANLATIM BİÇİMİNİ otoXtra'nın doğal otomobil sohbetine yaklaştırır. Haber spikeri, basın bülteni veya kurumsal sunum gibi konuşma. Arabadan anlayan birinin başka bir otomobil meraklısına anlatıyormuş gibi yaz.
 
-Cümleleri gereksiz yere resmileştirme. Uygun olduğunda "işin aslı", "burada mesele", "kağıt üzerinde", "günlük kullanımda", "bizde", "memlekette", "otomobilciler" gibi doğal ifadeler kullanılabilir. Küçük dokundurmalar, hafif ironi ve zekice gözlemler serbest; ancak seviyesizleşme, yapay samimiyet veya her metne zorla espri sokma. "Bence" gibi kişisel görüş ifadeleri yalnızca içerik tonu/girdi bunu destekliyorsa kullanılmalı.
+İKİ KARAKTERLİ DOĞALLIK: DUO seçildiyse iki kişinin replikleri bir tiyatro metni gibi değil, aynı otomobil sohbetinin doğal parçaları gibi yazılmalı. Bir karakter diğerinin söylediğini yalnızca tekrar etmek için konuşmamalı. Kısa reaksiyonlar yalnızca gerçekten ritim veya anlam katıyorsa kullanılmalı. Sürekli soru-cevap, sürekli karşı çıkma ve sürekli espri YASAK.
+
+KARAKTERLERİN ROLÜ: FEMALE eşimi temsil eder; doğal, zeki, gerektiğinde komik/sert, günlük kullanıcı ve otomobil deneyimi perspektifini taşıyabilir; teknik bilgi gerektiğinde de kullanabilir. MALE beni temsil eder; teknik, motor, performans, fiyat/değer ve otomobil kültürü perspektifini taşıyabilir; gerektiğinde karşı çıkabilir veya fikrini değiştirebilir. Bunlar stereotip değildir. Konu bu beklentiyi tersine çeviriyorsa tersine çevir.
 
 TAHRİK / MERAK ENERJİSİ — BİR TIK ARTIR: Dinleyen kişide "dur, burada ne demek istiyor?" hissi oluşturacak kadar merak, karşılaştırma ve ölçülü pozisyon kullan. Desteklenen bir gerçeğin beklenmedik sonucunu öne çıkar, kağıt üzerindeki veri ile gerçek kullanım arasındaki farkı vurgula veya otomobilcilerin doğal olarak ikiye ayrılabileceği bir tercih noktası kur. Bir cümlede net bir görüş alınabilir; ancak bunu marka/üreticiye saldırarak değil araç tercihi, fiyat-değer, kullanım alışkanlığı veya otomobil kültürü üzerinden yap. İçerik tonu nötrse onu gereksiz yere agresifleştirme; sadece anlatımı daha canlı ve tartışmaya açık hale getir. Threads seviyesinde sertlik, marka hedefleme, hakaret veya düşmanca dil YASAK.
 
@@ -43,7 +85,7 @@ DİLİN HEDEFİ: Dinleyen kişi "bir otomobil sitesi metni dinliyorum" değil, "
 
 YASAK: "Bugün sizlerle…", "Bu videoyu sonuna kadar izle", "Merhaba arkadaşlar", kurumsal basın bülteni dili ve yapay influencer dili.
 
-CÜMLE RİTMİ: MAX 25 kelime/cümle. 5 kelimeden kısa 3+ cümleyi arka arkaya kullanma. Aynı bilgiyi farklı kelimelerle tekrarlama. Teknik terimi kullandığında hemen günlük dille açıkla. Konuşma sırasında rahat okunacak cümleler kur; gereksiz dolambaçlı yapılar kullanma.
+Cümle RİTMİ: MAX 25 kelime/cümle. 5 kelimeden kısa 3+ cümleyi arka arkaya kullanma. Aynı bilgiyi farklı kelimelerle tekrarlama. Teknik terimi kullandığında hemen günlük dille açıkla. Konuşma sırasında rahat okunacak cümleler kur; gereksiz dolambaçlı yapılar kullanma.
 
 BİLGİ YOĞUNLUĞU: Her cümle en az bir iş yapsın (yeni bilgi/duygu/aksiyon). Dolgu cümlesi ve tekrar YASAK.
 
@@ -57,7 +99,7 @@ SESLENDİRME YASAKLARI: Wikipedia dili, açıklanmamış teknik terim, tekrar, d
 
 ⸻
 
-6. KAPAK BAŞLIKLARI KURALLARI:
+7. KAPAK BAŞLIKLARI KURALLARI:
 
 ANA BAŞLIK: 2-4 kelime, TAMAMI BÜYÜK HARF, MAX 25 karakter, videonun ana vaadini özetler. YASAK: 5+ kelime, tek başına marka adı, "ARABA İNCELEME", "YENİ VİDEO".
 ALT BAŞLIK: 1 cümle, 5-10 kelime, MAX 50 karakter, ilk harf büyük devamı küçük, ana başlığı tamamlar, merakı destekler ama cevabı vermez.
@@ -66,15 +108,21 @@ ALT BAŞLIK: 1 cümle, 5-10 kelime, MAX 50 karakter, ilk harf büyük devamı k�
 
 ⸻
 
-7. COVER + HOOK İLİŞKİSİ (ÇOK ÖNEMLİ):
+8. COVER + HOOK İLİŞKİSİ (ÇOK ÖNEMLİ):
 
 Kapak ve seslendirmenin ilk 1-3 saniyesi AYNI ŞEYİ SÖYLEMEMELİ. Birbirini tamamlamalı: Kapak = merak, Ses = merakı açma, Video = görsel kanıt.
 Örnek: Kapak "BU SUV NORMAL DEĞİL" → Voice hook "Dışarıdan bakınca aile arabası gibi duruyor…" (birebir tekrar YASAK).
 
 3-5 HOOK ailesi üret (hook_families): her biri kapak_ana, kapak_alt, ilk_uc_saniye (voice hook), anlati_yonu içerir. Şu kriterlerle puanla (0-10): curiosity_score, visual_match_score, fact_strength_score, originality_score, retention_score. En güçlü kombinasyonu secilen_aile_index ile işaretle.
 
-kapak_basliklari alanına, madde 6'daki 5 alternatifi (bunlar hook_families'den bağımsız, kullanıcıya sunulacak tam set) yaz. seslendirme_metni'ni secilen_aile_index'teki hook ailesiyle uyumlu şekilde tam metin olarak üret.
+kapak_basliklari alanına, madde 7'deki 5 alternatifi (bunlar hook_families'den bağımsız, kullanıcıya sunulacak tam set) yaz. seslendirme_metni'ni secilen_aile_index'teki hook ailesiyle uyumlu şekilde tam metin olarak üret.
 
 ⸻
+
+9. ESKİ TEKİL MOD GÜVENLİK KURALI:
+
+Bu aşamada sistemin mevcut tek sesli üretimini BOZMA. Yeni anlatım karar alanları stratejik planlama amacıyla üretilir; mevcut seslendirme_metni alanı ve mevcut tek sesli TTS/render akışı henüz değiştirilmemelidir. İlerleyen aşamada multi-speaker TTS devreye alınana kadar mevcut üretim davranışı korunacaktır.
+
+10. ÇIKTI:
 
 Çıktın SADECE Reels Creative şemasına uygun JSON olacak. Caption, hashtag veya Threads ÜRETME — onlar ayrı aşamalarda üretilecek.
