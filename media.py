@@ -56,26 +56,36 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
         carpanlar.append(round(kalan,4)); atempo_filtreleri=carpanlar
     else:
         atempo_filtreleri=[hiz_carpani]
-    # -filter:a yerine açık bir filter_complex graph + map kullanılır. Bazı
-    # FFmpeg 7.x build'lerinde WAV -> WAV + filter:a kombinasyonu
-    # "Assertion best_input >= 0" ile çökebiliyor. Açık input/output map'i
-    # filter graph'ının hangi akışı kullandığını kesinleştirir.
+
+    # Bazı FFmpeg 7.x build'lerinde WAV -> WAV işlemini aynı filter graph
+    # içinde atempo + aresample ile yapmak "Assertion best_input >= 0"
+    # hatasına yol açabiliyor. Filtreleme ve resampling'i iki ayrı, basit
+    # FFmpeg çağrısına ayırıyoruz. Böylece TTS hızlandırma mantığı değişmeden
+    # WAV çıktısı güvenilir biçimde üretiliyor.
     filtreler=[f"atempo={c}" for c in atempo_filtreleri]
-    filtreler.append(f"aresample={FINAL_AUDIO_SAMPLE_RATE}:resampler=soxr:precision=28")
-    audio_filter=",".join(filtreler)
-    komut=[FFMPEG_BIN,"-y","-i",giris_dosyasi,"-filter_complex",f"[0:a]{audio_filter}[aout]","-map","[aout]","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-sample_fmt","s16","-c:a","pcm_s16le",cikti_dosyasi]
+    atempo_filter=",".join(filtreler)
+    ara_dosya=gecici_dosya_yolu("atempo", "wav")
     try:
-        sonuc=subprocess.run(komut,capture_output=True,text=True,timeout=120)
+        komut1=[FFMPEG_BIN,"-y","-i",giris_dosyasi,"-af",atempo_filter,"-c:a","pcm_s16le",ara_dosya]
+        sonuc=subprocess.run(komut1,capture_output=True,text=True,timeout=120)
+        if sonuc.returncode!=0 or not os.path.exists(ara_dosya) or os.path.getsize(ara_dosya)<=44:
+            log_ekle(f"⚠️ ffmpeg atempo hata: {sonuc.stderr[-500:] if sonuc.stderr else 'bilinmeyen'}")
+            return False
+
+        komut2=[FFMPEG_BIN,"-y","-i",ara_dosya,"-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-sample_fmt","s16","-c:a","pcm_s16le",cikti_dosyasi]
+        sonuc=subprocess.run(komut2,capture_output=True,text=True,timeout=120)
         if sonuc.returncode!=0:
-            log_ekle(f"⚠️ ffmpeg hata: {sonuc.stderr[-500:] if sonuc.stderr else 'bilinmeyen'}"); return False
+            log_ekle(f"⚠️ ffmpeg resample hata: {sonuc.stderr[-500:] if sonuc.stderr else 'bilinmeyen'}")
+            return False
         if not os.path.exists(cikti_dosyasi) or os.path.getsize(cikti_dosyasi)<=44:
             log_ekle("⚠️ ffmpeg çıktı dosyası boş/geçersiz."); return False
         return True
-    except Exception as e: log_ekle(f"⚠️ ffmpeg beklenmeyen hata: {e}"); return False
+    except Exception as e:
+        log_ekle(f"⚠️ ffmpeg beklenmeyen hata: {e}"); return False
+    finally:
+        temp_dosya_temizle(ara_dosya)
 
 def _video_bilgi_al(video_yolu: str) -> dict:
-    # OpenCV yerine ffprobe kullanılır; böylece her Telegram işinde ağır cv2 bağımlılığı
-    # kurulmaz ve medya süresi/FPS tespiti tek bir güvenilir araç üzerinden yapılır.
     bilgi={"fps":0.0,"frames":0,"width":0,"height":0,"duration":0.0}
     try:
         ffprobe=shutil.which("ffprobe") or FFMPEG_BIN.replace("ffmpeg","ffprobe")
@@ -171,9 +181,6 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
         else: log_ekle(f"🎚️ Ses/video süre uyumu: fark küçük ({abs(video_sure-ses_sure):.2f}s), hız değişimi yapılmadı.")
     komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu]
     if video_filtresi: komut += ["-filter:v",video_filtresi]
-    # Kaynak FPS'ini yeniden örneklemiyoruz. FFmpeg mevcut zaman damgalarını H.264'e
-    # doğrudan taşır; böylece 30/60 FPS gibi kaynaklar gereksiz yere değişmez ve
-    # önceki best_input assertion hatasına yol açan -r/fps_mode kombinasyonu yoktur.
     komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE,"-shortest",cikti_yolu]
     try:
         r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
