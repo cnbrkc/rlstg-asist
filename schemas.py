@@ -79,6 +79,26 @@ REELS_CREATIVE_SCHEMA = {
         "beyin_firtinasi": {"type": "STRING"},
         "veri_kilitleme": {"type": "STRING"},
         "oz_elestiri": {"type": "STRING"},
+        "anlatim_modu": {"type": "STRING", "description": "SOLO_FEMALE / SOLO_MALE / DUO. İçeriğe göre seç. Varsayılan eğilim DUO'dur; solo yalnızca içerik bunu daha güçlü kılıyorsa seçilir."},
+        "duo_stratejisi": {"type": "OBJECT", "properties": {
+            "uygunluk": {"type": "STRING", "description": "DUO / SOLO_FEMALE / SOLO_MALE"},
+            "hook_speaker": {"type": "STRING", "description": "female / male / none"},
+            "female_agirligi": {"type": "NUMBER", "description": "0-1 arasında yaklaşık yaratıcı ağırlık; matematiksel zorunluluk değildir."},
+            "male_agirligi": {"type": "NUMBER", "description": "0-1 arasında yaklaşık yaratıcı ağırlık; matematiksel zorunluluk değildir."},
+            "interaction_level": {"type": "NUMBER", "description": "0-1. Karakterlerin birbirine doğrudan tepki verme düzeyi."},
+            "humor_level": {"type": "NUMBER", "description": "0-1. İçeriğe uygun mizah düzeyi."},
+            "tension_level": {"type": "NUMBER", "description": "0-1. Hafif fikir ayrılığı/çekişme düzeyi; marka hedefleme değildir."},
+            "selected_detail": {"type": "STRING", "description": "Diyaloğun merkezine alınabilecek en güçlü vurucu detay."},
+            "ending_speaker": {"type": "STRING", "description": "female / male / none"},
+            "rationale": {"type": "STRING"},
+        }, "required": ["uygunluk", "hook_speaker", "female_agirligi", "male_agirligi", "interaction_level", "humor_level", "tension_level", "selected_detail", "ending_speaker", "rationale"]},
+        "konusma_haritasi": {"type": "ARRAY", "description": "Henüz tam cümle yazmadan, konuşmanın ritmini ve görevlerini planlayan segment haritası. Solo modda tek konuşmacı kullanılabilir. Duo modda yalnızca gerçekten değer katan dönüşler eklenir.", "items": {"type": "OBJECT", "properties": {
+            "sira": {"type": "INTEGER"},
+            "speaker": {"type": "STRING", "description": "female / male"},
+            "amac": {"type": "STRING", "description": "hook / fact / reaction / challenge / explanation / counterpoint / transition / punchline / closing"},
+            "detay": {"type": "STRING"},
+            "duygu": {"type": "STRING"}
+        }, "required": ["sira", "speaker", "amac", "detay"]}},
         "hook_families": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
             "kapak_ana": {"type": "STRING"}, "kapak_alt": {"type": "STRING"},
             "ilk_uc_saniye": {"type": "STRING"}, "anlati_yonu": {"type": "STRING"},
@@ -91,7 +111,7 @@ REELS_CREATIVE_SCHEMA = {
         }},
         "seslendirme_metni": {"type": "STRING"},
     },
-    "required": ["hook_families", "secilen_aile_index", "kapak_basliklari", "seslendirme_metni"],
+    "required": ["hook_families", "secilen_aile_index", "kapak_basliklari", "seslendirme_metni", "anlatim_modu", "duo_stratejisi", "konusma_haritasi"],
 }
 
 CAPTION_SCHEMA = {
