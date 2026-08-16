@@ -11,7 +11,7 @@ from media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 REQUEST_TIMEOUT_MS = 60_000
 RETRY_503_MAX = 1
 RETRY_503_DELAY_SECONDS = 2
-RETRY_QUOTA_MAX = 1
+RETRY_QUOTA_MAX = 0
 RETRY_QUOTA_MAX_DELAY_SECONDS = 8
 
 class SmartRouter:
@@ -125,13 +125,13 @@ class SmartRouter:
         model_listesi=model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
         kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
         if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]): kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
-        try:
-            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False)
-        except Exception:
-            if arama_kullan and self._last_request_had_quota:
-                self._clear_cooldowns(model_listesi); kwargs.pop("tools",None)
-                response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle)
-            else: raise
+        response,info=self._make_request(
+            model_listesi,
+            icerik,
+            types.GenerateContentConfig(**kwargs),
+            log_ekle,
+            stop_on_quota=False,
+        )
         return guvenli_json_yukle(getattr(response,"text","")),info
 
     def video_analiz_et(self,video_bytes:bytes,mime_type:str,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=False):

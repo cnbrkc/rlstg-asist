@@ -193,14 +193,13 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
     medya_raporu(ses_yolu,"TTS 1.20x SONRASI",log_ekle)
     video_sure=video_suresini_al(video_yolu); ses_sure=_ses_suresini_al(ses_yolu); video_filtresi=None
     if video_sure>0 and ses_sure>0:
-        oran=video_sure/ses_sure
-        if abs(oran-1.0)>=0.02:
-            uygulanan_oran=max(MIN_VIDEO_YAVASLATMA,min(MAKS_VIDEO_HIZLANDIRMA,oran))
-            if abs(uygulanan_oran-1.0)>=0.005:
-                video_filtresi=f"setpts=PTS/{uygulanan_oran:.6f}"
-                log_ekle(f"🎚️ Ses/video süre uyumu: video {video_sure:.2f}s → ses {ses_sure:.2f}s | görüntü hızı {uygulanan_oran:.2f}x")
-            if abs(oran-uygulanan_oran)>0.01: log_ekle(f"⚠️ Süre farkı {oran:.2f}x sınırın dışında; güvenli {uygulanan_oran:.2f}x sınırı kullanıldı.")
-        else: log_ekle(f"🎚️ Ses/video süre uyumu: fark küçük ({abs(video_sure-ses_sure):.2f}s), hız değişimi yapılmadı.")
+        fark=abs(video_sure-ses_sure)
+        log_ekle(f"🎚️ Ses/video süre uyumu: video {video_sure:.2f}s → ses {ses_sure:.2f}s | video hızı değiştirilmeden ses senkronlanacak.")
+        if fark >= 0.02:
+            if ses_sure < video_sure:
+                log_ekle(f"🎚️ TTS video süresinden {fark:.2f}s kısa; eksik süre sessizlikle doldurulacak.")
+            else:
+                log_ekle(f"🎚️ TTS video süresinden {fark:.2f}s uzun; final ses video süresinde kesilecek.")
 
     kalite_filtresi, _ = _kalite_filtresi_olustur(input_bilgi, log_ekle)
     if kalite_filtresi:
@@ -211,7 +210,7 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
     output_fps = input_bilgi.get("fps") or 30.0
     komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu]
     if video_filtresi: komut += ["-filter:v",video_filtresi]
-    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-r",f"{output_fps:.6f}","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE,"-shortest",cikti_yolu]
+    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-r",f"{output_fps:.6f}","-af","apad","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE] + (["-t",f"{video_sure:.6f}"] if video_sure > 0 else []) + [cikti_yolu]
     try:
         r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
         if r.returncode!=0: log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-800:]}"); return False

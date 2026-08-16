@@ -156,6 +156,42 @@ def _final_text_report(step_status, warnings, errors, result, tone_key):
     return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
 
 
+def _first_verified_fact_for_social(result):
+    facts = result.get("fact_lock") if isinstance(result, dict) else {}
+    facts = facts.get("facts") if isinstance(facts, dict) else []
+    if isinstance(facts, list):
+        for item in facts:
+            if isinstance(item, dict) and str(item.get("status") or "").upper() in {"OBSERVED", "VERIFIED"}:
+                fact = str(item.get("fact") or "").strip()
+                if fact:
+                    return fact
+    return ""
+
+
+def _social_fallbacks(result):
+    result = result if isinstance(result, dict) else {}
+    editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
+    identity = result.get("fact_lock") if isinstance(result.get("fact_lock"), dict) else {}
+    fact = _first_verified_fact_for_social(result)
+    core = str(editorial.get("core_story") or "").strip()
+    discussion = str(editorial.get("discussion_territory") or "").strip()
+    video_state = result.get("pipeline_state", {}).get("video_state", {}) if isinstance(result.get("pipeline_state"), dict) else {}
+    video_identity = video_state.get("video_identity", {}) if isinstance(video_state, dict) else {}
+    model = str(video_identity.get("exact_model") or video_identity.get("brand") or "bu araç").strip()
+    if not model or model.upper() == "UNKNOWN":
+        model = "bu araç"
+    caption = "\n\n".join(x for x in [
+        f"{model}: videonun ötesinde asıl merak edilen taraf burada başlıyor.",
+        core or fact or "Videodaki detayları Fact Lock sınırları içinde değerlendiriyoruz.",
+        fact,
+        "Rakamlar kadar gerçek kullanımın ne söylediği de önemli.",
+    ] if x)[:900].rstrip()
+    threads = discussion or core or fact or f"{model} tarafında asıl tartışma, görünen detayın gerçek kullanımda ne ifade ettiği."
+    threads = threads[:480].rstrip()
+    hashtags = ["otoxtra", "otomobil", "araba", "otomobilhaber", "arabasever"]
+    return caption, hashtags, threads
+
+
 def _caption_with_hashtags(description, hashtags):
     desc = str(description or "").strip()
     tags = " ".join("#" + str(x).lstrip("#").strip() for x in (hashtags or []) if str(x).strip())
@@ -227,12 +263,24 @@ def process(path):
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
     result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "TTS gerçek WAV süresi doğrulandı")
-    caption = result.get("reels_aciklamasi") or ""
+    caption = str(result.get("reels_aciklamasi") or "").strip()
     hashtags = result.get("reels_hashtagleri") or []
-    if not caption.strip():
-        warnings.append("⚠️ Instagram/Facebook açıklaması boş üretildi.")
-    if not hashtags:
-        warnings.append("⚠️ Hashtag listesi boş üretildi.")
+    if not caption.strip() or not hashtags:
+        fallback_caption, fallback_hashtags, fallback_threads = _social_fallbacks(result)
+        if not caption.strip():
+            caption = fallback_caption
+            result["reels_aciklamasi"] = caption
+            warnings.append("⚠️ Caption modeli boş döndü; Fact Lock tabanlı güvenli sosyal fallback kullanıldı.")
+        if not hashtags:
+            hashtags = fallback_hashtags
+            result["reels_hashtagleri"] = hashtags
+            warnings.append("⚠️ Hashtag modeli boş döndü; güvenli varsayılan hashtag seti kullanıldı.")
+    threads = str(result.get("threads_aciklamasi") or "").strip()
+    if not threads:
+        _, _, fallback_threads = _social_fallbacks(result)
+        threads = fallback_threads
+        result["threads_aciklamasi"] = threads
+        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
     video_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
     if caption_truncated:
         warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; hashtagler korunarak sona alındı.")
@@ -241,8 +289,7 @@ def process(path):
     edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
     send_video(final, video_caption)
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
-    threads = result.get("threads_aciklamasi") or ""
-    send_message(threads if threads else "Açıklama üretilemedi.")
+    send_message(threads)
     Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -319,8 +366,12 @@ def process_text(text):
             except Exception:
                 pass
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
-    threads = result.get("threads_aciklamasi") or ""
-    social_bundle = "📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n" + f"{social_caption}\n\n" + f"{threads if threads else 'Açıklama üretilemedi.'}"
+    threads = str(result.get("threads_aciklamasi") or "").strip()
+    if not threads:
+        _, _, fallback_threads = _social_fallbacks(result)
+        threads = fallback_threads
+        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
+    social_bundle = "📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n" + f"{social_caption}\n\n" + threads
     send_message(social_bundle)
     Path("pipeline_result.json").write_text(json.dumps({"mode": "text", "source": "telegram_text", "content_tone": tone_key, "input_text": text, "seslendirme": result.get("seslendirme_metni", ""), "audio": Path(audio).name, "caption": caption, "caption_telegram": social_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
