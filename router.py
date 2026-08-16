@@ -84,8 +84,6 @@ class SmartRouter:
                         son_hata=e; hata_metni=str(e)
                         if ("503" in hata_metni or "unavailable" in hata_metni.lower()) and _503_deneme < 1:
                             _503_deneme += 1
-                            # Transient retry is informational; it must not be
-                            # counted as a pipeline error when the retry succeeds.
                             log_ekle(f"⏳ {mail}+{model_adi}: geçici 503, 5s sonra tekrar deneniyor (1/1)")
                             time.sleep(5)
                             continue
@@ -118,6 +116,16 @@ class SmartRouter:
 
     def _tts_performans_promptu_olustur(self,metin:str,ses_adi:str)->str:
         return f"Speak naturally in Turkish as a professional automotive presenter. Voice: {ses_adi}. Keep the transcript exactly as provided. Add no extra words.\n\nTRANSCRIPT:\n{metin}"
+
+    def _tts_coklu_promptu_olustur(self,metin:str,speaker_names)->str:
+        names = ", ".join(speaker_names)
+        return (
+            f"Perform the following Turkish automotive dialogue naturally as a continuous conversation between {names}. "
+            "Use the configured voice for each named speaker. Keep every spoken word exactly as provided; add no words, omit no words, "
+            "and do not read speaker labels aloud. Preserve the order and conversational timing.\n\n"
+            f"TRANSCRIPT:\n{metin}"
+        )
+
     def _tts_response_audio_bytes(self,response):
         try:
             for cand in getattr(response,"candidates",[]) or []:
@@ -126,6 +134,7 @@ class SmartRouter:
                     if data: return data
         except Exception: pass
         raise ValueError("TTS yanıtında audio bulunamadı")
+
     def ses_uret(self,metin:str,ses_adi:str,cikti_dosyasi:str,log_ekle,hiz_carpani:float=1.0)->Tuple[bool,Optional[str]]:
         config=types.GenerateContentConfig(response_modalities=["AUDIO"],speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=ses_adi))))
         try:
@@ -137,3 +146,44 @@ class SmartRouter:
             return (ok,info if ok else None)
         except Exception as e:
             log_ekle(f"❌ TTS başarısız: {str(e)[:200]}"); return False,None
+
+    def coklu_ses_uret(self,metin:str,speaker_voices:List[Tuple[str,str]],cikti_dosyasi:str,log_ekle,hiz_carpani:float=1.0)->Tuple[bool,Optional[str]]:
+        """Generate a complete two-speaker dialogue in ONE Gemini TTS request.
+
+        The transcript contains speaker labels matching the multi-speaker config;
+        Gemini returns one continuous audio stream, so no per-segment WAV stitching
+        is required. Speed adjustment is applied once to the complete WAV.
+        """
+        if not metin or not speaker_voices or len(speaker_voices) > 2:
+            return False,None
+        try:
+            configs=[]; names=[]
+            for speaker,voice in speaker_voices:
+                speaker=str(speaker).strip(); voice=str(voice).strip()
+                if not speaker or not voice: return False,None
+                names.append(speaker)
+                configs.append(types.SpeakerVoiceConfig(
+                    speaker=speaker,
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+                    )
+                ))
+            speech_config=types.MultiSpeakerVoiceConfig(speaker_voice_configs=configs)
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=speech_config,
+            )
+            prompt=self._tts_coklu_promptu_olustur(metin,names)
+            response,info=self._make_request(SES_MODELLERI,prompt,config,log_ekle,son_fallback=False)
+            audio=self._tts_response_audio_bytes(response)
+            if abs(hiz_carpani-1.0)<.001:
+                wav_yaz(cikti_dosyasi,audio)
+                return True,info
+            raw=gecici_dosya_yolu("ses_ham","wav")
+            wav_yaz(raw,audio)
+            ok=sesi_hizlandir(raw,cikti_dosyasi,hiz_carpani,log_ekle)
+            temp_dosya_temizle(raw)
+            return (ok,info if ok else None)
+        except Exception as e:
+            log_ekle(f"❌ Çoklu TTS başarısız: {str(e)[:220]}")
+            return False,None
