@@ -23,7 +23,7 @@ def _otorite_talimati():
         "değiştirilmiş hâlini taşıma. Kullanıcı bilgisi sonraki tüm aşamalarda "
         "aynen korunmalıdır.\n\n"
         "--- KULLANICI VİDEO ANALİZ NOTU ---\n"
-        f"{_AKTİF_VIDEO_ANALIZ_NOTU.strip()}\n"
+        f"{_AKTIF_VIDEO_ANALIZ_NOTU.strip()}\n"
         "--- KULLANICI VİDEO ANALİZ NOTU SONU ---\n"
     )
 
@@ -73,8 +73,6 @@ def reels_creative_promptunu_olustur(sure_saniye,icerik_tonu,kelime_hizi_orani=N
         "{bilgi_orani}":bilgi_orani,
     }
     for eski,yeni in replacements.items(): template=template.replace(eski,yeni)
-    # Modelin promptun sonundaki ek parametreleri "örnek" sanmasını önlemek için
-    # açık bir runtime kilidi veriyoruz.
     runtime=(
         f"\n\nRUNTIME KİLİDİ — BU ÜRETİM İÇİN: Hedef süre {sure_saniye} sn; hedef {hedef} kelime; "
         f"izin verilen aralık {minimum}-{maksimum} kelime; içerik tonu {ton}. "
@@ -95,7 +93,7 @@ def durumu_metne_donustur(baslik,deger):
     if _AKTIF_VIDEO_ANALIZ_NOTU.strip() and baslik != "KULLANICI VIDEO ANALİZ NOTU":
         parca += (
             "\n\n### KULLANICI VIDEO ANALİZ NOTU — MUTLAK ÖNCELİKLİ KAYNAK\n"
-            f"{_AKTIF_VIDEO_ANALİZ_NOTU.strip()}\n"
+            f"{_AKTIF_VIDEO_ANALIZ_NOTU.strip()}\n"
             "Bu not kullanıcı tarafından verilmiştir. Marka/model/variant ve diğer "
             "kesin kullanıcı bilgileri görsel çıkarımlardan önce gelir. Sonraki "
             "aşamalarda bu bilgiler değiştirilemez, başka modele dönüştürülemez "
