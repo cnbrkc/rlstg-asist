@@ -62,6 +62,8 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
         min_words = min_words if min_words is not None else max(5, round(target_words * 0.90))
         max_words = max_words if max_words is not None else max(min_words, round(target_words * 1.10))
 
+    content_tone = str(plan.get("content_tone") or plan.get("icerik_tonu") or "dengeli").strip().lower() or "dengeli"
+
     return {
         "mode": mode,
         "speakers": speakers,
@@ -73,6 +75,7 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
         "humor_level": float(plan.get("humor_level", 0.3) or 0.3),
         "tension_level": float(plan.get("tension_level", 0.2) or 0.2),
         "selected_detail": str(plan.get("selected_detail", "")).strip(),
+        "content_tone": content_tone,
         "target_words": target_words,
         "min_words": min_words,
         "max_words": max_words,
@@ -86,6 +89,7 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
             "Marka/üretici hedefleme, hakaret veya düşmanca ifade üretme.",
             "Her replik videoya veya otomobil tartışmasına yeni bir değer katmalı.",
             "Seslendirme süresini korumak için hedef kelime aralığı verildiyse bunun dışına çıkma.",
+            "İçerik tonunu değiştirme; seçilen ton yalnızca bilgi/yorum dengesini ve anlatım sertliğini yönetsin.",
         ],
     }
 
@@ -98,6 +102,10 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
             f"\nKELİME/SÜRE KİLİDİ: Toplam script {contract['min_words']}-{contract['max_words']} kelime arasında olmalı "
             f"(hedef {contract.get('target_words')}). Bu sınırı aşma. Teknik bilgi yığma; en güçlü detayları seç.\n"
         )
+    tone_rule = (
+        f"\nİÇERİK TONU KİLİDİ: {contract.get('content_tone', 'dengeli')}. "
+        "Bu runtime değerini başka bir varsayılan tonla ezme. Bilgi/yorum dengesi ve anlatım sertliği seçilen tona uygun kalmalı.\n"
+    )
     if regeneration_instruction and regeneration_instruction.strip():
         length_rule += f"\n🚨 YENİDEN ÜRETİM TALİMATI:\n{regeneration_instruction.strip()}\n"
 
@@ -108,6 +116,7 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
         "İki kişi sırf konuşsun diye gereksiz replik eklenmeyecek.\n"
         "KONUŞMA HARİTASINDAKİ HER GEÇERLİ SEGMENT İÇİN BİR REPLİK ÜRET; "
         "haritayı gereksiz yere boş bırakma. Speaker yalnızca sözleşmede izin verilen değerlerden biri olmalı.\n"
+        f"{tone_rule}"
         f"{length_rule}\n"
         f"SÖZLEŞME:\n{contract}\n\n"
         f"EDITORIAL CONTEXT:\n{editorial_context}\n\n"
