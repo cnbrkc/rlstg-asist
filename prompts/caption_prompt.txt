@@ -6,17 +6,20 @@ GİRDİ: Seçilen Reels Creative çıktısı (seslendirme metni, seçilen hook/k
 
 TEMEL İLKE — ÇOK ÖNEMLİ:
 
-Caption, SESİ YAZIYA ÇEVİRMEK DEĞİLDİR. Video/seslendirme bir şeyi anlatıyorsa caption onu TEKRAR ETMEZ; videoda anlatılmayan EKSTRA DEĞER sağlar: fiyat, teknik detay, Türkiye durumu, rakip, arka plan, kullanım maliyeti, az bilinen özellik gibi.
-
-Örnek:
-Seslendirme: "Bu model 3.0 litre motoruyla…"
-Caption: "Bu versiyonun asıl farkı sadece motor değil…"
+Caption, SESİ YAZIYA ÇEVİRMEK DEĞİLDİR. Video/seslendirme bir şeyi anlatıyorsa caption onu TEKRAR ETMEZ; videoda anlatılmayan EKSTRA DEĞER sağlar: fiyat, teknik detay, Türkiye durumu, rakip, arka plan, kullanım maliyeti, az bilinen özellik gibi tamamlama mantığıyla ilerler.
 
 Caption'da SADECE Fact Lock'ta OBSERVED veya VERIFIED durumundaki bilgileri kullan. Fact Lock dışında bilgi EKLEME. UNKNOWN olan hiçbir bilgiyi kesin gerçek gibi yazma.
 
 KULLANICI NOTU ÖNCELİĞİ: Fact Lock / Editorial Brief içinde kullanıcı tarafından verilmiş ve authoritative olarak taşınan bir bilgi varsa onu değiştirme, zayıflatma veya video analizinin tahminiyle geçersiz kılma. Özellikle marka/model/variant bilgisi kullanıcı notundan kesin olarak geliyorsa aynen kullan.
 
 HASHTAGLER reels_aciklamasi METNİNE YAZILMAZ; ayrı array olarak döndürülür.
+
+FACT LOCK UYGULAMA KİLİDİ — ÇOK ÖNEMLİ:
+- "Fact Lock'ta var mı?" kontrolü yapmadan hiçbir yeni olgusal iddia ekleme.
+- OBSERVED/VERIFIED bir bilgi başka bir sonucu mantıken ima ediyor gibi görünse bile o sonucu otomatik olarak gerçek kabul etme. Örneğin bir aracın motor gücünden "süper spor", donanımdan "premium", vergi bilgisinden "ÖTV avantajlı", kullanımından "her gün konforlu" gibi sonuçlar çıkarma; bunlar Fact Lock'ta açıkça desteklenmiyorsa yazma.
+- Fiyat, vergi/ÖTV, yakıt tüketimi, menzil, performans, donanım seviyesi, segment, kullanım avantajı, hukuki/vergisel durum ve karşılaştırma iddialarında özellikle muhafazakâr ol.
+- Değerlendirme veya yorum yapabilirsin; ancak yorumu olgu gibi sunma. "Bence", "bana göre", "kağıt üzerinde" gibi ifadeler yalnızca desteklenen gerçeklerden türetilen açık görüşlerde kullanılabilir; yeni bir gerçek icat etmek için kullanılamaz.
+- Caption'ı daha vurucu yapmak için desteklenmeyen sıfat, avantaj, sonuç veya Türkiye'ye özgü ekonomik iddia eklemek YASAK.
 
 ⸻
 
@@ -79,6 +82,7 @@ FACT LOCK / GERÇEKLİK:
 - OBSERVED / VERIFIED bilgileri kullan.
 - Kullanıcı tarafından authoritative olarak verilen marka/model/variant notunu video görselinin tahminiyle değiştirme.
 - Caption, videodaki seslendirmeyi birebir tekrar etmesin; ekstra değer sağlamaya devam etsin.
+- Desteklenmeyen ekonomik, vergisel, hukuki, performans veya kullanım avantajlarını "caption daha vurucu olsun" diye ekleme.
 
 ⸻
 
