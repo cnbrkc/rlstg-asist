@@ -22,7 +22,9 @@ METIN_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flas
 ARAMA_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 SES_MODELLERI = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 
-COOLDOWN_SUNUCU = 15 * 60
+# 503 is a transient server condition. A 15-minute combo ban made a single
+# pipeline unnecessarily wait behind stale cooldowns. Keep failover fast.
+COOLDOWN_SUNUCU = 30
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
 COOLDOWN_DIGER = 5 * 60
 COOLDOWN_FREE_TIER_YOK = 7 * 24 * 60 * 60
@@ -49,8 +51,6 @@ SES_ORNEK_HIZI = 24000
 SES_KANAL = 1
 SES_GENISLIK = 2
 HEDEF_2K_Y = 1440
-# CRF 28 + ultrafast gereksiz kalite kaybı yaratıyordu. CRF 20 + veryfast,
-# Reels için yüksek kaliteyi korurken render süresini makul tutan dengedir.
 VIDEO_CRF = 20
 VIDEO_PRESET = "veryfast"
 SES_SECENEKLERI = ["Autonoe (Parlak - Kadın)", "Puck (Enerjik - Erkek)", "Aoede (Yumuşak - Kadın)", "Callirrhoe (Doğal - Kadın)", "Kore (Net - Kadın)", "Leda (Dinamik - Kadın)", "Zephyr (Parlak - Kadın)", "Charon (Bilgi - Erkek)", "Orus (Sert - Erkek)", "Iapetus (Akıcı - Erkek)", "Umbriel (Rahat - Erkek)"]
