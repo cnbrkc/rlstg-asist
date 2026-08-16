@@ -6,40 +6,14 @@ on:
       - '.github/workflows/stage4-tts-fix.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply exact TTS gate patch
+      - name: Check pipeline syntax
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('pipeline.py')
-          s = p.read_text(encoding='utf-8')
-
-          old1 = '''        temp_dosya_temizle(ses_dosyasi)\n        if deneme < VOICE_REGEN_MAX:\n            ek_talimat=(\n                f'TTS önceki metni {ses_suresi:.2f} saniye üretti; hedef video {sure_saniye:.2f} saniye. '\n                'Metni yeniden yaz ve konuşma süresini belirgin biçimde kısalt. '\n                f'Hedef kelime sayısı yaklaşık {hedef}, kesin aralık {minimum}-{maksimum}. '\n                'Bilgi yağdırma; yalnızca en güçlü gerçekleri bırak, yorum ve doğal akış için alan bırak.'\n            )\n            log(f'⚠️ TTS video süresine sığmadı; metin yeniden üretiliyor ({deneme+1}/{VOICE_REGEN_MAX}).')\n            continue\n\n        log('❌ TTS süresi güvenli aralığa girmedi; yarım/uygunsuz video üretmemek için render durduruldu.')\n        return reels_state,model_reels,duo_plan,duo_script,False,None,mod,'''''
-
-          new1 = '''        if deneme < VOICE_REGEN_MAX:\n            temp_dosya_temizle(ses_dosyasi)\n            ek_talimat=(\n                f'TTS önceki metni {ses_suresi:.2f} saniye üretti; hedef video {sure_saniye:.2f} saniye. '\n                'Metni yeniden yaz ve konuşma süresini belirgin biçimde kısalt. '\n                f'Hedef kelime sayısı yaklaşık {hedef}, kesin aralık {minimum}-{maksimum}. '\n                'Bilgi yağdırma; yalnızca en güçlü gerçekleri bırak, yorum ve doğal akış için alan bırak.'\n            )\n            log(f'⚠️ TTS video süresine sığmadı; metin yeniden üretiliyor ({deneme+1}/{VOICE_REGEN_MAX}).')\n            continue\n\n        log('⚠️ TTS süresi ideal aralığa girmedi; ancak geçerli WAV mevcut. Mevcut ses FFmpeg senkronunda kullanılacak; yeni TTS çağrısı yapılmayacak.')\n        return reels_state,model_reels,duo_plan,duo_script,True,info,mod,ses_dosyasi'''
-
-          old2 = '''            if recovery_uyumlu:\n                ses_dosyasi=recovery_path\n                kullanilan_ses_modeli=recovery_info\n                ses_modu=recovery_mode\n                state['ses_modu']=ses_modu\n                log_ekle(f'✅ TTS recovery başarılı: {ses_modu} → {_ses_modu_sesi(ses_modu)}')\n            else:\n                temp_dosya_temizle(recovery_path)\n                ses_basarili=False\n                ses_dosyasi=''\n                log_ekle('❌ Recovery TTS gerçek süre aralığına girmedi; render durduruldu.')'''
-
-          new2 = '''            if recovery_sure > 0:\n                ses_dosyasi=recovery_path\n                kullanilan_ses_modeli=recovery_info\n                ses_modu=recovery_mode\n                state['ses_modu']=ses_modu\n                if recovery_uyumlu:\n                    log_ekle(f'✅ TTS recovery başarılı ve süre aralığında: {ses_modu} → {_ses_modu_sesi(ses_modu)}')\n                else:\n                    log_ekle(f'⚠️ TTS recovery dosyası geçerli ancak oran {recovery_oran:.2f}x; mevcut ses FFmpeg senkronunda kullanılacak, yeni TTS çağrısı yapılmayacak.')\n            else:\n                temp_dosya_temizle(recovery_path)\n                ses_basarili=False\n                ses_dosyasi=''\n                log_ekle('❌ TTS recovery geçerli bir WAV üretemedi; render durduruldu.')'''
-
-          if old1 not in s:
-              raise SystemExit('PATCH_GUARD_1_FAILED: expected TTS final-gate block not found; no changes made')
-          if old2 not in s:
-              raise SystemExit('PATCH_GUARD_2_FAILED: expected recovery gate block not found; no changes made')
-          s = s.replace(old1, new1, 1).replace(old2, new2, 1)
-          compile(s, 'pipeline.py', 'exec')
-          p.write_text(s, encoding='utf-8')
-          PY
-      - name: Commit exact patch
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add pipeline.py
-          git commit -m 'fix: preserve valid TTS WAV for render' || exit 0
-          git push
+          python -m py_compile pipeline.py
+          echo 'PIPELINE_COMPILE_OK'
