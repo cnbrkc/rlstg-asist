@@ -147,6 +147,7 @@ jobs:
         run: python telegram_pipeline_guard.py
 
       - name: Publish social outputs explicitly
+        if: ${{ inputs.telegram_file_id != '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
