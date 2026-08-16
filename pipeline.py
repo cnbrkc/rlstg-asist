@@ -21,7 +21,31 @@ TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
 VOICE_REGEN_MAX = 2
 VOICE_DURATION_MIN_RATIO = 0.85
 VOICE_DURATION_MAX_RATIO = 1.15
-MAX_QA_REGEN = 2
+MAX_QA_REGEN = 1
+
+QA_REGEN_TARGETS = {
+    "VOICEOVER_FAIL",
+    "COVER_FAIL",
+    "DUO_SCRIPT_FAIL",
+    "CAPTION_FAIL",
+    "THREADS_FAIL",
+}
+
+def _qa_regeneration_targets(qa_state):
+    if not isinstance(qa_state, dict):
+        return []
+    raw = qa_state.get("regeneration_targets") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(x).strip().upper() for x in raw if str(x).strip().upper() in QA_REGEN_TARGETS]
+
+def _qa_is_clean_pass(qa_state):
+    if not isinstance(qa_state, dict):
+        return False
+    overall = str(qa_state.get("overall") or qa_state.get("status") or "").strip().upper()
+    return overall == "PASS" and not _qa_regeneration_targets(qa_state)
 
 
 def _json_object_or_none(value):
@@ -323,12 +347,29 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
     for qa_round in range(MAX_QA_REGEN+1):
         qa_rounds=qa_round
         qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan,duo_script)
-        targets=[str(x).strip().upper() for x in (qa_state.get('regeneration_targets') or []) if str(x).strip()]
-        overall=str(qa_state.get('overall') or '').strip().upper()
-        if overall=='PASS' and not targets:
+        if not isinstance(qa_state, dict):
+            qa_state = _object_state_or_empty(qa_state)
+
+        targets_raw = qa_state.get('regeneration_targets') or []
+        if isinstance(targets_raw, str):
+            targets_raw = [targets_raw]
+        if not isinstance(targets_raw, list):
+            targets_raw = []
+        targets=[str(x).strip().upper() for x in targets_raw if str(x).strip()]
+        supported_targets=[x for x in targets if x in QA_REGEN_TARGETS]
+        overall=str(qa_state.get('overall') or qa_state.get('status') or '').strip().upper()
+
+        if overall=='PASS' and not supported_targets:
             return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,model_caption,model_threads,True
 
-        log(f'🔍 QA sonucu: {overall or "UNKNOWN"} | regeneration_targets={targets}')
+        unknown_targets=[x for x in targets if x not in QA_REGEN_TARGETS]
+        if unknown_targets:
+            log(f'⚠️ QA bilinmeyen regeneration target döndürdü: {unknown_targets}')
+        if not supported_targets:
+            log(f'❌ QA sonucu aksiyon alınabilir regeneration hedefi üretmedi: {overall or "UNKNOWN"}; aynı QA isteği tekrar gönderilmeyecek.')
+            break
+
+        log(f'🔍 QA sonucu: {overall or "UNKNOWN"} | regeneration_targets={supported_targets}')
         if qa_round >= MAX_QA_REGEN:
             log(f'❌ QA regeneration limiti doldu ({MAX_QA_REGEN}); final render engellendi.')
             break
@@ -336,12 +377,13 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
             log('❌ QA FACT_FAIL verdi; Fact Lock bu loop tarafından yeniden yazılmayacak. Final render engellendi.')
             break
 
-        target_set=set(targets)
+        target_set=set(supported_targets)
         creative_needed=bool(target_set & {'VOICEOVER_FAIL','COVER_FAIL'})
         duo_needed='DUO_SCRIPT_FAIL' in target_set and not creative_needed
-        downstream_caption=bool(target_set & {'VOICEOVER_FAIL','COVER_FAIL','DUO_SCRIPT_FAIL','CAPTION_FAIL'})
-        downstream_threads=bool(target_set & {'VOICEOVER_FAIL','COVER_FAIL','DUO_SCRIPT_FAIL','THREADS_FAIL'})
-        instruction='QA regeneration: ' + ', '.join(targets) + '. Fact Lock ve kullanıcı notu aynen korunacak. '
+        downstream_caption=bool(target_set & {'VOICEOVER_FAIL','COVER_FAIL','CAPTION_FAIL'})
+        downstream_threads='THREADS_FAIL' in target_set
+        instruction='QA regeneration: ' + ', '.join(supported_targets) + '. Fact Lock ve kullanıcı notu aynen korunacak. '
+
         if creative_needed:
             instruction += 'Reels Creative, seçilen içerik tonunu ve gerçek modu koruyarak yalnızca gerekli yaratıcı katmanı düzelt. '
             if 'COVER_FAIL' in target_set: instruction += 'Kapak/hook uyumunu düzelt. '
@@ -368,7 +410,6 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
             threads_state = _threads_state_normalize(threads_state)
 
     return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,model_caption,model_threads,False
-
 
 def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz_notlari,metin_uretim_notlari,sure_saniye,icerik_tonu,secilen_ses_ingilizce,log_ekle,ilerlemeyi_guncelle=None):
     state={}
