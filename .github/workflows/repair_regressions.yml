@@ -6,7 +6,7 @@ permissions:
   contents: write
 jobs:
   repair:
-    if: ${{ github.event.head_commit.message != 'fix: repair caption threads quota and tts state regressions' }}
+    if: "${{ github.event.head_commit.message != 'fix: repair caption threads quota and tts state regressions' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,30 +14,19 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           p=Path('router.py'); s=p.read_text(encoding='utf-8')
           old='''            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=arama_kullan)'''
           new='''            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False)'''
-          assert s.count(old)==1, 'router quota call site not uniquely found'
-          s=s.replace(old,new)
-          p.write_text(s,encoding='utf-8')
-
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new),encoding='utf-8')
           p=Path('pipeline.py'); s=p.read_text(encoding='utf-8')
-          old='''import json\nimport os, re'''
-          new='''import json\nimport os, re\nimport shutil'''
-          assert s.count(old)==1, 'pipeline import block not found'
-          s=s.replace(old,new)
-
+          old='''import json\nimport os, re'''; new='''import json\nimport os, re\nimport shutil'''; assert s.count(old)==1; s=s.replace(old,new)
           old='''    caption_state = _caption_state_normalize(caption_state)\n    try: threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)\n    except Exception as e:\n        log(f'⚠️ Threads üretilemedi: {str(e)[:150]}'); threads_state,model_threads={"threads_aciklamasi":""},'hata'\n    threads_state = _threads_state_normalize(threads_state)\n'''
           new='''    caption_state = _caption_state_normalize(caption_state)\n    if not str(caption_state.get("reels_aciklamasi") or "").strip():\n        log("⚠️ Caption boş döndü; yalnızca bir kez kontrollü Caption regeneration yapılacak.")\n        try:\n            caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)\n        except Exception as e:\n            log(f'⚠️ Caption kontrollü regeneration başarısız: {str(e)[:150]}')\n        caption_state = _caption_state_normalize(caption_state)\n    try: threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)\n    except Exception as e:\n        log(f'⚠️ Threads üretilemedi: {str(e)[:150]}'); threads_state,model_threads={"threads_aciklamasi":""},'hata'\n    threads_state = _threads_state_normalize(threads_state)\n    if not str(threads_state.get("threads_aciklamasi") or "").strip():\n        log("⚠️ Threads boş döndü; yalnızca bir kez kontrollü Threads regeneration yapılacak.")\n        try:\n            threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)\n        except Exception as e:\n            log(f'⚠️ Threads kontrollü regeneration başarısız: {str(e)[:150]}')\n        threads_state = _threads_state_normalize(threads_state)\n'''
-          assert s.count(old)==1, 'pipeline social block not uniquely found'
-          s=s.replace(old,new)
-
+          assert s.count(old)==1; s=s.replace(old,new)
           old='''    state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass\n    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi\n'''
           new='''    state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass\n    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi):\n        stable_tts = gecici_dosya_yolu('pipeline_tts_stable','wav')\n        try:\n            shutil.copy2(ses_dosyasi, stable_tts)\n            ses_dosyasi = stable_tts\n            state['ses_dosyasi_son']=ses_dosyasi\n            log_ekle('🔒 TTS dosyası pipeline sonuna kadar korunmak üzere sabitlendi.')\n        except Exception as exc:\n            log_ekle(f'⚠️ TTS sabitleme başarısız; mevcut dosya kullanılmaya devam edilecek: {str(exc)[:150]}')\n'''
-          assert s.count(old)==1, 'pipeline TTS state block not uniquely found'
-          s=s.replace(old,new)
-          p.write_text(s,encoding='utf-8')
+          assert s.count(old)==1; s=s.replace(old,new); p.write_text(s,encoding='utf-8')
           PY
           python -m py_compile router.py pipeline.py
       - name: Commit and push
