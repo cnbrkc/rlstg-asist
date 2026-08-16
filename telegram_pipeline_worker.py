@@ -116,7 +116,7 @@ def _final_report(step_status, warnings, errors, result, tone_key):
         f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
         f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
         "⚡ TTS hız: 1.20x",
-        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2",
+        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1",
         f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}",
         f"🎚️ Senkron: {result.get('sync_note') or 'TTS gerçek WAV süresi doğrulandı'}",
     ]
@@ -148,7 +148,7 @@ def _final_text_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
     for i, name in enumerate(TEXT_PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/8 {name}")
-    lines += ["", f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}", f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}", f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or 'Bilinmiyor'}", "⚡ TTS hız: 1.20x", f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2", f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
+    lines += ["", f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}", f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}", f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or 'Bilinmiyor'}", "⚡ TTS hız: 1.20x", f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1", f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
     if warnings:
         lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:6]]
     if errors:
@@ -199,10 +199,14 @@ def process(path):
             warnings.append(text)
 
     def progress(n, total, msg):
-        step_status[n - 1] = "🟢"
+        # pipeline.py çağrıyı aşama başlamadan hemen önce yapıyor.
+        # Bu nedenle n mevcut aşamadır; n-1 aşama tamamlanmıştır.
+        done = max(0, min(n - 1, len(PIPELINE_STEPS)))
+        if done > 0:
+            step_status[done - 1] = "🟢"
         current = PIPELINE_STEPS[n - 1] if 0 < n <= len(PIPELINE_STEPS) else str(msg)
         try:
-            edit_message(loading_id, _loading_text(n - 1, f"Tamamlandı → {current}", len(warnings), len(errors)))
+            edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors)))
         except Exception as exc:
             print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
 
@@ -264,10 +268,14 @@ def process_text(text):
             errors.append(text_msg)
 
     def progress(n, total, msg):
-        step_status[n - 1] = "🟢"
+        # pipeline.py çağrıyı aşama başlamadan hemen önce yapıyor.
+        # Bu nedenle n mevcut aşamadır; n-1 aşama tamamlanmıştır.
+        done = max(0, min(n - 1, len(TEXT_PIPELINE_STEPS)))
+        if done > 0:
+            step_status[done - 1] = "🟢"
         current = TEXT_PIPELINE_STEPS[n - 1] if 0 < n <= len(TEXT_PIPELINE_STEPS) else str(msg)
         try:
-            edit_message(loading_id, _loading_text(n - 1, f"Tamamlandı → {current}", len(warnings), len(errors), steps=TEXT_PIPELINE_STEPS))
+            edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors), steps=TEXT_PIPELINE_STEPS))
         except Exception as exc:
             print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
 
