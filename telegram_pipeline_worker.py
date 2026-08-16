@@ -16,13 +16,13 @@ BASE = f"https://api.telegram.org/bot{TOKEN}"
 
 PIPELINE_STEPS = [
     "🎥 Forensic video analizi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
-    "🎙️ Reels Creative", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA kalite kontrol",
-    "🎧 Autonoe TTS", "🎬 FFmpeg video render",
+    "🎙️ Reels Creative + gerçek voice mode", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA + kontrollü regeneration",
+    "🎧 TTS + gerçek süre doğrulaması", "🎬 FFmpeg video render",
 ]
 TEXT_PIPELINE_STEPS = [
     "📝 Metin girdisi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
-    "🎙️ Reels Creative", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA kalite kontrol",
-    "🎧 Autonoe TTS",
+    "🎙️ Reels Creative + gerçek voice mode", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA + kontrollü regeneration",
+    "🎧 TTS + gerçek süre doğrulaması",
 ]
 TON_MAP = {"eglence": TON_EGLENCE, "dengeli": TON_DENGELI, "bilgi": TON_BILGI, "teknik": TON_TEKNIK}
 TON_LABELS = {"eglence": "🎭 Eğlence Ağırlıklı", "dengeli": "⚖️ Dengeli", "bilgi": "🧠 Bilgi Ağırlıklı", "teknik": "📊 Teknik / Detaylı"}
@@ -108,7 +108,23 @@ def _final_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 PIPELINE RAPORU", ""]
     for i, name in enumerate(PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/9 {name}")
-    lines += ["", f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}", f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}", "⚡ TTS hız: 1.20x", f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}"]
+    input_media = result.get("input_media") or {}
+    output_media = result.get("output_media") or {}
+    lines += [
+        "",
+        f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}",
+        f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
+        f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
+        "⚡ TTS hız: 1.20x",
+        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2",
+        f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}",
+        f"🎚️ Senkron: {result.get('sync_note') or 'TTS gerçek WAV süresi doğrulandı'}",
+    ]
+    if input_media:
+        lines.append(f"📥 Input: {input_media.get('width','?')}x{input_media.get('height','?')} | {input_media.get('fps',0):.3f} FPS | {input_media.get('duration',0):.2f}s")
+    if output_media:
+        lines.append(f"📤 Output: {output_media.get('width','?')}x{output_media.get('height','?')} | {output_media.get('fps',0):.3f} FPS | {output_media.get('duration',0):.2f}s")
+    lines += [f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}"]
     media_lines = _extract_media_lines(warnings)
     if media_lines:
         lines += ["", "🎥 MEDYA TEŞHİSİ"] + media_lines
@@ -132,7 +148,7 @@ def _final_text_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
     for i, name in enumerate(TEXT_PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/8 {name}")
-    lines += ["", f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}", f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}", "⚡ TTS hız: 1.20x", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
+    lines += ["", f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}", f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}", f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or 'Bilinmiyor'}", "⚡ TTS hız: 1.20x", f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2", f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
     if warnings:
         lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:6]]
     if errors:
@@ -206,7 +222,7 @@ def process(path):
         edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
-    result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "Süre kontrolü yapıldı")
+    result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "TTS gerçek WAV süresi doğrulandı")
     caption = result.get("reels_aciklamasi") or ""
     hashtags = result.get("reels_hashtagleri") or []
     if not caption.strip():
@@ -223,7 +239,7 @@ def process(path):
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
     threads = result.get("threads_aciklamasi") or ""
     send_message(threads if threads else "Açıklama üretilemedi.")
-    Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def process_text(text):
@@ -267,9 +283,9 @@ def process_text(text):
 
     audio = result.get("ses_dosyasi")
     if not result.get("ses_basarili") or not audio or not Path(audio).exists():
-        errors.append("Text-only pipeline tamamlandı ancak Autonoe ses dosyası üretilemedi.")
+        errors.append("Text-only pipeline tamamlandı ancak QA PASS sonrası kullanılabilir TTS dosyası üretilemedi.")
         edit_message(loading_id, _final_text_report(step_status, warnings, errors, result, tone_key))
-        raise RuntimeError("Text-only pipeline tamamlandı ancak Autonoe ses dosyası üretilemedi.")
+        raise RuntimeError("Text-only pipeline tamamlandı ancak kullanılabilir TTS dosyası üretilemedi.")
 
     caption = result.get("reels_aciklamasi") or ""
     hashtags = result.get("reels_hashtagleri") or []
@@ -287,7 +303,7 @@ def process_text(text):
 
     telegram_audio, cleanup_audio = _telegram_audio_path(audio)
     try:
-        send_audio(telegram_audio, "🎧 Autonoe TTS — 1.20x")
+        send_audio(telegram_audio, f"🎧 {result.get('ses_modu_sesi') or result.get('ses_modu') or 'TTS'} — 1.20x")
     finally:
         if cleanup_audio:
             try:
@@ -298,7 +314,7 @@ def process_text(text):
     threads = result.get("threads_aciklamasi") or ""
     social_bundle = "📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n" + f"{social_caption}\n\n" + f"{threads if threads else 'Açıklama üretilemedi.'}"
     send_message(social_bundle)
-    Path("pipeline_result.json").write_text(json.dumps({"mode": "text", "source": "telegram_text", "content_tone": tone_key, "input_text": text, "seslendirme": result.get("seslendirme_metni", ""), "audio": Path(audio).name, "caption": caption, "caption_telegram": social_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path("pipeline_result.json").write_text(json.dumps({"mode": "text", "source": "telegram_text", "content_tone": tone_key, "input_text": text, "seslendirme": result.get("seslendirme_metni", ""), "audio": Path(audio).name, "caption": caption, "caption_telegram": social_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
