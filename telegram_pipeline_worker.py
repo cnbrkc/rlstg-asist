@@ -1,3 +1,182 @@
+import json
+import mimetypes
+import os
+import subprocess
+from pathlib import Path
+
+import requests
+
+from config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
+from pipeline import pipeline_calistir, metin_pipeline_calistir
+from router import SmartRouter
+
+TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+BASE = f"https://api.telegram.org/bot{TOKEN}"
+
+PIPELINE_STEPS = [
+    "🎥 Forensic video analizi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
+    "🎙️ Reels Creative", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA kalite kontrol",
+    "🎧 Autonoe TTS", "🎬 FFmpeg video render",
+]
+TEXT_PIPELINE_STEPS = [
+    "📝 Metin girdisi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
+    "🎙️ Reels Creative", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA kalite kontrol",
+    "🎧 Autonoe TTS",
+]
+TON_MAP = {"eglence": TON_EGLENCE, "dengeli": TON_DENGELI, "bilgi": TON_BILGI, "teknik": TON_TEKNIK}
+TON_LABELS = {"eglence": "🎭 Eğlence Ağırlıklı", "dengeli": "⚖️ Dengeli", "bilgi": "🧠 Bilgi Ağırlıklı", "teknik": "📊 Teknik / Detaylı"}
+TELEGRAM_TEXT_LIMIT = 4096
+TELEGRAM_VIDEO_CAPTION_LIMIT = 1024
+TELEGRAM_AUDIO_CAPTION_LIMIT = 1024
+
+
+def send_message(text):
+    r = requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+
+def edit_message(message_id, text):
+    r = requests.post(f"{BASE}/editMessageText", data={"chat_id": CHAT_ID, "message_id": message_id, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
+    r.raise_for_status()
+
+
+def send_video(path, caption):
+    with open(path, "rb") as fh:
+        r = requests.post(f"{BASE}/sendVideo", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
+    r.raise_for_status()
+
+
+def send_audio(path, caption=""):
+    with open(path, "rb") as fh:
+        r = requests.post(f"{BASE}/sendAudio", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_AUDIO_CAPTION_LIMIT]}, files={"audio": (Path(path).name, fh, "audio/mpeg")}, timeout=300)
+    r.raise_for_status()
+
+
+def _telegram_audio_path(source):
+    source = Path(source)
+    if source.suffix.lower() in {".mp3", ".m4a"}:
+        return source, False
+    target = source.with_name(source.stem + ".telegram.mp3")
+    subprocess.run(["ffmpeg", "-y", "-i", str(source), "-codec:a", "libmp3lame", "-q:a", "2", str(target)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
+    return target, True
+
+
+def video_duration(path):
+    try:
+        out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], text=True, timeout=30)
+        return float(out.strip())
+    except Exception:
+        return None
+
+
+def _format_title_options(titles):
+    if not titles:
+        return "🎯 BAŞLIK SEÇENEKLERİ\n\nBaşlık seçeneği üretilemedi."
+    lines = ["🎯 BAŞLIK SEÇENEKLERİ", ""]
+    for i, item in enumerate(titles, 1):
+        if isinstance(item, dict):
+            ana = str(item.get("ana", "")).strip()
+            alt = str(item.get("alt", "")).strip()
+            lines.append(f"{i}️⃣ {ana}")
+            if alt:
+                lines.append(f"   ↳ {alt}")
+        else:
+            lines.append(f"{i}️⃣ {str(item).strip()}")
+    return "\n".join(lines)
+
+
+def _loading_text(done, current=None, warnings=0, errors=0, steps=None):
+    steps = steps or PIPELINE_STEPS
+    total = len(steps)
+    filled = min(done, total)
+    bar = "█" * filled + "░" * (total - filled)
+    lines = ["⏳ REELS PIPELINE", "", f"{bar}  {done}/{total}"]
+    if current:
+        lines += ["", f"🔄 {current}"]
+    if warnings or errors:
+        lines += ["", f"⚠️ Uyarı: {warnings}   ❌ Hata: {errors}"]
+    return "\n".join(lines)
+
+
+def _extract_media_lines(warnings):
+    return [x for x in warnings if x.startswith("📐 ") or x.startswith("🎚️ ")]
+
+
+def _final_report(step_status, warnings, errors, result, tone_key):
+    lines = ["📊 PIPELINE RAPORU", ""]
+    for i, name in enumerate(PIPELINE_STEPS):
+        lines.append(f"{step_status.get(i, '⚪')} {i+1}/9 {name}")
+    lines += ["", f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}", f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}", "⚡ TTS hız: 1.20x", f"🎚️ Senkron: {result.get('sync_note') or 'Süre kontrolü yapıldı'}", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}"]
+    media_lines = _extract_media_lines(warnings)
+    if media_lines:
+        lines += ["", "🎥 MEDYA TEŞHİSİ"] + media_lines
+    if warnings:
+        lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:8]]
+    if errors:
+        lines += ["", "❌ HATALAR"] + [f"• {x}" for x in errors[:8]]
+    return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
+
+
+def _qa_text(qa_result):
+    if not qa_result:
+        return "QA sonucu bulunamadı."
+    try:
+        return json.dumps(qa_result, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(qa_result)
+
+
+def _final_text_report(step_status, warnings, errors, result, tone_key):
+    lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
+    for i, name in enumerate(TEXT_PIPELINE_STEPS):
+        lines.append(f"{step_status.get(i, '⚪')} {i+1}/8 {name}")
+    lines += ["", f"🎯 İçerik türü: {TON_LABELS.get(tone_key, tone_key)}", f"🎙️ Ses: {result.get('secilen_ses_ingilizce') or 'Autonoe'}", "⚡ TTS hız: 1.20x", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
+    if warnings:
+        lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:6]]
+    if errors:
+        lines += ["", "❌ HATALAR"] + [f"• {x}" for x in errors[:6]]
+    return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
+
+
+def _caption_with_hashtags(description, hashtags):
+    desc = str(description or "").strip()
+    tags = " ".join("#" + str(x).lstrip("#").strip() for x in (hashtags or []) if str(x).strip())
+    if not tags:
+        return desc[:TELEGRAM_VIDEO_CAPTION_LIMIT], bool(desc) and len(desc) > TELEGRAM_VIDEO_CAPTION_LIMIT
+    suffix = "\n\n" + tags
+    if len(suffix) >= TELEGRAM_VIDEO_CAPTION_LIMIT:
+        return suffix[-TELEGRAM_VIDEO_CAPTION_LIMIT:], bool(desc)
+    available = TELEGRAM_VIDEO_CAPTION_LIMIT - len(suffix)
+    truncated = len(desc) > available
+    return desc[:available].rstrip() + suffix, truncated
+
+
+def process(path):
+    initial = send_message(_loading_text(0, "Video alındı, pipeline başlatılıyor..."))
+    loading_id = initial["result"]["message_id"]
+    raw = path.read_bytes()
+    duration = video_duration(path)
+    mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
+    router = SmartRouter()
+    step_status = {}
+    warnings = []
+    errors = []
+    tone_key = os.environ.get("CONTENT_TONE", "dengeli").strip().lower()
+    tone_key = tone_key if tone_key in TON_MAP else "dengeli"
+    selected_tone = TON_MAP[tone_key]
+    user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
+    # Telegram video caption'ı zaten kullanıcının analiz notudur. Ek OCR/Tesseract
+    # taraması yapılmaz; bu hem gereksiz gecikmeyi hem de yanlış OCR çıkarımlarını önler.
+    video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
+
+    def log(msg):
+        text = str(msg).strip()
+        print(text, flush=True)
+        lower = text.lower()
+        if "⚠️" in text or "uyarı" in lower or "warning" in lower:
+            warnings.append(text)
         if "❌" in text or "hata" in lower or "error" in lower:
             errors.append(text)
         if text.startswith("📐 ") or text.startswith("🎚️ "):
