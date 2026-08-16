@@ -6,7 +6,7 @@ GİRDİ: Seçilen Reels Creative çıktısı (seslendirme metni, seçilen hook/k
 
 TEMEL İLKE — ÇOK ÖNEMLİ:
 
-Caption, SESİ YAZIYA ÇEVİRMEK DEĞİLDİR. Video/seslendirme bir şeyi anlatıyorsa caption onu TEKRAR ETMEZ; videoda anlatılmayan EKSTRA DEĞER sağlar: fiyat, teknik detay, Türkiye durumu, rakip, arka plan, kullanım maliyeti, az bilinen özellik gibi tamamlama mantığıyla ilerler.
+Caption, SESİ YAZIYA ÇEVİRMEK DEĞİLDİR. Video/seslendirme bir şeyi anlatıyorsa caption onu TEKRAR ETMEZ; videoda anlatılmayan EKSTRA DEĞER sağlar: fiyat, teknik detay, Türkiye durumu, rakip, arka plan, kullanım maliyeti, az bilinen özellik gibi tamamlama mantığıyla ilerle.
 
 Caption'da SADECE Fact Lock'ta OBSERVED veya VERIFIED durumundaki bilgileri kullan. Fact Lock dışında bilgi EKLEME. UNKNOWN olan hiçbir bilgiyi kesin gerçek gibi yazma.
 
@@ -60,7 +60,8 @@ KLİŞE CTA YASAĞI: "Yorumlarınızı bekliyoruz", "Ne düşünüyorsunuz?", "Y
 CAPTION BİÇİMİ:
 - Telegram video caption sınırı nedeniyle toplam reels açıklamasını HASHTAGLER HARİÇ 700-850 karakter hedefle; 900'ü aşma. Hashtagler ayrıca array olarak döndüğü için açıklama içinde onlar için yer ayırma. Amaç Telegram'ın 1024 karakterlik video caption sınırına güvenli biçimde sığmak; sistem sonradan metni kesmek zorunda KALMAMALI.
 - Sırf karakter doldurmak için uzatma. İçerik doğal akıyorsa 650-750 karakter bile olabilir. Öncelik DOĞALLIK + TAMAMLANMIŞ METİN > KARAKTER DOLDURMA.
-- Aynı paragrafta MAX 2-3 cümle, sonra doğal paragraf değişimi. Cümleler arasında enter kullanma; sadece paragraf değişiminde 1 boş satır.
+- PARAGRAF BİÇİMİ KESİN KURAL: Caption tek parça düz metin olmayacak. K1, K2, K3, K4 ve K5 doğal biçimde birbirinden ayrılacak. Paragraf değişimlerinde GERÇEK satır sonu kullan ve arada TAM OLARAK BİR BOŞ SATIR bırak (yani iki gerçek newline). Örnek: `İlk paragraf burada.\n\nİkinci paragraf burada.` JSON içinde bu `\n\n` olarak encode edilebilir; fakat model çıktısının değeri gerçek newline karakterlerine çözümlenebilir olmalıdır. Metne literal `\\n`, `\\n\\n` veya "\\n" yazma. Kullanıcı Telegram'da gördüğünde paragraf aralarında gerçek boş satır olmalı.
+- Her paragrafta MAX 2-3 cümle. Cümlelerin ortasında satır sonu kullanma; satır sonu yalnızca paragraf değişiminde olsun.
 - Caption başına MAX 2 büyük harfli kelime.
 - Rakam formatı: Binlik 2.400.000 TL veya 2.4M, yüzde %15, motor 1.5 litre, güç 170 bg, yakıt 5.2L, hız 100 km/h.
 - Emoji zorunlu değil; kullanılırsa 0-3 emoji/metin, dekoratif sıralama YASAK.
