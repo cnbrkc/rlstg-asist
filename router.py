@@ -126,7 +126,7 @@ class SmartRouter:
         kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
         if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]): kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
         try:
-            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=arama_kullan)
+            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False)
         except Exception:
             if arama_kullan and self._last_request_had_quota:
                 self._clear_cooldowns(model_listesi); kwargs.pop("tools",None)

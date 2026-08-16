@@ -5,6 +5,7 @@ Streamlit bağımlılığı yoktur; Telegram/GitHub Actions tarafından doğruda
 """
 import json
 import os, re
+import shutil
 from config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI, PIPELINE_ADIMLARI
 from schemas import VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA, REELS_CREATIVE_SCHEMA, CAPTION_SCHEMA, THREADS_SCHEMA, QA_SCHEMA, DUO_SCRIPT_SCHEMA
 from prompts import (forensic_analiz_promptunu_olustur, research_promptunu_olustur, editorial_promptunu_olustur,
@@ -339,10 +340,24 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
     except Exception as e:
         log(f'⚠️ Caption üretilemedi: {str(e)[:150]}'); caption_state,model_caption={"reels_aciklamasi":"","reels_hashtagleri":[]},'hata'
     caption_state = _caption_state_normalize(caption_state)
+    if not str(caption_state.get("reels_aciklamasi") or "").strip():
+        log("⚠️ Caption boş döndü; yalnızca bir kez kontrollü Caption regeneration yapılacak.")
+        try:
+            caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)
+        except Exception as e:
+            log(f'⚠️ Caption kontrollü regeneration başarısız: {str(e)[:150]}')
+        caption_state = _caption_state_normalize(caption_state)
     try: threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)
     except Exception as e:
         log(f'⚠️ Threads üretilemedi: {str(e)[:150]}'); threads_state,model_threads={"threads_aciklamasi":""},'hata'
     threads_state = _threads_state_normalize(threads_state)
+    if not str(threads_state.get("threads_aciklamasi") or "").strip():
+        log("⚠️ Threads boş döndü; yalnızca bir kez kontrollü Threads regeneration yapılacak.")
+        try:
+            threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)
+        except Exception as e:
+            log(f'⚠️ Threads kontrollü regeneration başarısız: {str(e)[:150]}')
+        threads_state = _threads_state_normalize(threads_state)
 
     for qa_round in range(MAX_QA_REGEN+1):
         qa_rounds=qa_round
@@ -425,7 +440,15 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
         router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle
     )
     state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass
-    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi
+    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi):
+        stable_tts = gecici_dosya_yolu('pipeline_tts_stable','wav')
+        try:
+            shutil.copy2(ses_dosyasi, stable_tts)
+            ses_dosyasi = stable_tts
+            state['ses_dosyasi_son']=ses_dosyasi
+            log_ekle('🔒 TTS dosyası pipeline sonuna kadar korunmak üzere sabitlendi.')
+        except Exception as exc:
+            log_ekle(f'⚠️ TTS sabitleme başarısız; mevcut dosya kullanılmaya devam edilecek: {str(exc)[:150]}')
 
     _ilerleme(ilerlemeyi_guncelle,5); log_ekle('📝 Caption + hashtag hazırlanıyor...')
     state['caption_state']=caption_state
