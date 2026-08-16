@@ -16,9 +16,9 @@ from character_profiles import voice_for_character
 from media import gecici_ses_yolu, temp_dosya_temizle
 from config import SES_HIZ_CARPANI
 
-# 3 eşzamanlı istek, API tarafında gereksiz burst/rate-limit riskini artırmadan
-# 5 segmentlik Duo'nun seri üretimine göre ciddi wall-clock kazancı sağlar.
-DUO_TTS_MAX_WORKERS = 3
+# 5 segmentlik Duo'yu tek dalgada üret. Segmentler bağımsız olduğu için
+# paralellik wall-clock süresini düşürür; sonuçlar index'e göre birleştirilir.
+DUO_TTS_MAX_WORKERS = 5
 
 
 def _wav_format(path: str):
@@ -72,7 +72,7 @@ def _duo_segment_uret(router, index, total, segment, log_ekle, hiz_carpani):
 
 
 def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CARPANI):
-    """Validated speaker segmentlerinden tek WAV timeline üretir.
+    """Validated speaker segmentlerinden tek WAV timeline üret.
 
     Başarısız herhangi bir segmentte bütün Duo denemesi başarısız sayılır;
     caller legacy tek sesli akışa güvenli biçimde dönebilir.
