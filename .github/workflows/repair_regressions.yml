@@ -6,7 +6,7 @@ permissions:
   contents: write
 jobs:
   repair:
-    if: github.event.head_commit.message != 'fix: repair caption threads quota and tts state regressions'
+    if: ${{ github.event.head_commit.message != 'fix: repair caption threads quota and tts state regressions' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,9 +15,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          # router.py: do not abort a search request on the first quota hit.
-          # Exhaust the current key/model rotation first; only the final
-          # all-combinations failure may trigger the no-search fallback.
           p=Path('router.py'); s=p.read_text(encoding='utf-8')
           old='''            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=arama_kullan)'''
           new='''            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False)'''
@@ -25,8 +22,6 @@ jobs:
           s=s.replace(old,new)
           p.write_text(s,encoding='utf-8')
 
-          # pipeline.py: preserve a stable TTS artifact across QA and add only
-          # one targeted retry when a social output is genuinely empty.
           p=Path('pipeline.py'); s=p.read_text(encoding='utf-8')
           old='''import json\nimport os, re'''
           new='''import json\nimport os, re\nimport shutil'''
@@ -39,7 +34,7 @@ jobs:
           s=s.replace(old,new)
 
           old='''    state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass\n    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi): state['ses_dosyasi_son']=ses_dosyasi\n'''
-          new='''    state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass\n    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi):\n        # Keep a separate artifact for the remainder of the pipeline. QA/recovery\n        # must never invalidate the only successful TTS file.\n        stable_tts = gecici_dosya_yolu('pipeline_tts_stable','wav')\n        try:\n            shutil.copy2(ses_dosyasi, stable_tts)\n            ses_dosyasi = stable_tts\n            state['ses_dosyasi_son']=ses_dosyasi\n            log_ekle('🔒 TTS dosyası pipeline sonuna kadar korunmak üzere sabitlendi.')\n        except Exception as exc:\n            log_ekle(f'⚠️ TTS sabitleme başarısız; mevcut dosya kullanılmaya devam edilecek: {str(exc)[:150]}')\n'''
+          new='''    state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass\n    if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi):\n        stable_tts = gecici_dosya_yolu('pipeline_tts_stable','wav')\n        try:\n            shutil.copy2(ses_dosyasi, stable_tts)\n            ses_dosyasi = stable_tts\n            state['ses_dosyasi_son']=ses_dosyasi\n            log_ekle('🔒 TTS dosyası pipeline sonuna kadar korunmak üzere sabitlendi.')\n        except Exception as exc:\n            log_ekle(f'⚠️ TTS sabitleme başarısız; mevcut dosya kullanılmaya devam edilecek: {str(exc)[:150]}')\n'''
           assert s.count(old)==1, 'pipeline TTS state block not uniquely found'
           s=s.replace(old,new)
           p.write_text(s,encoding='utf-8')
