@@ -1,0 +1,79 @@
+name: Stage 4 patch 2
+on:
+  push:
+    paths:
+      - '.github/workflows/stage4_patch2.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch exact blocks
+        shell: python
+        run: |
+          from pathlib import Path
+          import re, py_compile
+
+          p = Path('telegram_pipeline_worker.py')
+          s = p.read_text(encoding='utf-8')
+
+          video = re.compile(r'    def progress\(n, total, msg\):\n        step_status\[n - 1\] = "🟢"\n        current = PIPELINE_STEPS\[n - 1\] if 0 < n <= len\(PIPELINE_STEPS\) else str\(msg\)\n        try:\n            edit_message\(loading_id, _loading_text\(n - 1, f"Tamamlandı → \{current\}", len\(warnings\), len\(errors\)\)\)\n        except Exception as exc:\n            print\(f"Loading mesajı güncellenemedi: \{exc\}", flush=True\)\n')
+          replacement_video = '''    def progress(n, total, msg):
+        # n mevcut aşamadır; n-1 aşaması tamamlanmıştır.
+        if 0 < n <= len(PIPELINE_STEPS):
+            if n > 1:
+                step_status[n - 2] = "🟢"
+            step_status[n - 1] = "🔄"
+            current = PIPELINE_STEPS[n - 1]
+            done = n - 1
+        else:
+            current = str(msg)
+            done = min(max(n - 1, 0), len(PIPELINE_STEPS))
+        try:
+            edit_message(loading_id, _loading_text(done, f"Çalışıyor → {current}", len(warnings), len(errors)))
+        except Exception as exc:
+            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+'''
+
+          text = re.compile(r'    def progress\(n, total, msg\):\n        step_status\[n - 1\] = "🟢"\n        current = TEXT_PIPELINE_STEPS\[n - 1\] if 0 < n <= len\(TEXT_PIPELINE_STEPS\) else str\(msg\)\n        try:\n            edit_message\(loading_id, _loading_text\(n - 1, f"Tamamlandı → \{current\}", len\(warnings\), len\(errors\), steps=TEXT_PIPELINE_STEPS\)\)\n        except Exception as exc:\n            print\(f"Loading mesajı güncellenemedi: \{exc\}", flush=True\)\n')
+          replacement_text = '''    def progress(n, total, msg):
+        # n mevcut aşamadır; n-1 aşaması tamamlanmıştır.
+        if 0 < n <= len(TEXT_PIPELINE_STEPS):
+            if n > 1:
+                step_status[n - 2] = "🟢"
+            step_status[n - 1] = "🔄"
+            current = TEXT_PIPELINE_STEPS[n - 1]
+            done = n - 1
+        else:
+            current = str(msg)
+            done = min(max(n - 1, 0), len(TEXT_PIPELINE_STEPS))
+        try:
+            edit_message(loading_id, _loading_text(done, f"Çalışıyor → {current}", len(warnings), len(errors), steps=TEXT_PIPELINE_STEPS))
+        except Exception as exc:
+            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+'''
+
+          if not video.search(s):
+              raise SystemExit('video progress block not found; no write performed')
+          if not text.search(s):
+              raise SystemExit('text progress block not found; no write performed')
+          s = video.sub(replacement_video, s, count=1)
+          s = text.sub(replacement_text, s, count=1)
+          s = s.replace("QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2", "QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1")
+          p.write_text(s, encoding='utf-8')
+          py_compile.compile('telegram_pipeline_worker.py', doraise=True)
+          py_compile.compile('pipeline.py', doraise=True)
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add telegram_pipeline_worker.py
+          git diff --cached --check
+          git commit -m "fix: correct Telegram pipeline progress and QA budget label"
+          git push origin main
