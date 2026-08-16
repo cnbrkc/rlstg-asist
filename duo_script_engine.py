@@ -45,6 +45,23 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
             profile = CHARACTER_ROLES[speaker]
             speakers.append({"speaker": speaker, "voice": profile["name"], "role": profile["role"]})
 
+    target_words = plan.get("target_words", plan.get("hedef_kelime"))
+    min_words = plan.get("min_words", plan.get("minimum_kelime"))
+    max_words = plan.get("max_words", plan.get("maksimum_kelime"))
+
+    def _number(value):
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    target_words = _number(target_words)
+    min_words = _number(min_words)
+    max_words = _number(max_words)
+    if target_words is not None:
+        min_words = min_words if min_words is not None else max(5, round(target_words * 0.90))
+        max_words = max_words if max_words is not None else max(min_words, round(target_words * 1.10))
+
     return {
         "mode": mode,
         "speakers": speakers,
@@ -56,6 +73,9 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
         "humor_level": float(plan.get("humor_level", 0.3) or 0.3),
         "tension_level": float(plan.get("tension_level", 0.2) or 0.2),
         "selected_detail": str(plan.get("selected_detail", "")).strip(),
+        "target_words": target_words,
+        "min_words": min_words,
+        "max_words": max_words,
         "conversation_map": conversation_map,
         "rules": [
             "Yalnızca planlanmış speaker'ları kullan.",
@@ -65,19 +85,30 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
             "Diyalog doğal konuşma ritminde olsun; sırf iki ses var diye cümleleri bölme.",
             "Marka/üretici hedefleme, hakaret veya düşmanca ifade üretme.",
             "Her replik videoya veya otomobil tartışmasına yeni bir değer katmalı.",
+            "Seslendirme süresini korumak için hedef kelime aralığı verildiyse bunun dışına çıkma.",
         ],
     }
 
 
-def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "", fact_lock: str = "") -> str:
+def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "", fact_lock: str = "", regeneration_instruction: str = "") -> str:
     """Return a strict JSON-only generation prompt for the model call."""
+    length_rule = ""
+    if contract.get("min_words") is not None and contract.get("max_words") is not None:
+        length_rule = (
+            f"\nKELİME/SÜRE KİLİDİ: Toplam script {contract['min_words']}-{contract['max_words']} kelime arasında olmalı "
+            f"(hedef {contract.get('target_words')}). Bu sınırı aşma. Teknik bilgi yığma; en güçlü detayları seç.\n"
+        )
+    if regeneration_instruction and regeneration_instruction.strip():
+        length_rule += f"\n🚨 YENİDEN ÜRETİM TALİMATI:\n{regeneration_instruction.strip()}\n"
+
     return (
         "Sen otoXtra'nın iki karakterli otomobil anlatım yazarı olarak çalışıyorsun.\n"
         "Aşağıdaki sözleşmeye göre yalnızca JSON üret.\n\n"
         "HEDEF: Doğal bir eş/partner otomobil sohbeti. Diyalog yapay skeç gibi olmayacak. "
         "İki kişi sırf konuşsun diye gereksiz replik eklenmeyecek.\n"
         "KONUŞMA HARİTASINDAKİ HER GEÇERLİ SEGMENT İÇİN BİR REPLİK ÜRET; "
-        "haritayı gereksiz yere boş bırakma. Speaker yalnızca sözleşmede izin verilen değerlerden biri olmalı.\n\n"
+        "haritayı gereksiz yere boş bırakma. Speaker yalnızca sözleşmede izin verilen değerlerden biri olmalı.\n"
+        f"{length_rule}\n"
         f"SÖZLEŞME:\n{contract}\n\n"
         f"EDITORIAL CONTEXT:\n{editorial_context}\n\n"
         f"FACT LOCK:\n{fact_lock}\n\n"
@@ -87,13 +118,29 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
     )
 
 
-def validate_generated_duo(contract: Dict[str, Any], generated: Any) -> List[Dict[str, str]]:
-    """Validate the model's structured response before any TTS use.
+def _segment_word_count(segments: Any) -> int:
+    import re
+    total = 0
+    for segment in segments or []:
+        if isinstance(segment, dict):
+            total += len(re.findall(r"\b\w+(?:[-']\w+)*\b", str(segment.get("text", "")), re.UNICODE))
+    return total
 
-    The model router returns the schema object itself, i.e. {"segments": [...]};
-    the validator consumes the segments array. Accepting a bare list as well keeps
-    this layer tolerant of older/test callers.
-    """
+
+def validate_generated_duo(contract: Dict[str, Any], generated: Any) -> List[Dict[str, str]]:
+    """Validate the model's structured response before any TTS use."""
     if isinstance(generated, dict):
         generated = generated.get("segments", [])
-    return validate_script_segments(generated, contract.get("mode", "DUO"))
+    segments = validate_script_segments(generated, contract.get("mode", "DUO"))
+    if not segments:
+        return []
+
+    min_words = contract.get("min_words")
+    max_words = contract.get("max_words")
+    if min_words is not None or max_words is not None:
+        count = _segment_word_count(segments)
+        if min_words is not None and count < int(min_words):
+            return []
+        if max_words is not None and count > int(max_words):
+            return []
+    return segments
