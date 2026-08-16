@@ -23,7 +23,7 @@ def _otorite_talimati():
         "değiştirilmiş hâlini taşıma. Kullanıcı bilgisi sonraki tüm aşamalarda "
         "aynen korunmalıdır.\n\n"
         "--- KULLANICI VİDEO ANALİZ NOTU ---\n"
-        f"{_AKTİF_VIDEO_ANALİZ_NOTU.strip()}\n"
+        f"{_AKTİF_VIDEO_ANALIZ_NOTU.strip()}\n"
         "--- KULLANICI VİDEO ANALİZ NOTU SONU ---\n"
     )
 
