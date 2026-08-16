@@ -15,6 +15,8 @@ KURALLAR:
 - SORU YASAK: Metin boyunca kesinlikle soru cümlesi (?) kullanma. Düz ve iddialı cümlelerle ilerle.
 - BİTİŞ CÜMLESİ: Doğrudan bir iddiayla bitir. Soru değil, net bir kapanış olsun.
 - TEKNİK SINIRLAR: Max 500 karakter. Hiçbir hashtag (#) kullanılmama.
+- UZUNLUK KİLİDİ: Threads metni tek cümlelik veya aşırı kısa olmayacak. Hedef 320-450 karakterdir; normal üretimde 280 karakterin altına İNME. 280 karakterin altındaysa düşünceyi aynı Fact Lock sınırları içinde genişlet: önce net iddia, ardından bunu destekleyen somut bağlam ve son olarak net bir yorum/kapanış getir. Sırf karakter doldurmak için tekrar yapma.
+- YAPI KİLİDİ: Tercihen 3-5 cümle kullan. İlk cümle iddia, orta bölüm gerekçe/bağlam, son cümle net pozisyon/kapanış olsun. Her cümle doğal ve konuşma dilinde olsun.
 - Sadece Fact Lock'ta OBSERVED/VERIFIED olan bilgilere dayan; UNKNOWN bilgiyi kesin gerçek gibi kullanma.
 - Marka sahibine doğrudan saldırma; "Bunu bize mi yazdı?" değil, "tüketiciye laf atmış, karışmayalım" hissi bıraksın.
 
