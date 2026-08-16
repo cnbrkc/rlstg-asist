@@ -6,10 +6,13 @@ from config import API_KEYS, METIN_MODELLERI, ARAMA_MODELLERI, SES_MODELLERI, VI
 from utils import guvenli_json_yukle
 from media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
-# A Gemini request must never be able to hold a GitHub Actions runner indefinitely.
-# 120s is long enough for the normal Flash/TTS calls while still allowing the
-# router to move to the next key/model instead of leaving Telegram stuck for hours.
-REQUEST_TIMEOUT_MS = 120_000
+# Keep individual Gemini calls bounded so one unhealthy request does not hold
+# the GitHub Actions runner for minutes before key/model failover can happen.
+REQUEST_TIMEOUT_MS = 60_000
+RETRY_503_MAX = 1
+RETRY_503_DELAY_SECONDS = 2
+RETRY_QUOTA_MAX = 1
+RETRY_QUOTA_MAX_DELAY_SECONDS = 8
 
 class SmartRouter:
     def __init__(self) -> None:
@@ -55,15 +58,15 @@ class SmartRouter:
         if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m: return "quota",0
         if "400" in m or "invalid_argument" in m or "unsupported" in m: return "model_config",COOLDOWN_BULUNAMADI
         if "503" in m or "unavailable" in m: return "combo",COOLDOWN_SUNUCU
-        if "timeout" in m.lower() or "timed out" in m.lower(): return "combo",COOLDOWN_DIGER
+        if "timeout" in m or "timed out" in m: return "combo",COOLDOWN_DIGER
         return "combo",COOLDOWN_DIGER
     def _handle_hata(self,mail,model,hata_metni,log_ekle)->str:
         scope,cooldown=self._parse_hata(hata_metni)
         if scope=="free_tier_yok": self._ban(mail,model,cooldown,"model"); log_ekle(f"🚫 {model} free tier'da yok."); return "break_model"
         if scope=="quota":
-            self._last_request_had_quota=True; delay=self._retry_delay_cikar(hata_metni)
-            if delay>0: time.sleep(min(delay,60)); return "retry"
-            self._ban(mail,model,COOLDOWN_SUNUCU,"combo"); return "quota"
+            self._last_request_had_quota=True
+            self._ban(mail,model,COOLDOWN_SUNUCU,"combo")
+            return "quota"
         if scope=="model_key":
             self._ban(mail,model,cooldown,"combo")
             log_ekle(f"⚠️ {mail}+{model}: bu key/model erişimi yok; sonraki key deneniyor.")
@@ -73,32 +76,48 @@ class SmartRouter:
         return "break_model" if scope in ("model","model_config") else "continue"
 
     def _make_request(self,model_listesi:List[str],contents:Any,config,log_ekle,stop_on_quota=False,son_fallback=True):
-        son_hata=None; self._last_request_had_quota=False
+        son_hata=None
+        self._last_request_had_quota=False
+        # Only use the caller's explicit model order. The previous implicit
+        # fallback list could silently add extra model attempts to every call.
         modeller=list(model_listesi or [])
-        if son_fallback:
-            for fallback in ["gemini-3.1-flash-lite","gemini-2.5-flash","gemini-2.5-flash-lite"]:
-                if fallback not in modeller: modeller.append(fallback)
         for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
             for mail,api_key in API_KEYS.items():
                 if self._is_banned(mail,model_adi): continue
                 client = self.clients.get(mail)
                 if client is None: continue
-                _503_deneme=0
+                retry_503=0
+                retry_quota=0
                 while True:
                     try:
                         response=client.models.generate_content(model=model_adi,contents=contents,config=config)
                         log_ekle(f"✅ Başarılı → {mail} + {model_adi}"); return response,f"{mail}+{model_adi}"
                     except Exception as e:
-                        son_hata=e; hata_metni=str(e)
-                        if ("503" in hata_metni or "unavailable" in hata_metni.lower()) and _503_deneme < 1:
-                            _503_deneme += 1
-                            log_ekle(f"⏳ {mail}+{model_adi}: geçici 503, 5s sonra tekrar deneniyor (1/1)")
-                            time.sleep(5)
+                        son_hata=e
+                        hata_metni=str(e)
+                        is_503 = "503" in hata_metni or "unavailable" in hata_metni.lower()
+                        is_quota = any(x in hata_metni.lower() for x in ("429", "resource_exhausted", "quota", "rate limit"))
+
+                        if is_503 and retry_503 < RETRY_503_MAX:
+                            retry_503 += 1
+                            log_ekle(f"⏳ {mail}+{model_adi}: geçici 503, {RETRY_503_DELAY_SECONDS}s sonra aynı key bir kez daha deneniyor ({retry_503}/{RETRY_503_MAX})")
+                            time.sleep(RETRY_503_DELAY_SECONDS)
                             continue
+
+                        if is_quota and retry_quota < RETRY_QUOTA_MAX:
+                            retry_quota += 1
+                            parsed_delay=self._retry_delay_cikar(hata_metni)
+                            delay=min(parsed_delay, RETRY_QUOTA_MAX_DELAY_SECONDS) if parsed_delay > 0 else 2
+                            log_ekle(f"⏳ {mail}+{model_adi}: quota/rate-limit, en fazla {delay}s beklenip aynı key bir kez daha denenecek ({retry_quota}/{RETRY_QUOTA_MAX})")
+                            time.sleep(delay)
+                            continue
+
                         aksiyon=self._handle_hata(mail,model_adi,hata_metni,log_ekle)
                         if stop_on_quota and aksiyon=="quota": raise
                         if aksiyon in ("break_model","quota"): break
+                        # Any exhausted transient retry moves immediately to the
+                        # next key/model instead of looping on the same combination.
                         break
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
 
