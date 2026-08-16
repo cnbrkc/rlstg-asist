@@ -1,0 +1,105 @@
+name: Stage 4 safe patch
+on:
+  push:
+    paths:
+      - '.github/workflows/stage4_safe_patch.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch worker safely
+        shell: python
+        run: |
+          from pathlib import Path
+          import re, py_compile
+
+          p = Path('telegram_pipeline_worker.py')
+          s = p.read_text(encoding='utf-8')
+          original = s
+
+          # Replace only the two progress callbacks. Everything else remains byte-for-byte unchanged.
+          video_pattern = re.compile(
+              r'    def progress\(n, total, msg\):\n'
+              r'        step_status\[n - 1\] = "🟢"\n'
+              r'        current = PIPELINE_STEPS\[n - 1\] if 0 < n <= len\(PIPELINE_STEPS\) else str\(msg\)\n'
+              r'        try:\n'
+              r'            edit_message\(loading_id, _loading_text\(n - 1, f"Tamamlandı → \{current\}", len\(warnings\), len\(errors\)\)\)\n'
+              r'        except Exception as exc:\n'
+              r'            print\(f"Loading mesajı güncellenemedi: \{exc\}", flush=True\)\n'
+          )
+          video_repl = '''    def progress(n, total, msg):
+        # n mevcut aşamadır; n-1 aşaması tamamlanmıştır.
+        if 0 < n <= len(PIPELINE_STEPS):
+            if n > 1:
+                step_status[n - 2] = "🟢"
+            step_status[n - 1] = "🔄"
+            current = PIPELINE_STEPS[n - 1]
+            done = n - 1
+        else:
+            current = str(msg)
+            done = min(max(n - 1, 0), len(PIPELINE_STEPS))
+        try:
+            edit_message(loading_id, _loading_text(done, f"Çalışıyor → {current}", len(warnings), len(errors)))
+        except Exception as exc:
+            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+'''
+
+          text_pattern = re.compile(
+              r'    def progress\(n, total, msg\):\n'
+              r'        step_status\[n - 1\] = "🟢"\n'
+              r'        current = TEXT_PIPELINE_STEPS\[n - 1\] if 0 < n <= len\(TEXT_PIPELINE_STEPS\) else str\(msg\)\n'
+              r'        try:\n'
+              r'            edit_message\(loading_id, _loading_text\(n - 1, f"Tamamlandı → \{current\}", len\(warnings\), len\(errors\), steps=TEXT_PIPELINE_STEPS\)\)\n'
+              r'        except Exception as exc:\n'
+              r'            print\(f"Loading mesajı güncellenemedi: \{exc\}", flush=True\)\n'
+          )
+          text_repl = '''    def progress(n, total, msg):
+        # n mevcut aşamadır; n-1 aşaması tamamlanmıştır.
+        if 0 < n <= len(TEXT_PIPELINE_STEPS):
+            if n > 1:
+                step_status[n - 2] = "🟢"
+            step_status[n - 1] = "🔄"
+            current = TEXT_PIPELINE_STEPS[n - 1]
+            done = n - 1
+        else:
+            current = str(msg)
+            done = min(max(n - 1, 0), len(TEXT_PIPELINE_STEPS))
+        try:
+            edit_message(loading_id, _loading_text(done, f"Çalışıyor → {current}", len(warnings), len(errors), steps=TEXT_PIPELINE_STEPS))
+        except Exception as exc:
+            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+'''
+
+          if len(video_pattern.findall(s)) != 1:
+              raise SystemExit('SAFE PATCH ABORT: expected exactly one video progress block')
+          if len(text_pattern.findall(s)) != 1:
+              raise SystemExit('SAFE PATCH ABORT: expected exactly one text progress block')
+
+          s = video_pattern.sub(video_repl, s, count=1)
+          s = text_pattern.sub(text_repl, s, count=1)
+
+          if "QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2" not in s:
+              raise SystemExit('SAFE PATCH ABORT: expected QA / 2 label not found')
+          s = s.replace("QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 2", "QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1")
+
+          if s == original:
+              raise SystemExit('SAFE PATCH ABORT: no changes')
+          p.write_text(s, encoding='utf-8')
+          py_compile.compile('telegram_pipeline_worker.py', doraise=True)
+          py_compile.compile('pipeline.py', doraise=True)
+
+      - name: Commit worker only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add telegram_pipeline_worker.py
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "fix: correct Telegram pipeline progress and QA label"
+          git push origin main
