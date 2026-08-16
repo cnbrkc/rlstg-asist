@@ -96,7 +96,6 @@ jobs:
             schemas.py
             telegram_pipeline_worker.py
             telegram_pipeline_guard.py
-            telegram_social_output.py
             telegram_webhook_intake.py
             requirements.txt
             research.py
@@ -131,7 +130,7 @@ jobs:
         run: pip install --disable-pip-version-check -r requirements.txt
 
       - name: Compile check
-        run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py telegram_pipeline_worker.py telegram_pipeline_guard.py telegram_social_output.py telegram_webhook_intake.py research.py tts.py utils.py
+        run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py telegram_pipeline_worker.py telegram_pipeline_guard.py telegram_webhook_intake.py research.py tts.py utils.py
 
       - name: Run Reels pipeline
         env:
@@ -145,10 +144,3 @@ jobs:
           CONTENT_TONE: ${{ inputs.content_tone }}
           PYTHONUNBUFFERED: "1"
         run: python telegram_pipeline_guard.py
-
-      - name: Publish social outputs explicitly
-        if: ${{ inputs.telegram_file_id != '' }}
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
-        run: python telegram_social_output.py
