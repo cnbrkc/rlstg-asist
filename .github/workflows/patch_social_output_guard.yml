@@ -58,3 +58,5 @@ jobs:
             git commit -m 'chore: remove temporary social patch workflow'
             git push origin HEAD:main
           fi
+
+# exact guarded patch; no mainbackup writes
