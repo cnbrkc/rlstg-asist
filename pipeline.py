@@ -269,8 +269,8 @@ def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, 
                 return reels_state,model_reels,duo_plan,duo_script,True,legacy_info,'LEGACY_'+mod,legacy_path
             temp_dosya_temizle(legacy_path)
 
-        temp_dosya_temizle(ses_dosyasi)
         if deneme < VOICE_REGEN_MAX:
+            temp_dosya_temizle(ses_dosyasi)
             ek_talimat=(
                 f'TTS önceki metni {ses_suresi:.2f} saniye üretti; hedef video {sure_saniye:.2f} saniye. '
                 'Metni yeniden yaz ve konuşma süresini belirgin biçimde kısalt. '
@@ -280,8 +280,8 @@ def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, 
             log(f'⚠️ TTS video süresine sığmadı; metin yeniden üretiliyor ({deneme+1}/{VOICE_REGEN_MAX}).')
             continue
 
-        log('❌ TTS süresi güvenli aralığa girmedi; yarım/uygunsuz video üretmemek için render durduruldu.')
-        return reels_state,model_reels,duo_plan,duo_script,False,None,mod,''
+        log('⚠️ TTS süresi ideal aralığa girmedi; ancak geçerli WAV mevcut. Mevcut ses FFmpeg senkronunda kullanılacak; yeni TTS çağrısı yapılmayacak.')
+        return reels_state,model_reels,duo_plan,duo_script,True,info,mod,ses_dosyasi
 
     return son_reels,son_model,son_duo_plan,son_duo_script,False,son_info,son_mod,son_ses
 
@@ -453,17 +453,20 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
         if recovery_ok and os.path.exists(recovery_path):
             recovery_uyumlu,recovery_sure,recovery_oran=_ses_sure_uyumlu_mu(recovery_path,sure_saniye)
             log_ekle(f'🎚️ Recovery TTS süre kontrolü: video {sure_saniye:.2f}s → ses {recovery_sure:.2f}s | oran {recovery_oran:.2f}x')
-            if recovery_uyumlu:
+            if recovery_sure > 0:
                 ses_dosyasi=recovery_path
                 kullanilan_ses_modeli=recovery_info
                 ses_modu=recovery_mode
                 state['ses_modu']=ses_modu
-                log_ekle(f'✅ TTS recovery başarılı: {ses_modu} → {_ses_modu_sesi(ses_modu)}')
+                if recovery_uyumlu:
+                    log_ekle(f'✅ TTS recovery başarılı ve süre aralığında: {ses_modu} → {_ses_modu_sesi(ses_modu)}')
+                else:
+                    log_ekle(f'⚠️ TTS recovery dosyası geçerli ancak oran {recovery_oran:.2f}x; mevcut ses FFmpeg senkronunda kullanılacak, yeni TTS çağrısı yapılmayacak.')
             else:
                 temp_dosya_temizle(recovery_path)
                 ses_basarili=False
                 ses_dosyasi=''
-                log_ekle('❌ Recovery TTS gerçek süre aralığına girmedi; render durduruldu.')
+                log_ekle('❌ TTS recovery geçerli bir WAV üretemedi; render durduruldu.')
         else:
             temp_dosya_temizle(recovery_path)
             ses_basarili=False
