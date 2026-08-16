@@ -3,6 +3,7 @@ pipeline.py — Ultimate Content Engine orkestratörü.
 
 Streamlit bağımlılığı yoktur; Telegram/GitHub Actions tarafından doğrudan çağrılabilir.
 """
+import json
 import os, re
 from config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI, PIPELINE_ADIMLARI
 from schemas import VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA, REELS_CREATIVE_SCHEMA, CAPTION_SCHEMA, THREADS_SCHEMA, QA_SCHEMA, DUO_SCRIPT_SCHEMA
@@ -23,11 +24,52 @@ VOICE_DURATION_MAX_RATIO = 1.15
 MAX_QA_REGEN = 2
 
 
+def _json_object_or_none(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value.strip())
+            return parsed if isinstance(parsed, dict) else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def _caption_state_normalize(value):
+    """Structured-output fallbacklarında caption'ın string olarak dönmesi pipeline'ı düşürmesin."""
+    parsed = _json_object_or_none(value)
+    if parsed is not None:
+        return {
+            "reels_aciklamasi": str(parsed.get("reels_aciklamasi", "") or ""),
+            "reels_hashtagleri": parsed.get("reels_hashtagleri") if isinstance(parsed.get("reels_hashtagleri"), list) else [],
+        }
+    if isinstance(value, str) and value.strip():
+        return {"reels_aciklamasi": value.strip(), "reels_hashtagleri": []}
+    return {"reels_aciklamasi": "", "reels_hashtagleri": []}
+
+
+def _threads_state_normalize(value):
+    """Structured-output fallbacklarında Threads'in string olarak dönmesi pipeline'ı düşürmesin."""
+    parsed = _json_object_or_none(value)
+    if parsed is not None:
+        return {"threads_aciklamasi": str(parsed.get("threads_aciklamasi", "") or "")}
+    if isinstance(value, str) and value.strip():
+        return {"threads_aciklamasi": value.strip()}
+    return {"threads_aciklamasi": ""}
+
+
+def _object_state_or_empty(value):
+    parsed = _json_object_or_none(value)
+    return parsed if parsed is not None else {}
+
+
 def _ilerleme(cb, n, msg=None):
     if cb: cb(n, TOPLAM_ADIM, msg or PIPELINE_ADIMLARI[n-1])
 
 
 def _secilen_hook_getir(reels_state):
+    reels_state = _object_state_or_empty(reels_state)
     families=reels_state.get('hook_families') or []
     if not families:return {}
     idx=reels_state.get('secilen_aile_index',0)
@@ -41,6 +83,7 @@ def _forensic_analiz_calistir(router, video_bytes, mime_type, analiz_notlari, su
 
 
 def _research_calistir(router, video_state, log):
+    video_state = _object_state_or_empty(video_state)
     content=girdi_birlestir(durumu_metne_donustur('VIDEO IDENTITY',video_state.get('video_identity',{})),durumu_metne_donustur('OBSERVED FACTS',video_state.get('observed_facts',[])),durumu_metne_donustur('UNKNOWNS',video_state.get('unknowns',[])),durumu_metne_donustur('POSSIBLE INFERENCE',video_state.get('possible_inference',[])),durumu_metne_donustur('ARAŞTIRMA İHTİYAÇLARI',video_state.get('viral_arastirma_ihtiyaclari',[])))
     return router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=True)
 
@@ -53,17 +96,21 @@ def _editorial_calistir(router, video_state, fact_state, notes, log):
 def _reels_creative_calistir(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, log, kelime_hizi_orani=None, ek_talimat=""):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO STATE',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),notes or '')
     prompt=reels_creative_promptunu_olustur(sure_saniye,ton,kelime_hizi_orani,ek_talimat=ek_talimat)
-    return router.metin_uret(content,prompt,REELS_CREATIVE_SCHEMA,log,arama_kullan=False)
+    result, model = router.metin_uret(content,prompt,REELS_CREATIVE_SCHEMA,log,arama_kullan=False)
+    result = _object_state_or_empty(result)
+    return result, model
 
 
 def _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log):
     content=girdi_birlestir(durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('VIDEO',video_state))
-    return router.metin_uret(content,caption_promptunu_olustur(),CAPTION_SCHEMA,log,arama_kullan=False)
+    result, model = router.metin_uret(content,caption_promptunu_olustur(),CAPTION_SCHEMA,log,arama_kullan=False)
+    return _caption_state_normalize(result), model
 
 
 def _threads_calistir(router,video_state,fact_state,editorial_state,log):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state))
-    return router.metin_uret(content,threads_promptunu_olustur(),THREADS_SCHEMA,log,arama_kullan=False)
+    result, model = router.metin_uret(content,threads_promptunu_olustur(),THREADS_SCHEMA,log,arama_kullan=False)
+    return _threads_state_normalize(result), model
 
 
 def _kelime_sayisi(metin):
@@ -71,17 +118,19 @@ def _kelime_sayisi(metin):
 
 
 def _reels_kelime_kontrolu(reels_state, sure_saniye, kelime_hizi_orani=None):
+    reels_state = _object_state_or_empty(reels_state)
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani or KELIME_HIZI_ORANI)
     adet=_kelime_sayisi(reels_state.get('seslendirme_metni',''))
     return adet, hedef, minimum, maksimum
 
 
 def _duo_kelime_sayisi(duo_script):
-    if not duo_script or not duo_script.get('segments'): return 0
+    if not duo_script or not isinstance(duo_script,dict) or not duo_script.get('segments'): return 0
     return sum(_kelime_sayisi(seg.get('text','')) for seg in duo_script.get('segments',[]) if isinstance(seg,dict))
 
 
 def _duo_plan_hazirla(reels_state, sure_saniye, ton):
+    reels_state = _object_state_or_empty(reels_state)
     strategy = normalize_duo_strategy(reels_state)
     strategy["conversation_map"] = normalize_conversation_map(reels_state)
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
@@ -248,7 +297,11 @@ def _ses_modu_sesi(mode):
 
 def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}')
-    return router.metin_uret(content,qa_promptunu_olustur(),QA_SCHEMA,log,arama_kullan=False)
+    result, model = router.metin_uret(content,qa_promptunu_olustur(),QA_SCHEMA,log,arama_kullan=False)
+    result = _object_state_or_empty(result)
+    if not result:
+        result = {"overall":"FAIL","regeneration_targets":["QA_PARSE_FAIL"]}
+    return result, model
 
 
 def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction=''):
@@ -260,10 +313,12 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
 
     try: caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)
     except Exception as e:
-        log(f'⚠️ Caption üretilemedi: {str(e)[:150]}'); caption_state,model_caption={'reels_aciklamasi':'','reels_hashtagleri':[]},'hata'
+        log(f'⚠️ Caption üretilemedi: {str(e)[:150]}'); caption_state,model_caption={"reels_aciklamasi":"","reels_hashtagleri":[]},'hata'
+    caption_state = _caption_state_normalize(caption_state)
     try: threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)
     except Exception as e:
-        log(f'⚠️ Threads üretilemedi: {str(e)[:150]}'); threads_state,model_threads={'threads_aciklamasi':''},'hata'
+        log(f'⚠️ Threads üretilemedi: {str(e)[:150]}'); threads_state,model_threads={"threads_aciklamasi":""},'hata'
+    threads_state = _threads_state_normalize(threads_state)
 
     for qa_round in range(MAX_QA_REGEN+1):
         qa_rounds=qa_round
@@ -304,11 +359,13 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
         if downstream_caption:
             try: caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)
             except Exception as e:
-                log(f'⚠️ Caption regeneration başarısız: {str(e)[:150]}'); caption_state={'reels_aciklamasi':'','reels_hashtagleri':[]}
+                log(f'⚠️ Caption regeneration başarısız: {str(e)[:150]}'); caption_state={"reels_aciklamasi":"","reels_hashtagleri":[]}
+            caption_state = _caption_state_normalize(caption_state)
         if downstream_threads:
             try: threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)
             except Exception as e:
-                log(f'⚠️ Threads regeneration başarısız: {str(e)[:150]}'); threads_state={'threads_aciklamasi':''}
+                log(f'⚠️ Threads regeneration başarısız: {str(e)[:150]}'); threads_state={"threads_aciklamasi":""}
+            threads_state = _threads_state_normalize(threads_state)
 
     return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,model_caption,model_threads,False
 
@@ -337,7 +394,7 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     state['qa_state_final']=qa_state
     if not qa_pass:
         _ilerleme(ilerlemeyi_guncelle,8); log_ekle('❌ QA PASS alınamadı; TTS/render aşaması güvenli biçimde durduruldu.')
-        return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':False,'ses_dosyasi':'','secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':'','temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':False,'pipeline_state':state}
+        return {'seslendirme_metni':_object_state_or_empty(reels_state).get('seslendirme_metni',''),'reels_aciklamasi':_caption_state_normalize(caption_state).get('reels_aciklamasi',''),'reels_hashtagleri':_caption_state_normalize(caption_state).get('reels_hashtagleri',[]),'kapak_basliklari':_object_state_or_empty(reels_state).get('kapak_basliklari',[]),'threads_aciklamasi':_threads_state_normalize(threads_state).get('threads_aciklamasi',''),'ses_basarili':False,'ses_dosyasi':'','secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':'','temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':False,'pipeline_state':state}
 
     _ilerleme(ilerlemeyi_guncelle,8); log_ekle(f'🎧 Hazır ses kullanılıyor ({ses_modu} → {_ses_modu_sesi(ses_modu)}); tekrar TTS üretilmiyor.')
     _ilerleme(ilerlemeyi_guncelle,9); log_ekle('🎬 Videoya AI sesi ekleniyor (FFmpeg)...')
@@ -347,7 +404,7 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     input_media=medya_raporu(temp_input_video,'INPUT FINAL',log_ekle) if os.path.exists(temp_input_video) else {}
     output_media=medya_raporu(final,'OUTPUT FINAL',log_ekle) if final else {}
     log_ekle('🏁 Pipeline tamamlandı.')
-    return {'seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':qa_pass,'input_media':input_media,'output_media':output_media,'pipeline_state':state}
+    return {'seslendirme_metni':_object_state_or_empty(reels_state).get('seslendirme_metni',''),'reels_aciklamasi':_caption_state_normalize(caption_state).get('reels_aciklamasi',''),'reels_hashtagleri':_caption_state_normalize(caption_state).get('reels_hashtagleri',[]),'kapak_basliklari':_object_state_or_empty(reels_state).get('kapak_basliklari',[]),'threads_aciklamasi':_threads_state_normalize(threads_state).get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':qa_pass,'input_media':input_media,'output_media':output_media,'pipeline_state':state}
 
 
 def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, log_ekle, ilerlemeyi_guncelle=None, sure_saniye=30):
@@ -364,7 +421,7 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
         router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle
     )
     state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass
-    state['caption_state']=caption_state; state['threads_state']=threads_state; state['qa_state_final']=qa_state
+    state['caption_state']=_caption_state_normalize(caption_state); state['threads_state']=_threads_state_normalize(threads_state); state['qa_state_final']=qa_state
     _ilerleme(ilerlemeyi_guncelle,5,'📝 Caption + hashtag'); _ilerleme(ilerlemeyi_guncelle,6,'🧵 Threads'); _ilerleme(ilerlemeyi_guncelle,7,'🔍 QA')
     _ilerleme(ilerlemeyi_guncelle,8,'🎧 Ses üretiliyor...')
     if not qa_pass:
@@ -375,4 +432,4 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     else:
         log_ekle('❌ Güvenli TTS üretilemedi.')
     log_ekle('🏁 Metin üretimi tamamlandı; video render atlandı.')
-    return {'mode':'text','seslendirme_metni':reels_state.get('seslendirme_metni',''),'reels_aciklamasi':caption_state.get('reels_aciklamasi',''),'reels_hashtagleri':caption_state.get('reels_hashtagleri',[]),'kapak_basliklari':reels_state.get('kapak_basliklari',[]),'threads_aciklamasi':threads_state.get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':qa_pass,'pipeline_state':state}
+    return {'mode':'text','seslendirme_metni':_object_state_or_empty(reels_state).get('seslendirme_metni',''),'reels_aciklamasi':_caption_state_normalize(caption_state).get('reels_aciklamasi',''),'reels_hashtagleri':_caption_state_normalize(caption_state).get('reels_hashtagleri',[]),'kapak_basliklari':_object_state_or_empty(reels_state).get('kapak_basliklari',[]),'threads_aciklamasi':_threads_state_normalize(threads_state).get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':'','temp_input_video':'','fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':qa_pass,'pipeline_state':state}
