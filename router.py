@@ -6,6 +6,11 @@ from config import API_KEYS, METIN_MODELLERI, ARAMA_MODELLERI, SES_MODELLERI, VI
 from utils import guvenli_json_yukle
 from media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
+# A Gemini request must never be able to hold a GitHub Actions runner indefinitely.
+# 120s is long enough for the normal Flash/TTS calls while still allowing the
+# router to move to the next key/model instead of leaving Telegram stuck for hours.
+REQUEST_TIMEOUT_MS = 120_000
+
 class SmartRouter:
     def __init__(self) -> None:
         self.blacklist = {}
@@ -13,7 +18,10 @@ class SmartRouter:
         self.clients = {}
         for mail, api_key in API_KEYS.items():
             if api_key and api_key.strip():
-                self.clients[mail] = genai.Client(api_key=api_key.strip())
+                self.clients[mail] = genai.Client(
+                    api_key=api_key.strip(),
+                    http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+                )
 
     def _is_banned(self, mail: str, model: str) -> bool:
         now=time.time(); bl=self.blacklist
@@ -47,6 +55,7 @@ class SmartRouter:
         if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m: return "quota",0
         if "400" in m or "invalid_argument" in m or "unsupported" in m: return "model_config",COOLDOWN_BULUNAMADI
         if "503" in m or "unavailable" in m: return "combo",COOLDOWN_SUNUCU
+        if "timeout" in m.lower() or "timed out" in m.lower(): return "combo",COOLDOWN_DIGER
         return "combo",COOLDOWN_DIGER
     def _handle_hata(self,mail,model,hata_metni,log_ekle)->str:
         scope,cooldown=self._parse_hata(hata_metni)
@@ -185,5 +194,4 @@ class SmartRouter:
             temp_dosya_temizle(raw)
             return (ok,info if ok else None)
         except Exception as e:
-            log_ekle(f"❌ Çoklu TTS başarısız: {str(e)[:220]}")
-            return False,None
+            log_ekle(f"❌ Çoklu TTS başarısız: {str(e)[:220]}"); return False,None
