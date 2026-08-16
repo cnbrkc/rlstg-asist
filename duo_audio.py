@@ -1,8 +1,9 @@
-"""Duo Autonoe + Charon ses timeline katmanı.
+"""Duo/solo multi-speaker TTS layer.
 
-Duo konuşması tek bir Gemini multi-speaker TTS isteğinde üretilir. Böylece
-konuşma segmentleri arasında ayrı WAV üretip birleştirme yapılmaz; Gemini tek
-bir sürekli ses akışı üretir. Solo/legacy TTS akışına dokunulmaz.
+A DUO conversation is generated in one Gemini multi-speaker TTS request, so
+there is no per-segment TTS fan-out and no WAV stitching. SOLO modes use the
+same single request with only their permitted voice configured. Legacy fallback
+is handled by the caller when this request fails.
 """
 from typing import List, Dict, Any
 
@@ -26,7 +27,7 @@ def _duo_transcript(segments: List[Dict[str, Any]]) -> str:
 
 
 def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CARPANI):
-    """Generate the complete Duo dialogue in ONE multi-speaker TTS request."""
+    """Generate the complete selected voice mode in ONE TTS request."""
     valid = [
         s for s in (segments or [])
         if isinstance(s, dict)
@@ -40,19 +41,22 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     if not transcript:
         return False, None, []
 
-    # Gemini supports up to two speakers in one TTS request. The configured
-    # speaker names in the transcript are mapped to the existing Autonoe/Charon
-    # voices. Speed adjustment is applied once to the complete returned WAV.
-    speaker_voices = [("Autonoe", "Autonoe"), ("Charon", "Charon")]
-    log_ekle(f"🎙️ Duo TTS tek çağrı: {len(valid)} segment → Autonoe + Charon")
+    speakers_present = []
+    if any(str(s.get("speaker", "")).strip().lower() == "female" for s in valid):
+        speakers_present.append(("Autonoe", "Autonoe"))
+    if any(str(s.get("speaker", "")).strip().lower() == "male" for s in valid):
+        speakers_present.append(("Charon", "Charon"))
+
+    mode_label = "DUO" if len(speakers_present) == 2 else speakers_present[0][0]
+    log_ekle(f"🎙️ {mode_label} TTS tek çağrı: {len(valid)} segment")
     ok, info = router.coklu_ses_uret(
         transcript,
-        speaker_voices,
+        speakers_present,
         output_path,
         log_ekle,
         hiz_carpani=hiz_carpani,
     )
     if not ok:
-        log_ekle("⚠️ Tek çağrı Duo TTS başarısız; legacy tek sesli fallback kullanılacak.")
+        log_ekle("⚠️ Tek çağrı TTS başarısız; legacy fallback kullanılacak.")
         return False, None, []
     return True, info, []
