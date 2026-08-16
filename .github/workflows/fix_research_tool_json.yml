@@ -16,10 +16,14 @@ jobs:
           from pathlib import Path
           p=Path('router.py')
           s=p.read_text(encoding='utf-8')
+          start=s.index('    def metin_uret(')
+          end=s.index('    def video_analiz_et(', start)
+          block=s[start:end]
           old='''        kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)\n        if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]): kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]'''
           new='''        if arama_kullan:\n            # Gemini rejects response_mime_type=application/json when Google Search\n            # tool use is enabled. Research prompts already require JSON, so let\n            # the model return JSON text and parse it with guvenli_json_yukle.\n            kwargs=dict(system_instruction=system_prompt)\n            if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):\n                kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]\n        else:\n            kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)'''
-          assert s.count(old)==1, f'expected 1 exact metin_uret block, got {s.count(old)}'
-          p.write_text(s.replace(old,new),encoding='utf-8')
+          assert block.count(old)==1, f'expected 1 exact research block, got {block.count(old)}'
+          s=s[:start]+block.replace(old,new)+s[end:]
+          p.write_text(s,encoding='utf-8')
           PY
           python -m py_compile router.py
           git diff --check
