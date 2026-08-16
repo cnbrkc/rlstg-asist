@@ -1,15 +1,14 @@
 """Telegram pipeline runtime guards.
 
-The guard keeps the production pipeline feature-complete while removing the
-expensive pre-TTS Duo-script LLM round-trip. Reels Creative already returns
-both the voiceover text and the conversation map, so the speaker script is
-constructed locally and sent to Gemini multi-speaker TTS exactly once.
+Production guard: one Reels text generation + one multi-speaker TTS request.
+Social outputs are validated so filesystem/audio artifacts can never be sent as
+Instagram/Facebook captions or Threads text.
 """
 
 import re
 import os
 import pipeline as _pipeline
-from media import gecici_ses_yolu, temp_dosya_temizle, _ses_suresini_al
+from media import gecici_ses_yolu, temp_dosya_temizle
 from config import SES_HIZ_CARPANI, KELIME_HIZI_ORANI
 from duo_audio import duo_ses_uret
 
@@ -22,6 +21,21 @@ _original_reels_creative = _pipeline._reels_creative_calistir
 
 def _text(value):
     return str(value or "").strip()
+
+
+def _looks_like_artifact(value):
+    """Reject local paths / temporary audio or video artifacts as social copy."""
+    text = _text(value)
+    if not text:
+        return True
+    lower = text.lower()
+    if lower.startswith(("/tmp/", "/home/runner/", "data/", "./data/", "../")):
+        return True
+    if re.search(r"\.(wav|mp3|m4a|aac|mp4|mov|webm)(?:\b|$)", lower):
+        return True
+    if "\\tmp\\" in lower or "\\home\\runner\\" in lower:
+        return True
+    return False
 
 
 def _first_fact(fact_state):
@@ -85,12 +99,19 @@ def _caption_guard(router, reels_state, fact_state, editorial_state, video_state
             state, model = {"reels_aciklamasi": "", "reels_hashtagleri": []}, "hata"
         description = _text((state or {}).get("reels_aciklamasi"))
         hashtags = (state or {}).get("reels_hashtagleri") or []
-        if description and hashtags:
-            return state, model
+        hashtags = [
+            re.sub(r"[^\wÇĞİÖŞÜçğıöşü-]", "", _text(x).lstrip("#"))
+            for x in hashtags
+            if _text(x)
+        ]
+        hashtags = [x for x in hashtags if x]
+        if description and not _looks_like_artifact(description) and hashtags:
+            return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, model
         if attempt < SOCIAL_REGEN_MAX:
-            log(f"⚠️ Caption eksik döndü; tek kontrollü yeniden üretim ({attempt + 1}/{SOCIAL_REGEN_MAX}).")
+            reason = "artifact/boş" if _looks_like_artifact(description) else "eksik"
+            log(f"⚠️ Caption {reason} döndü; tek kontrollü yeniden üretim ({attempt + 1}/{SOCIAL_REGEN_MAX}).")
     description, hashtags = _caption_fallback(reels_state, fact_state, editorial_state, video_state)
-    log("⚠️ Caption modeli boş kaldı; Fact Lock tabanlı yerel güvenli caption fallback kullanıldı.")
+    log("⚠️ Caption modeli geçerli sosyal metin vermedi; Fact Lock tabanlı güvenli fallback kullanıldı.")
     return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, "local-fallback"
 
 
@@ -102,38 +123,25 @@ def _threads_guard(router, video_state, fact_state, editorial_state, log):
             log(f"⚠️ Threads üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"threads_aciklamasi": ""}, "hata"
         text = _text((state or {}).get("threads_aciklamasi"))
-        if text:
-            return state, model
+        if text and not _looks_like_artifact(text):
+            return {"threads_aciklamasi": text}, model
         if attempt < SOCIAL_REGEN_MAX:
-            log(f"⚠️ Threads boş döndü; tek kontrollü yeniden üretim ({attempt + 1}/{SOCIAL_REGEN_MAX}).")
+            reason = "artifact/boş" if _looks_like_artifact(text) else "geçersiz"
+            log(f"⚠️ Threads {reason} döndü; tek kontrollü yeniden üretim ({attempt + 1}/{SOCIAL_REGEN_MAX}).")
     text = _threads_fallback(fact_state, editorial_state, video_state)
-    log("⚠️ Threads modeli boş kaldı; Fact Lock tabanlı yerel güvenli Threads fallback kullanıldı.")
+    log("⚠️ Threads modeli geçerli sosyal metin vermedi; Fact Lock tabanlı güvenli fallback kullanıldı.")
     return {"threads_aciklamasi": text}, "local-fallback"
 
 
 def _split_for_speakers(text, conversation_map):
-    """Split one already-approved voiceover text into the planned speaker turns.
-
-    No new wording is generated here: every token comes from the single Reels
-    Creative voiceover text. This removes the second LLM text-generation pass.
-    """
+    """Split the single approved voiceover text locally; never rewrite it."""
     text = _text(text)
     turns = [x for x in (conversation_map or []) if isinstance(x, dict) and _text(x.get("speaker"))]
     if not text or not turns:
         return []
     sentences = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", text) if s.strip()]
-    if len(sentences) < len(turns):
-        words = text.split()
-        n = len(turns)
-        base, extra = divmod(len(words), n)
-        chunks = []
-        pos = 0
-        for i in range(n):
-            size = base + (1 if i < extra else 0)
-            chunks.append(" ".join(words[pos:pos + size]).strip())
-            pos += size
-    else:
-        n = len(turns)
+    n = len(turns)
+    if len(sentences) >= n:
         base, extra = divmod(len(sentences), n)
         chunks = []
         pos = 0
@@ -141,20 +149,23 @@ def _split_for_speakers(text, conversation_map):
             size = base + (1 if i < extra else 0)
             chunks.append(" ".join(sentences[pos:pos + size]).strip())
             pos += size
-    result = []
-    for turn, chunk in zip(turns, chunks):
-        if chunk:
-            result.append({"speaker": _text(turn.get("speaker")).lower(), "text": chunk})
-    return result
+    else:
+        words = text.split()
+        base, extra = divmod(len(words), n)
+        chunks = []
+        pos = 0
+        for i in range(n):
+            size = base + (1 if i < extra else 0)
+            chunks.append(" ".join(words[pos:pos + size]).strip())
+            pos += size
+    return [
+        {"speaker": _text(turn.get("speaker")).lower(), "text": chunk}
+        for turn, chunk in zip(turns, chunks) if chunk
+    ]
 
 
 def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, legacy_voice, log, baslangic_talimati=""):
-    """One Reels text generation + one multi-speaker TTS request.
-
-    Duration is validated after TTS, but no automatic second Reels/TTS generation
-    is performed here. FFmpeg's existing speed-sync path remains responsible for
-    small duration differences, preserving the established render behavior.
-    """
+    """Exactly one Reels text call + one TTS call in the normal path."""
     reels_state, model_reels = _original_reels_creative(
         router, editorial_state, fact_state, video_state, notes, sure_saniye,
         ton, log, KELIME_HIZI_ORANI, ek_talimat=baslangic_talimati or ""
@@ -164,24 +175,27 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
     mode = str(duo_plan.get("mode") or duo_plan.get("uygunluk") or reels_state.get("anlatim_modu") or "DUO").upper()
     conversation_map = duo_plan.get("conversation_map") or []
 
-    # For solo modes, preserve the existing single-voice path. For DUO, the
-    # approved Reels text is split locally according to the model's own map.
     if mode in {"SOLO_FEMALE", "SOLO_MALE"}:
         speaker = "female" if mode == "SOLO_FEMALE" else "male"
-        duo_script = {"contract": {"mode": mode}, "segments": [{"speaker": speaker, "text": reels_state.get("seslendirme_metni", "")}], "model": "local-from-reels", "status": "ready"}
+        segments = [{"speaker": speaker, "text": reels_state.get("seslendirme_metni", "")}]
     else:
         segments = _split_for_speakers(reels_state.get("seslendirme_metni", ""), conversation_map)
-        duo_script = {"contract": {"mode": "DUO"}, "segments": segments, "model": "local-from-reels", "status": "ready" if segments else "fallback"}
 
-    if not duo_script.get("segments"):
-        log("⚠️ Conversation map boş; mevcut legacy tek sesli TTS yolu kullanılıyor.")
-        ses_path = gecici_ses_yolu()
+    duo_script = {
+        "contract": {"mode": mode},
+        "segments": segments,
+        "model": "local-from-reels",
+        "status": "ready" if segments else "fallback",
+    }
+
+    ses_path = gecici_ses_yolu()
+    if segments:
+        ok, info, _ = duo_ses_uret(router, segments, ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
+        mod = mode
+    else:
+        log("⚠️ Conversation map boş; legacy tek sesli TTS yolu kullanılıyor.")
         ok, info = router.ses_uret(reels_state.get("seslendirme_metni", ""), legacy_voice, ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
         mod = "LEGACY"
-    else:
-        ses_path = gecici_ses_yolu()
-        ok, info, _ = duo_ses_uret(router, duo_script["segments"], ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
-        mod = mode
 
     if not ok or not os.path.exists(ses_path):
         temp_dosya_temizle(ses_path)
@@ -189,8 +203,6 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
 
     compatible, duration, ratio = _pipeline._ses_sure_uyumlu_mu(ses_path, sure_saniye)
     log(f"🎚️ TTS gerçek süre kontrolü: video {sure_saniye:.2f}s → ses {duration:.2f}s | oran {ratio:.2f}x")
-    # Keep the generated TTS even when the ratio is slightly outside the old
-    # gate. The existing FFmpeg renderer already performs duration synchronization.
     if not compatible:
         log("⚠️ TTS/video oranı ideal aralığın dışında; ikinci TTS üretimi yapılmayacak, mevcut ses FFmpeg senkronunda kullanılacak.")
     return reels_state, model_reels, duo_plan, duo_script, True, info, mod, ses_path
