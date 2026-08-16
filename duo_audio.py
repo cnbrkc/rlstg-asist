@@ -16,7 +16,9 @@ from character_profiles import voice_for_character
 from media import gecici_ses_yolu, temp_dosya_temizle
 from config import SES_HIZ_CARPANI
 
-DUO_TTS_MAX_WORKERS = 5
+# 3 eşzamanlı istek, API tarafında gereksiz burst/rate-limit riskini artırmadan
+# 5 segmentlik Duo'nun seri üretimine göre ciddi wall-clock kazancı sağlar.
+DUO_TTS_MAX_WORKERS = 3
 
 
 def _wav_format(path: str):
