@@ -396,6 +396,43 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
         _ilerleme(ilerlemeyi_guncelle,8); log_ekle('❌ QA PASS alınamadı; TTS/render aşaması güvenli biçimde durduruldu.')
         return {'seslendirme_metni':_object_state_or_empty(reels_state).get('seslendirme_metni',''),'reels_aciklamasi':_caption_state_normalize(caption_state).get('reels_aciklamasi',''),'reels_hashtagleri':_caption_state_normalize(caption_state).get('reels_hashtagleri',[]),'kapak_basliklari':_object_state_or_empty(reels_state).get('kapak_basliklari',[]),'threads_aciklamasi':_threads_state_normalize(threads_state).get('threads_aciklamasi',''),'ses_basarili':False,'ses_dosyasi':'','secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':'','temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':False,'pipeline_state':state}
 
+    # Render öncesi invariant: QA'nın "ses hazır" dediği dosya gerçekten mevcut olmalı.
+    # Runner / temp-file cleanup gibi dış etkenlerle path kaybolduysa final render'a
+    # sahte başarıyla devam etmeyelim; aynı seçili Duo/solo moddan tek kontrollü recovery yapalım.
+    if ses_basarili and (not ses_dosyasi or not os.path.exists(ses_dosyasi)):
+        log_ekle('⚠️ Render öncesi hazır TTS dosyası bulunamadı; aynı ses modu/script ile kontrollü TTS recovery başlatılıyor (1/1).')
+        recovery_path=gecici_ses_yolu()
+        try:
+            recovery_ok,recovery_info,recovery_mode=_duo_ses_veya_legacy_uret(
+                router,duo_script,_object_state_or_empty(reels_state).get('seslendirme_metni',''),legacy_voice,log_ekle,recovery_path
+            )
+        except Exception as exc:
+            recovery_ok,recovery_info,recovery_mode=False,None,ses_modu
+            log_ekle(f'❌ TTS recovery başarısız: {str(exc)[:180]}')
+        if recovery_ok and os.path.exists(recovery_path):
+            recovery_uyumlu,recovery_sure,recovery_oran=_ses_sure_uyumlu_mu(recovery_path,sure_saniye)
+            log_ekle(f'🎚️ Recovery TTS süre kontrolü: video {sure_saniye:.2f}s → ses {recovery_sure:.2f}s | oran {recovery_oran:.2f}x')
+            if recovery_uyumlu:
+                ses_dosyasi=recovery_path
+                kullanilan_ses_modeli=recovery_info
+                ses_modu=recovery_mode
+                state['ses_modu']=ses_modu
+                log_ekle(f'✅ TTS recovery başarılı: {ses_modu} → {_ses_modu_sesi(ses_modu)}')
+            else:
+                temp_dosya_temizle(recovery_path)
+                ses_basarili=False
+                ses_dosyasi=''
+                log_ekle('❌ Recovery TTS gerçek süre aralığına girmedi; render durduruldu.')
+        else:
+            temp_dosya_temizle(recovery_path)
+            ses_basarili=False
+            ses_dosyasi=''
+            log_ekle('❌ Render için geçerli TTS dosyası oluşturulamadı; render durduruldu.')
+
+    if not ses_basarili or not ses_dosyasi or not os.path.exists(ses_dosyasi):
+        log_ekle('❌ Pipeline tamamlanamadı: render için doğrulanmış TTS dosyası yok.')
+        return {'seslendirme_metni':_object_state_or_empty(reels_state).get('seslendirme_metni',''),'reels_aciklamasi':_caption_state_normalize(caption_state).get('reels_aciklamasi',''),'reels_hashtagleri':_caption_state_normalize(caption_state).get('reels_hashtagleri',[]),'kapak_basliklari':_object_state_or_empty(reels_state).get('kapak_basliklari',[]),'threads_aciklamasi':_threads_state_normalize(threads_state).get('threads_aciklamasi',''),'ses_basarili':False,'ses_dosyasi':'','secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':'','temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':qa_pass,'input_media':{},'output_media':{},'pipeline_state':state}
+
     _ilerleme(ilerlemeyi_guncelle,8); log_ekle(f'🎧 Hazır ses kullanılıyor ({ses_modu} → {_ses_modu_sesi(ses_modu)}); tekrar TTS üretilmiyor.')
     _ilerleme(ilerlemeyi_guncelle,9); log_ekle('🎬 Videoya AI sesi ekleniyor (FFmpeg)...')
     output=gecici_dosya_yolu('output','mp4')
@@ -403,7 +440,10 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     final=output if render_ok and os.path.exists(output) else ''
     input_media=medya_raporu(temp_input_video,'INPUT FINAL',log_ekle) if os.path.exists(temp_input_video) else {}
     output_media=medya_raporu(final,'OUTPUT FINAL',log_ekle) if final else {}
-    log_ekle('🏁 Pipeline tamamlandı.')
+    if final:
+        log_ekle('🏁 Pipeline tamamlandı.')
+    else:
+        log_ekle('❌ Pipeline tamamlanamadı: FFmpeg final video üretemedi.')
     return {'seslendirme_metni':_object_state_or_empty(reels_state).get('seslendirme_metni',''),'reels_aciklamasi':_caption_state_normalize(caption_state).get('reels_aciklamasi',''),'reels_hashtagleri':_caption_state_normalize(caption_state).get('reels_hashtagleri',[]),'kapak_basliklari':_object_state_or_empty(reels_state).get('kapak_basliklari',[]),'threads_aciklamasi':_threads_state_normalize(threads_state).get('threads_aciklamasi',''),'ses_basarili':ses_basarili,'ses_dosyasi':ses_dosyasi,'secilen_ses_ingilizce':legacy_voice,'kullanilan_metin_modeli':model_reels,'kullanilan_ses_modeli':kullanilan_ses_modeli,'kullanilan_threads_modeli':model_threads,'ses_modu':ses_modu,'ses_modu_sesi':_ses_modu_sesi(ses_modu),'qa_regeneration_rounds':qa_rounds,'final_video':final,'temp_input_video':temp_input_video,'fact_lock':fact_state,'editorial_brief':editorial_state,'selected_hook':_secilen_hook_getir(reels_state),'duo_plan':duo_plan,'duo_script':duo_script,'qa_result':qa_state,'qa_pass':qa_pass,'input_media':input_media,'output_media':output_media,'pipeline_state':state}
 
 
