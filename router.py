@@ -123,8 +123,15 @@ class SmartRouter:
 
     def metin_uret(self,icerik:Any,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=True):
         model_listesi=model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
-        kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
-        if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]): kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
+        if arama_kullan:
+            # Gemini rejects response_mime_type=application/json when Google Search
+            # tool use is enabled. Research prompts already require JSON, so let
+            # the model return JSON text and parse it with guvenli_json_yukle.
+            kwargs=dict(system_instruction=system_prompt)
+            if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
+                kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
+        else:
+            kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
         response,info=self._make_request(
             model_listesi,
             icerik,
