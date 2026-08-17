@@ -7,6 +7,7 @@ is loaded so transient Gemini/Duo failures cannot strand a valid render.
 
 import re
 import pipeline as _pipeline
+from router import SmartRouter as _SmartRouter
 
 
 def _text(value):
@@ -22,6 +23,24 @@ def _artifact(value):
         or "\\tmp\\" in text
         or "\\home\\runner\\" in text
     )
+
+
+# HARD RULE: every TTS path must use the configured 1.20x speed. The caller
+# cannot accidentally bypass it by passing 1.0 during a fallback/regeneration.
+_ORIGINAL_SES_URET = _SmartRouter.ses_uret
+_ORIGINAL_COKLU_SES_URET = _SmartRouter.coklu_ses_uret
+
+
+def _ses_uret_12x(self, metin, ses_adi, cikti_dosyasi, log_ekle, hiz_carpani=1.0):
+    return _ORIGINAL_SES_URET(self, metin, ses_adi, cikti_dosyasi, log_ekle, hiz_carpani=1.2)
+
+
+def _coklu_ses_uret_12x(self, metin, speaker_voices, cikti_dosyasi, log_ekle, hiz_carpani=1.0):
+    return _ORIGINAL_COKLU_SES_URET(self, metin, speaker_voices, cikti_dosyasi, log_ekle, hiz_carpani=1.2)
+
+
+_SmartRouter.ses_uret = _ses_uret_12x
+_SmartRouter.coklu_ses_uret = _coklu_ses_uret_12x
 
 
 _original_qa_regeneration_loop = _pipeline._qa_regeneration_loop
@@ -174,7 +193,7 @@ def _duo_ve_ses_yenile_compat(router, reels_state, duo_plan, editorial_state, fa
             _pipeline._mod_icin_legacy_ses("DUO", legacy_voice),
             fallback_path,
             log,
-            hiz_carpani=_pipeline.SES_HIZ_CARPANI,
+            hiz_carpani=1.2,
         )
         if fallback_ok and _pipeline.os.path.exists(fallback_path):
             fallback_sure = _pipeline._ses_suresini_al(fallback_path)
@@ -215,5 +234,17 @@ def _hard_caption_guard(router, reels_state, fact_state, editorial_state, video_
 
 
 _pipeline._caption_calistir = _hard_caption_guard
+
+
+# Telegram social output contract: video caption contains the Instagram/Facebook
+# description + hashtags; the next message contains ONLY the Threads text.
+import telegram_pipeline_worker as _worker
+
+
+def _threads_only_bundle(caption, hashtags, threads):
+    return _text(threads)
+
+
+_worker._social_bundle = _threads_only_bundle
 
 import telegram_pipeline_guard  # noqa: F401,E402
