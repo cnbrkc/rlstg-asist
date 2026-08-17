@@ -119,12 +119,16 @@ class SmartRouter:
 
     def metin_uret(self,icerik:Any,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=True):
         model_listesi=model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
-        # Keep structured JSON output enabled for RESEARCH/Fact Lock too.
-        # This was present in mainbackup but was accidentally removed from main;
-        # without it, Google Search can return prose and guvenli_json_yukle fails.
-        kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
-        if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
-            kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
+        if arama_kullan:
+            # Gemini generateContent currently rejects response_mime_type/application-json
+            # when Google Search tool use is enabled for the affected model/key combos.
+            # Research prompt already requires JSON and guvenli_json_yukle() validates/parses
+            # the returned JSON text, so keep Search enabled and use prompt-enforced JSON here.
+            kwargs=dict(system_instruction=system_prompt)
+            if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
+                kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
+        else:
+            kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
         response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False,require_text=True)
         return guvenli_json_yukle(getattr(response,"text","")),info
 
