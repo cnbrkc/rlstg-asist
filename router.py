@@ -166,14 +166,28 @@ class SmartRouter:
         return guvenli_json_yukle(getattr(response,"text","")),info
 
     def _tts_performans_promptu_olustur(self,metin:str,ses_adi:str)->str:
-        return f"Speak naturally in Turkish as a professional automotive presenter. Voice: {ses_adi}. Keep the transcript exactly as provided. Add no extra words.\n\nTRANSCRIPT:\n{metin}"
+        return (
+            f"Perform this Turkish automotive voiceover with the configured voice {ses_adi}. "
+            "Natural human delivery, not a newsreader and not robotic. Use conversational intonation, "
+            "sentence-level emphasis, subtle dynamic energy, and short natural breaths/pauses at punctuation. "
+            "Let excitement, curiosity, surprise, seriousness or amusement follow the meaning of each line. "
+            "Do not flatten the whole performance into one emotional register. Keep the transcript exactly as provided; "
+            "add no words, omit no words, and do not read formatting instructions aloud.\n\n"
+            f"TRANSCRIPT:\n{metin}"
+        )
 
     def _tts_coklu_promptu_olustur(self,metin:str,speaker_names)->str:
         names = ", ".join(speaker_names)
-        return (f"Perform the following Turkish automotive dialogue naturally as a continuous conversation between {names}. "
-                "Use the configured voice for each named speaker. Keep every spoken word exactly as provided; add no words, omit no words, "
-                "and do not read speaker labels aloud. Preserve the order and conversational timing.\n\n"
-                f"TRANSCRIPT:\n{metin}")
+        return (
+            f"Perform the following Turkish automotive dialogue as a natural two-person conversation between {names}. "
+            "Use the configured voice for each named speaker and keep each speaker's identity stable. "
+            "This is an expressive conversational performance: vary intonation and energy with the meaning, use subtle "
+            "curiosity, confidence, surprise, amusement or seriousness when appropriate, and leave short natural pauses "
+            "between turns and at punctuation. Avoid a robotic, flat, studio-announcer delivery. Do not overact. "
+            "Keep every spoken word exactly as provided; add no words, omit no words, and do not read speaker labels aloud. "
+            "Preserve order and conversational timing.\n\n"
+            f"TRANSCRIPT:\n{metin}"
+        )
 
     def _tts_response_audio_bytes(self,response):
         try:

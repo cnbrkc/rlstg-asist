@@ -192,14 +192,8 @@ def _caption_with_hashtags(description, hashtags):
     return desc[:available].rstrip() + suffix, truncated
 
 
-def _social_bundle(caption, hashtags, threads):
-    desc = str(caption or "").strip()
-    tags = " ".join("#" + str(x).lstrip("#").strip() for x in (hashtags or []) if str(x).strip())
-    instagram = desc + ("\n\n" + tags if tags else "")
-    return ("📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n"
-            + instagram
-            + "\n\n🧵 THREADS AÇIKLAMASI\n\n"
-            + str(threads or "").strip())[:TELEGRAM_TEXT_LIMIT]
+def _threads_message(threads):
+    return str(threads or '').strip()
 
 
 def process(path):
@@ -282,7 +276,8 @@ def process(path):
     edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
     send_video(final, video_caption)
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
-    send_message(_social_bundle(caption, hashtags, threads))
+    if threads:
+        send_message(_threads_message(threads))
     Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

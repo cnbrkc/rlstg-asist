@@ -188,34 +188,50 @@ def _kalite_filtresi_olustur(input_bilgi: dict, log_ekle) -> tuple[str | None, i
     return "unsharp=5:5:0.30:5:5:0.0", width
 
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
-    if not ses_yolu or not os.path.exists(ses_yolu): return False
-    input_bilgi=medya_raporu(video_yolu,"INPUT",log_ekle)
-    medya_raporu(ses_yolu,"TTS 1.20x SONRASI",log_ekle)
-    video_sure=video_suresini_al(video_yolu); ses_sure=_ses_suresini_al(ses_yolu); video_filtresi=None
-    if video_sure>0 and ses_sure>0:
-        fark=abs(video_sure-ses_sure)
-        log_ekle(f"🎚️ Ses/video süre uyumu: video {video_sure:.2f}s → ses {ses_sure:.2f}s | video hızı değiştirilmeden ses senkronlanacak.")
-        if fark >= 0.02:
-            if ses_sure < video_sure:
-                log_ekle(f"🎚️ TTS video süresinden {fark:.2f}s kısa; eksik süre sessizlikle doldurulacak.")
-            else:
-                log_ekle(f"🎚️ TTS video süresinden {fark:.2f}s uzun; final ses video süresinde kesilecek.")
+    """TTS'yi 1.20x sonrası gerçek süresiyle videoya tam senkronlar.
 
+    TTS hızı değişmez: SES_HIZ_CARPANI = 1.20x. Video, TTS'nin gerçek süresine
+    (yukarı yuvarlanmış saniye) göre hızlandırılır veya yavaşlatılır.
+    """
+    if not ses_yolu or not os.path.exists(ses_yolu):
+        return False
+    input_bilgi = medya_raporu(video_yolu, "INPUT", log_ekle)
+    medya_raporu(ses_yolu, "TTS 1.20x SONRASI", log_ekle)
+    video_sure = video_suresini_al(video_yolu)
+    ses_sure = _ses_suresini_al(ses_yolu)
+    if video_sure <= 0 or ses_sure <= 0:
+        log_ekle("❌ Senkron için geçerli video/TTS süresi alınamadı.")
+        return False
+    import math
+    hedef_sure = float(max(1, math.ceil(ses_sure)))
+    video_hiz = video_sure / hedef_sure
+    if video_hiz > MAKS_VIDEO_HIZLANDIRMA:
+        video_hiz = MAKS_VIDEO_HIZLANDIRMA
+        hedef_sure = video_sure / video_hiz
+        log_ekle(f"⚠️ TTS çok kısa; video hızlandırma sınırı {MAKS_VIDEO_HIZLANDIRMA:.2f}x uygulandı.")
+    elif video_hiz < MIN_VIDEO_YAVASLATMA:
+        video_hiz = MIN_VIDEO_YAVASLATMA
+        hedef_sure = video_sure / video_hiz
+        log_ekle(f"⚠️ TTS çok uzun; video yavaşlatma sınırı {MIN_VIDEO_YAVASLATMA:.2f}x uygulandı.")
+    speed_filter = f"setpts=PTS/{video_hiz:.8f}"
+    hareket = 'hızlandırma' if video_hiz > 1.001 else 'yavaşlatma' if video_hiz < 0.999 else '1:1'
+    log_ekle(f"🎚️ VIDEO-TTS SENKRONU: video {video_sure:.2f}s + TTS {ses_sure:.2f}s → hedef {hedef_sure:.2f}s | video hızı {video_hiz:.3f}x ({hareket}).")
     kalite_filtresi, _ = _kalite_filtresi_olustur(input_bilgi, log_ekle)
+    video_filtresi = speed_filter
     if kalite_filtresi:
-        video_filtresi = f"{video_filtresi},{kalite_filtresi}" if video_filtresi else kalite_filtresi
-
-    # Kaynak FPS'i koru. Önceki render implicit olarak 25 FPS'e düşebiliyordu.
-    # Böylece 30 FPS giriş 30 FPS olarak çıkar; setpts yalnızca zaman ölçeğini değiştirir.
+        video_filtresi = f"{video_filtresi},{kalite_filtresi}"
     output_fps = input_bilgi.get("fps") or 30.0
-    komut=[FFMPEG_BIN,"-y","-i",video_yolu,"-i",ses_yolu]
-    if video_filtresi: komut += ["-filter:v",video_filtresi]
-    komut += ["-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset",VIDEO_PRESET,"-crf",str(VIDEO_CRF),"-pix_fmt","yuv420p","-r",f"{output_fps:.6f}","-af","apad","-c:a","aac","-ar",str(FINAL_AUDIO_SAMPLE_RATE),"-ac",str(SES_KANAL),"-b:a",FINAL_AUDIO_BITRATE] + (["-t",f"{video_sure:.6f}"] if video_sure > 0 else []) + [cikti_yolu]
+    komut = [FFMPEG_BIN, "-y", "-i", video_yolu, "-i", ses_yolu, "-filter:v", video_filtresi, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", str(VIDEO_CRF), "-pix_fmt", "yuv420p", "-r", f"{output_fps:.6f}", "-af", "apad", "-c:a", "aac", "-ar", str(FINAL_AUDIO_SAMPLE_RATE), "-ac", str(SES_KANAL), "-b:a", FINAL_AUDIO_BITRATE, "-t", f"{hedef_sure:.6f}", cikti_yolu]
     try:
-        r=subprocess.run(komut,capture_output=True,text=True,timeout=FFMPEG_TIMEOUT)
-        if r.returncode!=0: log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-800:]}"); return False
-        medya_raporu(cikti_yolu,"OUTPUT",log_ekle); return os.path.exists(cikti_yolu) and os.path.getsize(cikti_yolu)>0
-    except Exception as e: log_ekle(f"⚠️ Video render hatası: {e}"); return False
+        r = subprocess.run(komut, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
+        if r.returncode != 0:
+            log_ekle(f"⚠️ Video render ffmpeg hatası: {(r.stderr or '')[-800:]}")
+            return False
+        medya_raporu(cikti_yolu, "OUTPUT", log_ekle)
+        return os.path.exists(cikti_yolu) and os.path.getsize(cikti_yolu) > 0
+    except Exception as e:
+        log_ekle(f"⚠️ Video render hatası: {e}")
+        return False
 
 def _ses_suresini_al(dosya_yolu: str) -> float:
     try:

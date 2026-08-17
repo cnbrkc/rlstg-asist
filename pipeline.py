@@ -256,7 +256,9 @@ def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, 
 
         uyumlu,ses_suresi,oran=_ses_sure_uyumlu_mu(ses_dosyasi,sure_saniye)
         log(f'🎚️ TTS gerçek süre kontrolü: video {sure_saniye:.2f}s → ses {ses_suresi:.2f}s | oran {oran:.2f}x')
-        if uyumlu:
+        if os.path.exists(ses_dosyasi) and ses_suresi > 0:
+            if not uyumlu:
+                log(f'🎚️ TTS/video oranı {oran:.2f}x; yeniden TTS üretmek yerine video senkron katmanına bırakılıyor.')
             return reels_state,model_reels,duo_plan,duo_script,True,info,mod,ses_dosyasi
 
         if mod in {'DUO','SOLO_FEMALE','SOLO_MALE'}:
@@ -307,7 +309,9 @@ def _duo_ve_ses_yenile(router,reels_state,duo_plan,editorial_state,fact_state,vi
             return duo_script,False,None,mod
         uyumlu,ses_suresi,oran=_ses_sure_uyumlu_mu(ses_dosyasi,sure_saniye)
         log(f'🎚️ QA sonrası TTS süre kontrolü: video {sure_saniye:.2f}s → ses {ses_suresi:.2f}s | oran {oran:.2f}x')
-        if uyumlu:
+        if os.path.exists(ses_dosyasi) and ses_suresi > 0:
+            if not uyumlu:
+                log(f'🎚️ QA TTS/video oranı {oran:.2f}x; video senkron katmanına bırakılıyor.')
             return duo_script,True,(info,ses_dosyasi),mod
         temp_dosya_temizle(ses_dosyasi)
         if deneme < VOICE_REGEN_MAX:
