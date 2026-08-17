@@ -1,42 +1,63 @@
-import os
-import tempfile
-import wave
+"""duo_audio.py için birim testleri.
+
+Not: Gerçek TTS üretimi router.coklu_ses_uret çağrısı yaptığından mock gerektirir.
+Bu testler yalnızca transcript hazırlığı ve performance tag döngüsünü doğrular;
+TTS network çağrısını GitHub Actions üzerinde izole çalıştırmak pahalıdır.
+"""
 import unittest
 
-from duo_audio import _wavleri_birlestir
-
-
-def _wav(path, frames, rate=48000):
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(rate)
-        wf.writeframes(b"\x00\x00" * frames)
+from duo_audio import _duo_transcript, _performance_tag
 
 
 class DuoAudioTests(unittest.TestCase):
-    def test_wav_segments_are_concatenated_without_reencoding(self):
-        with tempfile.TemporaryDirectory() as d:
-            a = os.path.join(d, "a.wav")
-            b = os.path.join(d, "b.wav")
-            out = os.path.join(d, "out.wav")
-            _wav(a, 4800)
-            _wav(b, 9600)
-            self.assertTrue(_wavleri_birlestir([a, b], out))
-            with wave.open(out, "rb") as wf:
-                self.assertEqual(wf.getnchannels(), 1)
-                self.assertEqual(wf.getsampwidth(), 2)
-                self.assertEqual(wf.getframerate(), 48000)
-                self.assertEqual(wf.getnframes(), 14400)
+    def test_performance_tag_cycles_through_female_tags(self):
+        tags = [_performance_tag("female", i) for i in range(5)]
+        self.assertEqual(tags[0], "[curious]")
+        self.assertEqual(tags[4], "[curious]")  # 4 mod 4 = 0
+        self.assertNotEqual(tags[0], tags[1])
 
-    def test_mismatched_formats_are_rejected(self):
-        with tempfile.TemporaryDirectory() as d:
-            a = os.path.join(d, "a.wav")
-            b = os.path.join(d, "b.wav")
-            out = os.path.join(d, "out.wav")
-            _wav(a, 100, 48000)
-            _wav(b, 100, 44100)
-            self.assertFalse(_wavleri_birlestir([a, b], out))
+    def test_performance_tag_cycles_through_male_tags(self):
+        tags = [_performance_tag("male", i) for i in range(5)]
+        self.assertEqual(tags[0], "[confident]")
+        self.assertEqual(tags[4], "[confident]")
+
+    def test_transcript_marks_speakers_and_first_pause(self):
+        segments = [
+            {"speaker": "female", "text": "Merhaba."},
+            {"speaker": "male", "text": "Selam, nasılsın?"},
+            {"speaker": "female", "text": "İyiyim."},
+        ]
+        transcript = _duo_transcript(segments)
+        lines = transcript.split("\n")
+        self.assertEqual(len(lines), 3)
+        # İlk satırda pause yok (önceki yok); sonraki satırlarda [short pause] var.
+        self.assertNotIn("[short pause]", lines[0])
+        self.assertIn("[short pause]", lines[1])
+        self.assertIn("[short pause]", lines[2])
+        # Speaker etiketleri doğru.
+        self.assertTrue(lines[0].startswith("Autonoe:"))
+        self.assertTrue(lines[1].startswith("Charon:"))
+        self.assertTrue(lines[2].startswith("Autonoe:"))
+        # Performance tag'ler eklenmiş.
+        self.assertIn("[curious]", lines[0])
+        self.assertIn("[confident]", lines[1])
+
+    def test_transcript_skips_invalid_segments(self):
+        segments = [
+            {"speaker": "female", "text": "Geçerli."},
+            {"speaker": "robot", "text": "Atılmalı."},
+            {"speaker": "male", "text": ""},
+            {"speaker": "male", "text": "Sonraki geçerli."},
+        ]
+        transcript = _duo_transcript(segments)
+        lines = transcript.split("\n")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("Autonoe:"))
+        self.assertTrue(lines[1].startswith("Charon:"))
+
+    def test_transcript_empty_for_no_segments(self):
+        self.assertEqual(_duo_transcript([]), "")
+        self.assertEqual(_duo_transcript(None), "")
 
 
 if __name__ == "__main__":

@@ -5,89 +5,21 @@ Social outputs are validated so filesystem/audio artifacts can never be sent as
 Instagram/Facebook captions or Threads text.
 """
 
-import re
 import os
 import pipeline as _pipeline
 from media import gecici_ses_yolu, temp_dosya_temizle
 from config import SES_HIZ_CARPANI, KELIME_HIZI_ORANI
 from duo_audio import duo_ses_uret
+from social_fallbacks import (
+    caption_fallback, looks_like_artifact, sanitize_hashtags,
+    text as _text, threads_fallback,
+)
 
 SOCIAL_REGEN_MAX = 1
 
 _original_caption = _pipeline._caption_calistir
 _original_threads = _pipeline._threads_calistir
 _original_reels_creative = _pipeline._reels_creative_calistir
-
-
-def _text(value):
-    return str(value or "").strip()
-
-
-def _looks_like_artifact(value):
-    """Reject local paths / temporary audio or video artifacts as social copy."""
-    text = _text(value)
-    if not text:
-        return True
-    lower = text.lower()
-    if lower.startswith(("/tmp/", "/home/runner/", "data/", "./data/", "../")):
-        return True
-    if re.search(r"\.(wav|mp3|m4a|aac|mp4|mov|webm)(?:\b|$)", lower):
-        return True
-    if "\\tmp\\" in lower or "\\home\\runner\\" in lower:
-        return True
-    return False
-
-
-def _first_fact(fact_state):
-    facts = (fact_state or {}).get("facts") if isinstance(fact_state, dict) else []
-    if isinstance(facts, list):
-        for item in facts:
-            if isinstance(item, dict) and _text(item.get("fact")):
-                status = _text(item.get("status")).upper()
-                if status in {"OBSERVED", "VERIFIED"}:
-                    return _text(item.get("fact"))
-    return ""
-
-
-def _model_identity(video_state):
-    if not isinstance(video_state, dict):
-        return ""
-    ident = video_state.get("video_identity") or {}
-    if not isinstance(ident, dict):
-        return ""
-    brand = _text(ident.get("brand"))
-    model = _text(ident.get("exact_model"))
-    if model and model.upper() != "UNKNOWN":
-        return model
-    if brand and brand.upper() != "UNKNOWN":
-        return brand
-    return ""
-
-
-def _caption_fallback(reels_state, fact_state, editorial_state, video_state):
-    identity = _model_identity(video_state) or "bu araç"
-    editorial = editorial_state if isinstance(editorial_state, dict) else {}
-    core = _text(editorial.get("core_story"))
-    why = _text(editorial.get("why_it_matters"))
-    fact = _first_fact(fact_state)
-    parts = [
-        f"{identity}: videonun ötesinde asıl merak edilen taraf biraz da burada başlıyor.",
-        core or fact or "Videoda öne çıkan detayları Fact Lock sınırları içinde takip ediyoruz.",
-        why or fact,
-        "Rakamlar ve görünen detaylar bir yana, otomobilde asıl mesele bunların gerçek kullanımda ne ifade ettiği.",
-        "Siz olsanız bu noktada hangi detaya daha çok önem verirdiniz?",
-    ]
-    return "\n\n".join(p for p in parts if p)[:900].rstrip(), ["otoxtra", "otomobil", "araba", "otomobilhaber", "arabasever"]
-
-
-def _threads_fallback(fact_state, editorial_state, video_state):
-    identity = _model_identity(video_state) or "Bu araç"
-    editorial = editorial_state if isinstance(editorial_state, dict) else {}
-    discussion = _text(editorial.get("discussion_territory"))
-    core = _text(editorial.get("core_story"))
-    fact = _first_fact(fact_state)
-    text = discussion or core or fact or "Bu içerikte asıl mesele, videoda görünen detayın gerçek kullanımda ne ifade ettiği."
-    return f"{identity} tarafında bence tartışma tam burada başlıyor: {text}"[:500].rstrip()
 
 
 def _caption_guard(router, reels_state, fact_state, editorial_state, video_state, log):
@@ -98,19 +30,13 @@ def _caption_guard(router, reels_state, fact_state, editorial_state, video_state
             log(f"⚠️ Caption üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"reels_aciklamasi": "", "reels_hashtagleri": []}, "hata"
         description = _text((state or {}).get("reels_aciklamasi"))
-        hashtags = (state or {}).get("reels_hashtagleri") or []
-        hashtags = [
-            re.sub(r"[^\wÇĞİÖŞÜçğıöşü-]", "", _text(x).lstrip("#"))
-            for x in hashtags
-            if _text(x)
-        ]
-        hashtags = [x for x in hashtags if x]
-        if description and not _looks_like_artifact(description) and hashtags:
+        hashtags = sanitize_hashtags((state or {}).get("reels_hashtagleri"))
+        if description and not looks_like_artifact(description) and hashtags:
             return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, model
         if attempt < SOCIAL_REGEN_MAX:
-            reason = "artifact/boş" if _looks_like_artifact(description) else "eksik"
+            reason = "artifact/boş" if looks_like_artifact(description) else "eksik"
             log(f"⚠️ Caption {reason} döndü; tek kontrollü yeniden üretim ({attempt + 1}/{SOCIAL_REGEN_MAX}).")
-    description, hashtags = _caption_fallback(reels_state, fact_state, editorial_state, video_state)
+    description, hashtags = caption_fallback(reels_state, fact_state, editorial_state, video_state)
     log("⚠️ Caption modeli geçerli sosyal metin vermedi; Fact Lock tabanlı güvenli fallback kullanıldı.")
     return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, "local-fallback"
 
@@ -122,15 +48,15 @@ def _threads_guard(router, video_state, fact_state, editorial_state, log):
         except Exception as exc:
             log(f"⚠️ Threads üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"threads_aciklamasi": ""}, "hata"
-        text = _text((state or {}).get("threads_aciklamasi"))
-        if text and not _looks_like_artifact(text):
-            return {"threads_aciklamasi": text}, model
+        text_value = _text((state or {}).get("threads_aciklamasi"))
+        if text_value and not looks_like_artifact(text_value):
+            return {"threads_aciklamasi": text_value}, model
         if attempt < SOCIAL_REGEN_MAX:
-            reason = "artifact/boş" if _looks_like_artifact(text) else "geçersiz"
+            reason = "artifact/boş" if looks_like_artifact(text_value) else "geçersiz"
             log(f"⚠️ Threads {reason} döndü; tek kontrollü yeniden üretim ({attempt + 1}/{SOCIAL_REGEN_MAX}).")
-    text = _threads_fallback(fact_state, editorial_state, video_state)
+    text_value = threads_fallback(fact_state, editorial_state, video_state)
     log("⚠️ Threads modeli geçerli sosyal metin vermedi; Fact Lock tabanlı güvenli fallback kullanıldı.")
-    return {"threads_aciklamasi": text}, "local-fallback"
+    return {"threads_aciklamasi": text_value}, "local-fallback"
 
 
 def _split_for_speakers(text, conversation_map):
