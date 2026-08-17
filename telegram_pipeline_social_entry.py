@@ -24,8 +24,6 @@ def _artifact(value):
     )
 
 
-# pipeline_calistir() expects a normalized tuple; keep this boundary guard in
-# place because the worker imports this launcher before starting production.
 _original_qa_regeneration_loop = _pipeline._qa_regeneration_loop
 
 
@@ -70,10 +68,46 @@ def _qa_regeneration_loop_compat(*args, **kwargs):
 _pipeline._qa_regeneration_loop = _qa_regeneration_loop_compat
 
 
+# Research must never take the entire Telegram job down because Search or a
+# structured-output combination is temporarily unavailable. This fallback
+# contains only forensic observations; it invents no new facts.
+_original_research = _pipeline._research_calistir
+
+
+def _research_compat(router, video_state, log):
+    try:
+        return _original_research(router, video_state, log)
+    except Exception as exc:
+        observed = video_state.get("observed_facts") if isinstance(video_state, dict) else []
+        identity = video_state.get("video_identity") if isinstance(video_state, dict) else {}
+        facts = []
+        if isinstance(identity, dict):
+            brand = _text(identity.get("brand"))
+            model = _text(identity.get("exact_model"))
+            if brand and model:
+                facts.append({"fact": f"Videoda tanımlanan araç: {brand} {model}.", "status": "OBSERVED", "source": "Forensic video analysis", "source_type": "video", "confidence": "high"})
+            elif model:
+                facts.append({"fact": f"Videoda tanımlanan model: {model}.", "status": "OBSERVED", "source": "Forensic video analysis", "source_type": "video", "confidence": "high"})
+        for item in observed if isinstance(observed, list) else []:
+            text = _text(item)
+            if text:
+                facts.append({"fact": text, "status": "OBSERVED", "source": "Forensic video analysis", "source_type": "video", "confidence": "high"})
+        log(f"⚠️ Research/Search geçici olarak kullanılamadı; yalnızca videoda gözlenen gerçeklerle Fact Lock devam ediyor: {str(exc)[:160]}")
+        return {
+            "facts": facts,
+            "turkiye_satis_durumu": "BILINMIYOR",
+            "turkiye_fiyati": "",
+            "global_fiyat_bilgisi": "",
+            "arastirma_notu": "Search fallback: dış doğrulama yapılamadı; yeni iddia eklenmedi.",
+        }, "forensic-fallback"
+
+
+_pipeline._research_calistir = _research_compat
+
+
 # The Duo regeneration loop used to discard a perfectly valid WAV solely
-# because its measured duration ratio was outside 0.85–1.15. That made the
-# final renderer fail even though FFmpeg can safely synchronize the audio.
-# Keep duration as a diagnostic, not a hard file-existence gate.
+# because its measured duration ratio was outside 0.85–1.15. Keep duration as
+# a diagnostic, not a hard file-existence gate.
 def _duo_ve_ses_yenile_compat(router, reels_state, duo_plan, editorial_state, fact_state, video_state, sure_saniye, legacy_voice, log, regen_instruction):
     instruction = regen_instruction or (
         "Duo script QA tarafından başarısız bulundu. Aynı Fact Lock ve seçili içerik tonunu koruyarak "
@@ -88,7 +122,6 @@ def _duo_ve_ses_yenile_compat(router, reels_state, duo_plan, editorial_state, fa
             regeneration_instruction=instruction,
         )
         last_duo = duo_script
-
         ses_dosyasi = _pipeline.gecici_ses_yolu()
         ok, info, mod = _pipeline._duo_ses_veya_legacy_uret(
             router,
@@ -102,31 +135,17 @@ def _duo_ve_ses_yenile_compat(router, reels_state, duo_plan, editorial_state, fa
 
         if ok and _pipeline.os.path.exists(ses_dosyasi):
             uyumlu, ses_suresi, oran = _pipeline._ses_sure_uyumlu_mu(ses_dosyasi, sure_saniye)
-            log(
-                f"🎚️ QA sonrası TTS süre kontrolü: video {sure_saniye:.2f}s → "
-                f"ses {ses_suresi:.2f}s | oran {oran:.2f}x"
-            )
+            log(f"🎚️ QA sonrası TTS süre kontrolü: video {sure_saniye:.2f}s → ses {ses_suresi:.2f}s | oran {oran:.2f}x")
             if uyumlu:
                 return duo_script, True, (info, ses_dosyasi), mod
-
-            # Valid WAV exists. Do NOT delete it just because timing is outside
-            # the preferred range; FFmpeg synchronization handles this safely.
-            log(
-                f"⚠️ QA sonrası TTS oranı ideal aralık dışında ({oran:.2f}x), "
-                "ancak geçerli WAV korunuyor ve FFmpeg senkronunda kullanılacak."
-            )
+            log(f"⚠️ QA sonrası TTS oranı ideal aralık dışında ({oran:.2f}x), ancak geçerli WAV korunuyor ve FFmpeg senkronunda kullanılacak.")
             return duo_script, True, (info, ses_dosyasi), mod
 
         _pipeline.temp_dosya_temizle(ses_dosyasi)
         if deneme < _pipeline.VOICE_REGEN_MAX:
-            instruction += (
-                " Önceki Duo/TTS üretimi doğrulanamadı; yalnızca izin verilen speakerları kullan, "
-                "hedef kelime aralığına uy ve metni doğal konuşulabilirlikte tut."
-            )
+            instruction += " Önceki Duo/TTS üretimi doğrulanamadı; yalnızca izin verilen speakerları kullan, hedef kelime aralığına uy ve metni doğal konuşulabilirlikte tut."
             continue
 
-    # Absolute last-resort production path: a valid legacy TTS is preferable to
-    # failing the entire video because the optional Duo layer could not validate.
     fallback_path = _pipeline.gecici_ses_yolu()
     try:
         fallback_ok, fallback_info = router.ses_uret(
@@ -138,10 +157,7 @@ def _duo_ve_ses_yenile_compat(router, reels_state, duo_plan, editorial_state, fa
         )
         if fallback_ok and _pipeline.os.path.exists(fallback_path):
             fallback_sure = _pipeline._ses_suresini_al(fallback_path)
-            log(
-                f"↩️ Duo fallback: geçerli legacy TTS korundu ({fallback_sure:.2f}s); "
-                "render Duo katmanına bağlı olmadan devam edecek."
-            )
+            log(f"↩️ Duo fallback: geçerli legacy TTS korundu ({fallback_sure:.2f}s); render Duo katmanına bağlı olmadan devam edecek.")
             return last_duo, True, (fallback_info, fallback_path), "LEGACY_DUO"
     except Exception as exc:
         log(f"⚠️ Legacy Duo fallback başarısız: {str(exc)[:180]}")
