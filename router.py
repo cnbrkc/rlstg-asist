@@ -117,20 +117,45 @@ class SmartRouter:
                         break
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
 
+    def _json_parse_or_none(self, text: str):
+        try:
+            return guvenli_json_yukle(text)
+        except Exception:
+            return None
+
     def metin_uret(self,icerik:Any,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=True):
         model_listesi=model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
         if arama_kullan:
-            # Gemini generateContent currently rejects response_mime_type/application-json
-            # when Google Search tool use is enabled for the affected model/key combos.
-            # Research prompt already requires JSON and guvenli_json_yukle() validates/parses
-            # the returned JSON text, so keep Search enabled and use prompt-enforced JSON here.
             kwargs=dict(system_instruction=system_prompt)
             if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
                 kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
         else:
             kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
-        response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False,require_text=True)
-        return guvenli_json_yukle(getattr(response,"text","")),info
+        try:
+            response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False,require_text=True)
+            parsed=self._json_parse_or_none(getattr(response,"text",""))
+            if parsed is not None:
+                return parsed,info
+            if arama_kullan:
+                log_ekle("⚠️ Research JSON parse edilemedi; Search'siz structured-output fallback deneniyor.")
+                fallback_models=[m for m in METIN_MODELLERI if m not in model_listesi]
+                if not fallback_models:
+                    fallback_models=list(METIN_MODELLERI)
+                fallback_kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
+                response,info=self._make_request(fallback_models,icerik,types.GenerateContentConfig(**fallback_kwargs),log_ekle,stop_on_quota=False,require_text=True)
+                return guvenli_json_yukle(getattr(response,"text","")),info
+            raise ValueError("Model JSON yanıtı parse edilemedi.")
+        except Exception as first_error:
+            if not arama_kullan:
+                raise
+            log_ekle(f"⚠️ Research/Search rotası başarısız; Search'siz Fact Lock fallback deneniyor: {str(first_error)[:180]}")
+            fallback_models=list(METIN_MODELLERI)
+            fallback_kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
+            try:
+                response,info=self._make_request(fallback_models,icerik,types.GenerateContentConfig(**fallback_kwargs),log_ekle,stop_on_quota=False,require_text=True)
+                return guvenli_json_yukle(getattr(response,"text","")),info
+            except Exception:
+                raise first_error
 
     def video_analiz_et(self,video_bytes:bytes,mime_type:str,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=False):
         model_listesi=model_listesi or VIDEO_ANALIZ_MODELLERI
