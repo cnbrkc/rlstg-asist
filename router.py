@@ -6,8 +6,6 @@ from config import API_KEYS, METIN_MODELLERI, ARAMA_MODELLERI, SES_MODELLERI, VI
 from utils import guvenli_json_yukle
 from media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
-# Keep individual Gemini calls bounded so one unhealthy request does not hold
-# the GitHub Actions runner for minutes before key/model failover can happen.
 REQUEST_TIMEOUT_MS = 60_000
 RETRY_503_MAX = 1
 RETRY_503_DELAY_SECONDS = 2
@@ -75,11 +73,9 @@ class SmartRouter:
         log_ekle(f"⚠️ {mail}+{model}: {scope}")
         return "break_model" if scope in ("model","model_config") else "continue"
 
-    def _make_request(self,model_listesi:List[str],contents:Any,config,log_ekle,stop_on_quota=False,son_fallback=True):
+    def _make_request(self,model_listesi:List[str],contents:Any,config,log_ekle,stop_on_quota=False,son_fallback=True,require_text=False):
         son_hata=None
         self._last_request_had_quota=False
-        # Only use the caller's explicit model order. The previous implicit
-        # fallback list could silently add extra model attempts to every call.
         modeller=list(model_listesi or [])
         for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
@@ -92,19 +88,22 @@ class SmartRouter:
                 while True:
                     try:
                         response=client.models.generate_content(model=model_adi,contents=contents,config=config)
+                        if require_text and not str(getattr(response,"text","") or "").strip():
+                            log_ekle(f"⚠️ {mail}+{model_adi}: model başarılı göründü ancak metin yanıtı boş; sonraki key/model deneniyor.")
+                            son_hata=ValueError("Model boş yanıt verdi.")
+                            self._ban(mail,model_adi,COOLDOWN_DIGER,"combo")
+                            break
                         log_ekle(f"✅ Başarılı → {mail} + {model_adi}"); return response,f"{mail}+{model_adi}"
                     except Exception as e:
                         son_hata=e
                         hata_metni=str(e)
                         is_503 = "503" in hata_metni or "unavailable" in hata_metni.lower()
                         is_quota = any(x in hata_metni.lower() for x in ("429", "resource_exhausted", "quota", "rate limit"))
-
                         if is_503 and retry_503 < RETRY_503_MAX:
                             retry_503 += 1
                             log_ekle(f"⏳ {mail}+{model_adi}: geçici 503, {RETRY_503_DELAY_SECONDS}s sonra aynı key bir kez daha deneniyor ({retry_503}/{RETRY_503_MAX})")
                             time.sleep(RETRY_503_DELAY_SECONDS)
                             continue
-
                         if is_quota and retry_quota < RETRY_QUOTA_MAX:
                             retry_quota += 1
                             parsed_delay=self._retry_delay_cikar(hata_metni)
@@ -112,33 +111,21 @@ class SmartRouter:
                             log_ekle(f"⏳ {mail}+{model_adi}: quota/rate-limit, en fazla {delay}s beklenip aynı key bir kez daha denenecek ({retry_quota}/{RETRY_QUOTA_MAX})")
                             time.sleep(delay)
                             continue
-
                         aksiyon=self._handle_hata(mail,model_adi,hata_metni,log_ekle)
                         if stop_on_quota and aksiyon=="quota": raise
                         if aksiyon in ("break_model","quota"): break
-                        # Any exhausted transient retry moves immediately to the
-                        # next key/model instead of looping on the same combination.
                         break
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
 
     def metin_uret(self,icerik:Any,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=True):
         model_listesi=model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
         if arama_kullan:
-            # Gemini rejects response_mime_type=application/json when Google Search
-            # tool use is enabled. Research prompts already require JSON, so let
-            # the model return JSON text and parse it with guvenli_json_yukle.
             kwargs=dict(system_instruction=system_prompt)
             if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
                 kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
         else:
             kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
-        response,info=self._make_request(
-            model_listesi,
-            icerik,
-            types.GenerateContentConfig(**kwargs),
-            log_ekle,
-            stop_on_quota=False,
-        )
+        response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False,require_text=True)
         return guvenli_json_yukle(getattr(response,"text","")),info
 
     def video_analiz_et(self,video_bytes:bytes,mime_type:str,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=False):
@@ -146,7 +133,7 @@ class SmartRouter:
         part=types.Part.from_bytes(data=video_bytes,mime_type=mime_type)
         kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
         if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]): kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
-        response,info=self._make_request(model_listesi,[part],types.GenerateContentConfig(**kwargs),log_ekle)
+        response,info=self._make_request(model_listesi,[part],types.GenerateContentConfig(**kwargs),log_ekle,require_text=True)
         return guvenli_json_yukle(getattr(response,"text","")),info
 
     def _tts_performans_promptu_olustur(self,metin:str,ses_adi:str)->str:
@@ -154,12 +141,10 @@ class SmartRouter:
 
     def _tts_coklu_promptu_olustur(self,metin:str,speaker_names)->str:
         names = ", ".join(speaker_names)
-        return (
-            f"Perform the following Turkish automotive dialogue naturally as a continuous conversation between {names}. "
-            "Use the configured voice for each named speaker. Keep every spoken word exactly as provided; add no words, omit no words, "
-            "and do not read speaker labels aloud. Preserve the order and conversational timing.\n\n"
-            f"TRANSCRIPT:\n{metin}"
-        )
+        return (f"Perform the following Turkish automotive dialogue naturally as a continuous conversation between {names}. "
+                "Use the configured voice for each named speaker. Keep every spoken word exactly as provided; add no words, omit no words, "
+                "and do not read speaker labels aloud. Preserve the order and conversational timing.\n\n"
+                f"TRANSCRIPT:\n{metin}")
 
     def _tts_response_audio_bytes(self,response):
         try:
@@ -183,41 +168,22 @@ class SmartRouter:
             log_ekle(f"❌ TTS başarısız: {str(e)[:200]}"); return False,None
 
     def coklu_ses_uret(self,metin:str,speaker_voices:List[Tuple[str,str]],cikti_dosyasi:str,log_ekle,hiz_carpani:float=1.0)->Tuple[bool,Optional[str]]:
-        """Generate a complete two-speaker dialogue in ONE Gemini TTS request.
-
-        The transcript contains speaker labels matching the multi-speaker config;
-        Gemini returns one continuous audio stream, so no per-segment WAV stitching
-        is required. Speed adjustment is applied once to the complete WAV.
-        """
-        if not metin or not speaker_voices or len(speaker_voices) > 2:
-            return False,None
+        if not metin or not speaker_voices or len(speaker_voices) > 2: return False,None
         try:
             configs=[]; names=[]
             for speaker,voice in speaker_voices:
                 speaker=str(speaker).strip(); voice=str(voice).strip()
                 if not speaker or not voice: return False,None
                 names.append(speaker)
-                configs.append(types.SpeakerVoiceConfig(
-                    speaker=speaker,
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
-                    )
-                ))
+                configs.append(types.SpeakerVoiceConfig(speaker=speaker,voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice))))
             speech_config=types.MultiSpeakerVoiceConfig(speaker_voice_configs=configs)
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=speech_config,
-            )
+            config=types.GenerateContentConfig(response_modalities=["AUDIO"],speech_config=speech_config)
             prompt=self._tts_coklu_promptu_olustur(metin,names)
             response,info=self._make_request(SES_MODELLERI,prompt,config,log_ekle,son_fallback=False)
             audio=self._tts_response_audio_bytes(response)
-            if abs(hiz_carpani-1.0)<.001:
-                wav_yaz(cikti_dosyasi,audio)
-                return True,info
-            raw=gecici_dosya_yolu("ses_ham","wav")
-            wav_yaz(raw,audio)
-            ok=sesi_hizlandir(raw,cikti_dosyasi,hiz_carpani,log_ekle)
-            temp_dosya_temizle(raw)
+            if abs(hiz_carpani-1.0)<.001: wav_yaz(cikti_dosyasi,audio); return True,info
+            raw=gecici_dosya_yolu("ses_ham","wav"); wav_yaz(raw,audio)
+            ok=sesi_hizlandir(raw,cikti_dosyasi,hiz_carpani,log_ekle); temp_dosya_temizle(raw)
             return (ok,info if ok else None)
         except Exception as e:
             log_ekle(f"❌ Çoklu TTS başarısız: {str(e)[:220]}"); return False,None
