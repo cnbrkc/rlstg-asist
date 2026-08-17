@@ -46,6 +46,33 @@ def _qa_regeneration_loop_compat(*args, **kwargs):
         qa_pass,
     ) = _original_qa_regeneration_loop(*args, **kwargs)
 
+    # A Duo-only QA miss must not block a valid render. The production audio
+    # path has already been validated; Duo is a creative layer, not a render
+    # prerequisite. Other QA failures remain blocking.
+    targets = qa_state.get("regeneration_targets") if isinstance(qa_state, dict) else []
+    if isinstance(targets, str):
+        targets = [targets]
+    normalized_targets = {str(x).strip().upper() for x in (targets or []) if str(x).strip()}
+    if (
+        not qa_pass
+        and normalized_targets
+        and normalized_targets <= {"DUO_SCRIPT_FAIL"}
+        and ses_basarili
+        and ses_dosyasi
+        and _pipeline.os.path.exists(ses_dosyasi)
+    ):
+        log = kwargs.get("log")
+        if log is None and len(args) >= 14:
+            log = args[13]
+        if callable(log):
+            log("⚠️ QA yalnızca Duo script katmanını işaretledi; geçerli TTS bulunduğu için render güvenli biçimde devam ediyor.")
+        qa_pass = True
+        if isinstance(qa_state, dict):
+            qa_state = dict(qa_state)
+            qa_state["overall"] = "PASS"
+            qa_state["regeneration_targets"] = []
+            qa_state["duo_nonblocking_fallback"] = True
+
     return (
         reels_state,
         model_reels,
