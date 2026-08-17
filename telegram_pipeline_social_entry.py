@@ -24,6 +24,57 @@ def _artifact(value):
     )
 
 
+# IMPORTANT: pipeline._qa_regeneration_loop currently returns its state tuple in
+# a different order than pipeline_calistir() unpacks it.  That silently shifts
+# every value after reels_state: the TTS WAV path lands in caption_state and the
+# QA dict lands in threads_state.  This is the direct cause of social output such
+# as `/tmp/ses_....wav`.  Normalize the tuple at the pipeline boundary without
+# changing the underlying TTS/reels generation logic.
+_original_qa_regeneration_loop = _pipeline._qa_regeneration_loop
+
+
+def _qa_regeneration_loop_compat(*args, **kwargs):
+    (
+        reels_state,
+        caption_state,
+        threads_state,
+        duo_plan,
+        duo_script,
+        ses_basarili,
+        kullanilan_ses_modeli,
+        ses_modu,
+        ses_dosyasi,
+        qa_state,
+        qa_rounds,
+        model_reels,
+        model_caption,
+        model_threads,
+        qa_pass,
+    ) = _original_qa_regeneration_loop(*args, **kwargs)
+
+    # Match the exact order expected by pipeline_calistir().
+    return (
+        reels_state,
+        model_reels,
+        duo_plan,
+        duo_script,
+        ses_basarili,
+        kullanilan_ses_modeli,
+        ses_modu,
+        ses_dosyasi,
+        caption_state,
+        threads_state,
+        qa_state,
+        qa_rounds,
+        model_caption,
+        model_threads,
+        qa_pass,
+    )
+
+
+_pipeline._qa_regeneration_loop = _qa_regeneration_loop_compat
+
+
 _original_caption = _pipeline._caption_calistir
 
 
