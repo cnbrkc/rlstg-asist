@@ -78,8 +78,3 @@ def validate_script_segments(segments: Any, mode: str = "DUO") -> List[Dict[str,
         result.append({"speaker": speaker, "text": text})
     return result
 
-
-def flatten_for_legacy_tts(segments: Any) -> str:
-    """Create the old plain-text representation for the existing single-voice path."""
-    valid = validate_script_segments(segments, "DUO")
-    return "\n".join(item["text"] for item in valid)

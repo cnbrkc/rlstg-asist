@@ -1,7 +1,7 @@
 import unittest
 
 from duo_strategy import normalize_duo_strategy
-from duo_script import normalize_conversation_map, validate_script_segments, flatten_for_legacy_tts
+from duo_script import normalize_conversation_map, validate_script_segments
 
 
 class DuoLayerTests(unittest.TestCase):
@@ -56,7 +56,6 @@ class DuoLayerTests(unittest.TestCase):
             {"speaker": "female", "text": "İlk cümle."},
             {"speaker": "male", "text": "İkinci cümle."},
         ])
-        self.assertEqual(flatten_for_legacy_tts(segments), "İlk cümle.\nİkinci cümle.")
 
     def test_conversation_map_uses_normalized_mode(self):
         strategy = {

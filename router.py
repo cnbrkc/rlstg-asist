@@ -2,7 +2,7 @@ import time, re, os
 from typing import List, Tuple, Any, Optional
 from google import genai
 from google.genai import types
-from config import API_KEYS, METIN_MODELLERI, ARAMA_MODELLERI, SES_MODELLERI, VIDEO_ANALIZ_MODELLERI, COOLDOWN_SUNUCU, COOLDOWN_BULUNAMADI, COOLDOWN_DIGER, COOLDOWN_FREE_TIER_YOK, IP_BAN_KORUMA, model_arama_destekliyor_mu
+from config import API_KEYS, METIN_MODELLERI, ARAMA_MODELLERI, SES_MODELLERI, VIDEO_ANALIZ_MODELLERI, COOLDOWN_SUNUCU, COOLDOWN_BULUNAMADI, COOLDOWN_DIGER, COOLDOWN_FREE_TIER_YOK, model_arama_destekliyor_mu
 from utils import guvenli_json_yukle
 from media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
@@ -198,15 +198,24 @@ class SmartRouter:
         except Exception: pass
         raise ValueError("TTS yanıtında audio bulunamadı")
 
+    def _tts_kaydet(self, audio: bytes, cikti_dosyasi: str, hiz_carpani: float, log_ekle) -> Tuple[bool, Optional[str]]:
+        """TTS audio bytes'i wav olarak yazar; 1.0x değilse ffmpeg ile hızlandırır."""
+        if abs(hiz_carpani-1.0)<.001:
+            wav_yaz(cikti_dosyasi, audio)
+            return True
+        raw = gecici_dosya_yolu("ses_ham", "wav")
+        wav_yaz(raw, audio)
+        ok = sesi_hizlandir(raw, cikti_dosyasi, hiz_carpani, log_ekle)
+        temp_dosya_temizle(raw)
+        return ok
+
     def ses_uret(self,metin:str,ses_adi:str,cikti_dosyasi:str,log_ekle,hiz_carpani:float=1.0)->Tuple[bool,Optional[str]]:
         config=types.GenerateContentConfig(response_modalities=["AUDIO"],speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=ses_adi))))
         try:
             response,info=self._make_request(SES_MODELLERI,self._tts_performans_promptu_olustur(metin,ses_adi),config,log_ekle,son_fallback=False)
             audio=self._tts_response_audio_bytes(response)
-            if abs(hiz_carpani-1.0)<.001: wav_yaz(cikti_dosyasi,audio); return True,info
-            raw=gecici_dosya_yolu("ses_ham","wav"); wav_yaz(raw,audio)
-            ok=sesi_hizlandir(raw,cikti_dosyasi,hiz_carpani,log_ekle); temp_dosya_temizle(raw)
-            return (ok,info if ok else None)
+            ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
+            return (ok, info if ok else None)
         except Exception as e:
             log_ekle(f"❌ TTS başarısız: {str(e)[:200]}"); return False,None
 
@@ -224,9 +233,7 @@ class SmartRouter:
             prompt=self._tts_coklu_promptu_olustur(metin,names)
             response,info=self._make_request(SES_MODELLERI,prompt,config,log_ekle,son_fallback=False)
             audio=self._tts_response_audio_bytes(response)
-            if abs(hiz_carpani-1.0)<.001: wav_yaz(cikti_dosyasi,audio); return True,info
-            raw=gecici_dosya_yolu("ses_ham","wav"); wav_yaz(raw,audio)
-            ok=sesi_hizlandir(raw,cikti_dosyasi,hiz_carpani,log_ekle); temp_dosya_temizle(raw)
-            return (ok,info if ok else None)
+            ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
+            return (ok, info if ok else None)
         except Exception as e:
             log_ekle(f"❌ Çoklu TTS başarısız: {str(e)[:220]}"); return False,None

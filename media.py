@@ -1,8 +1,7 @@
 """Ses ve video işleme fonksiyonları (ffmpeg, hızlandırma, birleştirme)."""
 import os, re, wave, shutil, subprocess, tempfile, uuid, json
-from config import SES_OMRU_SANIYE, VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
+from config import VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
 
-_GECICI_SES_DOSYALARI = []
 MAKS_VIDEO_HIZLANDIRMA = 1.5
 MIN_VIDEO_YAVASLATMA = 0.5
 FFMPEG_TIMEOUT = 600
@@ -21,9 +20,7 @@ FFMPEG_BIN = _ffmpeg_yolu_bul()
 def gecici_dosya_yolu(onek: str, uzanti: str) -> str:
     return os.path.join(tempfile.gettempdir(), f"{onek}_{uuid.uuid4().hex[:8]}.{uzanti}")
 def gecici_ses_yolu() -> str:
-    p = gecici_dosya_yolu("ses", "wav")
-    _GECICI_SES_DOSYALARI.append(p)
-    return p
+    return gecici_dosya_yolu("ses", "wav")
 
 def wav_yaz(dosya_yolu: str, audio_data: bytes, ornek_hizi: int = SES_ORNEK_HIZI, kanal: int = SES_KANAL, genislik: int = SES_GENISLIK) -> None:
     with wave.open(dosya_yolu, "wb") as wf:
@@ -36,14 +33,6 @@ def temp_dosya_temizle(dosya_yolu: str) -> bool:
     except Exception:
         pass
     return False
-
-def eski_ses_dosyalarini_temizle() -> None:
-    import time
-    now=time.time()
-    for p in list(_GECICI_SES_DOSYALARI):
-        if not os.path.exists(p) or now-os.path.getmtime(p)>SES_OMRU_SANIYE:
-            temp_dosya_temizle(p)
-            if p in _GECICI_SES_DOSYALARI: _GECICI_SES_DOSYALARI.remove(p)
 
 def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, log_ekle) -> bool:
     if abs(hiz_carpani-1.0)<0.001:
@@ -85,31 +74,6 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
     finally:
         temp_dosya_temizle(ara_dosya)
 
-def _video_bilgi_al(video_yolu: str) -> dict:
-    bilgi={"fps":0.0,"frames":0,"width":0,"height":0,"duration":0.0}
-    try:
-        ffprobe=shutil.which("ffprobe") or FFMPEG_BIN.replace("ffmpeg","ffprobe")
-        p=subprocess.run([ffprobe,"-v","error","-select_streams","v:0","-show_entries","stream=width,height,avg_frame_rate,nb_frames,duration","-of","json",video_yolu],capture_output=True,text=True,timeout=30)
-        data=json.loads(p.stdout or "{}")
-        s=(data.get("streams") or [{}])[0]
-        bilgi["width"]=int(s.get("width") or 0); bilgi["height"]=int(s.get("height") or 0)
-        raw=s.get("avg_frame_rate") or "0/1"
-        try:
-            n,d=raw.split("/",1); bilgi["fps"]=float(n)/float(d) if float(d) else 0.0
-        except Exception: pass
-        try: bilgi["frames"]=int(s.get("nb_frames") or 0)
-        except Exception: pass
-        try: bilgi["duration"]=float(s.get("duration") or 0.0)
-        except Exception: pass
-    except Exception: pass
-    if bilgi["duration"]<=0:
-        try:
-            r=subprocess.run([FFMPEG_BIN,"-i",video_yolu],capture_output=True,text=True,timeout=30)
-            m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr or "")
-            if m: bilgi["duration"]=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3))
-        except Exception: pass
-    return bilgi
-
 def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
     sonuc={"width":0,"height":0,"fps":0.0,"fps_rational":"","duration":0.0,"video_bitrate":0,"audio_sample_rate":0,"audio_channels":0,"audio_bitrate":0,"audio_codec":"","video_codec":""}
     try:
@@ -147,9 +111,14 @@ def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
             try: sonuc["duration"]=float((data.get("format") or {}).get("duration") or 0.0)
             except Exception: pass
     except Exception:
-        eski=_video_bilgi_al(dosya_yolu)
-        for key in ("width","height","fps","duration"):
-            if eski.get(key): sonuc[key]=eski[key]
+        pass
+    # ffprobe başarısız olursa veya duration alınamadıysa, ffmpeg -i çıktısından süre çıkar
+    if sonuc["duration"]<=0:
+        try:
+            r=subprocess.run([FFMPEG_BIN,"-i",dosya_yolu],capture_output=True,text=True,timeout=30)
+            m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr or "")
+            if m: sonuc["duration"]=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3))
+        except Exception: pass
     return sonuc
 
 def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:

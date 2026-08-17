@@ -95,13 +95,12 @@ jobs:
             router.py
             schemas.py
             social_fallbacks.py
+            telegram_pipeline_runner.py
             telegram_pipeline_worker.py
             telegram_pipeline_guard.py
             telegram_pipeline_social_entry.py
             telegram_webhook_intake.py
             requirements.txt
-            research.py
-            tts.py
             utils.py
           sparse-checkout-cone-mode: false
 
@@ -132,7 +131,7 @@ jobs:
         run: pip install --disable-pip-version-check -r requirements.txt
 
       - name: Compile check
-        run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py social_fallbacks.py telegram_pipeline_worker.py telegram_pipeline_guard.py telegram_pipeline_social_entry.py telegram_webhook_intake.py utils.py
+        run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py social_fallbacks.py telegram_pipeline_runner.py telegram_pipeline_worker.py telegram_pipeline_guard.py telegram_pipeline_social_entry.py telegram_webhook_intake.py utils.py
 
       - name: Run Reels pipeline
         env:

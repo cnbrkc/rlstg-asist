@@ -32,7 +32,6 @@ TON_MAP = {"eglence": TON_EGLENCE, "dengeli": TON_DENGELI, "bilgi": TON_BILGI, "
 TON_LABELS = {"eglence": "🎭 Eğlence Ağırlıklı", "dengeli": "⚖️ Dengeli", "bilgi": "🧠 Bilgi Ağırlıklı", "teknik": "📊 Teknik / Detaylı"}
 TELEGRAM_TEXT_LIMIT = 4096
 TELEGRAM_VIDEO_CAPTION_LIMIT = 1024
-TELEGRAM_AUDIO_CAPTION_LIMIT = 1024
 
 
 def send_message(text):
@@ -50,21 +49,6 @@ def send_video(path, caption):
     with open(path, "rb") as fh:
         r = requests.post(f"{BASE}/sendVideo", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
     r.raise_for_status()
-
-
-def send_audio(path, caption=""):
-    with open(path, "rb") as fh:
-        r = requests.post(f"{BASE}/sendAudio", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_AUDIO_CAPTION_LIMIT]}, files={"audio": (Path(path).name, fh, "audio/mpeg")}, timeout=300)
-    r.raise_for_status()
-
-
-def _telegram_audio_path(source):
-    source = Path(source)
-    if source.suffix.lower() in {".mp3", ".m4a"}:
-        return source, False
-    target = source.with_name(source.stem + ".telegram.mp3")
-    subprocess.run(["ffmpeg", "-y", "-i", str(source), "-codec:a", "libmp3lame", "-q:a", "2", str(target)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
-    return target, True
 
 
 def video_duration(path):
