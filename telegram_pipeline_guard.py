@@ -6,6 +6,7 @@ Instagram/Facebook captions or Threads text.
 """
 
 import os
+import re
 import pipeline as _pipeline
 from media import gecici_ses_yolu, temp_dosya_temizle
 from config import SES_HIZ_CARPANI, KELIME_HIZI_ORANI

@@ -10,8 +10,8 @@ from config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from pipeline import pipeline_calistir, metin_pipeline_calistir
 from router import SmartRouter
 from social_fallbacks import (
-    caption_fallback, first_fact as first_verified_fact, model_identity,
-    text as _text, threads_fallback,
+    first_fact as first_verified_fact, model_identity,
+    text as _text,
 )
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]

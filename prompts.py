@@ -1,5 +1,4 @@
 import os
-import json
 _PROMPT_DIR=os.path.join(os.path.dirname(__file__),"prompts")
 
 # Kullanıcının video analiz notu pipeline boyunca AUTHORITATIVE FACT olarak korunur.
