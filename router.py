@@ -52,7 +52,7 @@ class SmartRouter:
             if "no longer available to new users" in m or "new users" in m:
                 return "model_key",COOLDOWN_BULUNAMADI
             return "model",COOLDOWN_BULUNAMADI
-        if "limit: 0" in m or 'limit": 0' in m: return "free_tier_yok",COOLDOWN_FREE_TIER_YOK
+        if "limit: 0" in m or 'limit\": 0' in m: return "free_tier_yok",COOLDOWN_FREE_TIER_YOK
         if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m: return "quota",0
         if "400" in m or "invalid_argument" in m or "unsupported" in m: return "model_config",COOLDOWN_BULUNAMADI
         if "503" in m or "unavailable" in m: return "combo",COOLDOWN_SUNUCU
@@ -119,12 +119,12 @@ class SmartRouter:
 
     def metin_uret(self,icerik:Any,system_prompt:str,response_schema:dict,log_ekle,model_listesi=None,arama_kullan=True):
         model_listesi=model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
-        if arama_kullan:
-            kwargs=dict(system_instruction=system_prompt)
-            if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
-                kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
-        else:
-            kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
+        # Keep structured JSON output enabled for RESEARCH/Fact Lock too.
+        # This was present in mainbackup but was accidentally removed from main;
+        # without it, Google Search can return prose and guvenli_json_yukle fails.
+        kwargs=dict(system_instruction=system_prompt,response_mime_type="application/json",response_schema=response_schema)
+        if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
+            kwargs["tools"]=[types.Tool(google_search=types.GoogleSearch())]
         response,info=self._make_request(model_listesi,icerik,types.GenerateContentConfig(**kwargs),log_ekle,stop_on_quota=False,require_text=True)
         return guvenli_json_yukle(getattr(response,"text","")),info
 
