@@ -9,6 +9,10 @@ import requests
 from config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from pipeline import pipeline_calistir, metin_pipeline_calistir
 from router import SmartRouter
+from social_fallbacks import (
+    caption_fallback, first_fact as first_verified_fact, model_identity,
+    text as _text, threads_fallback,
+)
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -144,37 +148,23 @@ def _qa_text(qa_result):
         return str(qa_result)
 
 
-def _first_verified_fact_for_social(result):
-    facts = result.get("fact_lock") if isinstance(result, dict) else {}
-    facts = facts.get("facts") if isinstance(facts, dict) else []
-    if isinstance(facts, list):
-        for item in facts:
-            if isinstance(item, dict) and str(item.get("status") or "").upper() in {"OBSERVED", "VERIFIED"}:
-                fact = str(item.get("fact") or "").strip()
-                if fact:
-                    return fact
-    return ""
-
-
 def _social_fallbacks(result):
+    """result dict'inden güvenli caption/hashtags/threads üretir (model boş/artifact döndüğünde kullanılır)."""
     result = result if isinstance(result, dict) else {}
     editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
-    fact = _first_verified_fact_for_social(result)
-    core = str(editorial.get("core_story") or "").strip()
-    discussion = str(editorial.get("discussion_territory") or "").strip()
-    video_state = result.get("pipeline_state", {}).get("video_state", {}) if isinstance(result.get("pipeline_state"), dict) else {}
-    video_identity = video_state.get("video_identity", {}) if isinstance(video_state, dict) else {}
-    model = str(video_identity.get("exact_model") or video_identity.get("brand") or "bu araç").strip()
-    if not model or model.upper() == "UNKNOWN":
-        model = "bu araç"
+    fact_state = result.get("fact_lock") if isinstance(result.get("fact_lock"), dict) else {}
+    video_state = (result.get("pipeline_state") or {}).get("video_state", {}) if isinstance(result.get("pipeline_state"), dict) else {}
+    identity = model_identity(video_state) or "bu araç"
+    core = _text(editorial.get("core_story"))
+    discussion = _text(editorial.get("discussion_territory"))
+    fact = first_verified_fact(fact_state)
     caption = "\n\n".join(x for x in [
-        f"{model}: videonun ötesinde asıl merak edilen taraf burada başlıyor.",
+        f"{identity}: videonun ötesinde asıl merak edilen taraf burada başlıyor.",
         core or fact or "Videodaki detayları Fact Lock sınırları içinde değerlendiriyoruz.",
         fact,
         "Rakamlar kadar gerçek kullanımın ne söylediği de önemli.",
     ] if x)[:900].rstrip()
-    threads = discussion or core or fact or f"{model} tarafında asıl tartışma, görünen detayın gerçek kullanımda ne ifade ettiği."
-    threads = threads[:480].rstrip()
+    threads = (discussion or core or fact or f"{identity} tarafında asıl tartışma, görünen detayın gerçek kullanımda ne ifade ettiği.")[:480].rstrip()
     hashtags = ["otoxtra", "otomobil", "araba", "otomobilhaber", "arabasever"]
     return caption, hashtags, threads
 
@@ -196,21 +186,13 @@ def _threads_message(threads):
     return str(threads or '').strip()
 
 
-def process(path):
-    initial = send_message(_loading_text(0, "Video alındı, pipeline başlatılıyor..."))
-    loading_id = initial["result"]["message_id"]
-    raw = path.read_bytes()
-    duration = video_duration(path)
-    mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
-    router = SmartRouter()
-    step_status = {}
-    warnings = []
-    errors = []
+def _setup_env(steps, loading_id):
+    """Ortam değişkenlerinden tone kurar ve log/progress callback'leri ile durum torbalarını hazırlar."""
+    step_status, warnings, errors = {}, [], []
     tone_key = os.environ.get("CONTENT_TONE", "dengeli").strip().lower()
     tone_key = tone_key if tone_key in TON_MAP else "dengeli"
     selected_tone = TON_MAP[tone_key]
-    user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
-    video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
+    capture_diagnostics = steps is PIPELINE_STEPS  # video path medya teşhisi satırlarını warnings'e ekler
 
     def log(msg):
         text = str(msg).strip()
@@ -220,18 +202,55 @@ def process(path):
             warnings.append(text)
         if "❌" in text or "hata" in lower or "error" in lower:
             errors.append(text)
-        if text.startswith("📐 ") or text.startswith("🎚️ "):
+        if capture_diagnostics and (text.startswith("📐 ") or text.startswith("🎚️ ")):
             warnings.append(text)
 
     def progress(n, total, msg):
-        done = max(0, min(n - 1, len(PIPELINE_STEPS)))
+        done = max(0, min(n - 1, len(steps)))
         if done > 0:
             step_status[done - 1] = "🟢"
-        current = PIPELINE_STEPS[n - 1] if 0 < n <= len(PIPELINE_STEPS) else str(msg)
+        current = steps[n - 1] if 0 < n <= len(steps) else str(msg)
         try:
-            edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors)))
+            edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors), steps=steps))
         except Exception as exc:
             print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+
+    return step_status, warnings, errors, tone_key, selected_tone, log, progress
+
+
+def _ensure_social_outputs(result, warnings):
+    """Caption/hashtags/threads boş veya artifact ise Fact Lock tabanlı fallback uygular."""
+    caption = _text(result.get("reels_aciklamasi"))
+    hashtags = result.get("reels_hashtagleri") or []
+    if not caption or not hashtags:
+        fallback_caption, fallback_hashtags, fallback_threads = _social_fallbacks(result)
+        if not caption:
+            caption = fallback_caption
+            result["reels_aciklamasi"] = caption
+            warnings.append("⚠️ Caption modeli boş döndü; Fact Lock tabanlı güvenli sosyal fallback kullanıldı.")
+        if not hashtags:
+            hashtags = fallback_hashtags
+            result["reels_hashtagleri"] = hashtags
+            warnings.append("⚠️ Hashtag modeli boş döndü; güvenli varsayılan hashtag seti kullanıldı.")
+    threads = _text(result.get("threads_aciklamasi"))
+    if not threads:
+        _, _, fallback_threads = _social_fallbacks(result)
+        threads = fallback_threads
+        result["threads_aciklamasi"] = threads
+        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
+    return caption, hashtags, threads
+
+
+def process(path):
+    initial = send_message(_loading_text(0, "Video alındı, pipeline başlatılıyor..."))
+    loading_id = initial["result"]["message_id"]
+    raw = path.read_bytes()
+    duration = video_duration(path)
+    mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
+    router = SmartRouter()
+    step_status, warnings, errors, tone_key, selected_tone, log, progress = _setup_env(PIPELINE_STEPS, loading_id)
+    user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
+    video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
 
     try:
         result = pipeline_calistir(router=router, video_bytes=raw, mime_type=mime, temp_input_video=str(path), video_analiz_notlari=video_note, metin_uretim_notlari=video_note, sure_saniye=duration, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
@@ -250,24 +269,7 @@ def process(path):
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
     result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "TTS gerçek WAV süresi doğrulandı")
-    caption = str(result.get("reels_aciklamasi") or "").strip()
-    hashtags = result.get("reels_hashtagleri") or []
-    if not caption.strip() or not hashtags:
-        fallback_caption, fallback_hashtags, fallback_threads = _social_fallbacks(result)
-        if not caption.strip():
-            caption = fallback_caption
-            result["reels_aciklamasi"] = caption
-            warnings.append("⚠️ Caption modeli boş döndü; Fact Lock tabanlı güvenli sosyal fallback kullanıldı.")
-        if not hashtags:
-            hashtags = fallback_hashtags
-            result["reels_hashtagleri"] = hashtags
-            warnings.append("⚠️ Hashtag modeli boş döndü; güvenli varsayılan hashtag seti kullanıldı.")
-    threads = str(result.get("threads_aciklamasi") or "").strip()
-    if not threads:
-        _, _, fallback_threads = _social_fallbacks(result)
-        threads = fallback_threads
-        result["threads_aciklamasi"] = threads
-        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
+    caption, hashtags, threads = _ensure_social_outputs(result, warnings)
     video_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
     if caption_truncated:
         warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; tam Instagram metni aşağıdaki sosyal çıktıda korunuyor.")
@@ -286,31 +288,7 @@ def process_text(text):
     initial = send_message(_loading_text(0, "Metin alındı, text-only pipeline başlatılıyor...", steps=TEXT_PIPELINE_STEPS))
     loading_id = initial["result"]["message_id"]
     router = SmartRouter()
-    step_status = {}
-    warnings = []
-    errors = []
-    tone_key = os.environ.get("CONTENT_TONE", "dengeli").strip().lower()
-    tone_key = tone_key if tone_key in TON_MAP else "dengeli"
-    selected_tone = TON_MAP[tone_key]
-
-    def log(msg):
-        text_msg = str(msg).strip()
-        print(text_msg, flush=True)
-        lower = text_msg.lower()
-        if "⚠️" in text_msg or "uyarı" in lower or "warning" in lower:
-            warnings.append(text_msg)
-        if "❌" in text_msg or "hata" in lower or "error" in lower:
-            errors.append(text_msg)
-
-    def progress(n, total, msg):
-        done = max(0, min(n - 1, len(TEXT_PIPELINE_STEPS)))
-        if done > 0:
-            step_status[done - 1] = "🟢"
-        current = TEXT_PIPELINE_STEPS[n - 1] if 0 < n <= len(TEXT_PIPELINE_STEPS) else str(msg)
-        try:
-            edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors), steps=TEXT_PIPELINE_STEPS))
-        except Exception as exc:
-            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+    step_status, warnings, errors, tone_key, selected_tone, log, progress = _setup_env(TEXT_PIPELINE_STEPS, loading_id)
 
     try:
         result = metin_pipeline_calistir(router=router, metin=text, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
@@ -319,20 +297,7 @@ def process_text(text):
         edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
         raise
 
-    caption = str(result.get("reels_aciklamasi") or "").strip()
-    hashtags = result.get("reels_hashtagleri") or []
-    if not caption.strip() or not hashtags:
-        fallback_caption, fallback_hashtags, fallback_threads = _social_fallbacks(result)
-        if not caption.strip():
-            caption = fallback_caption
-            result["reels_aciklamasi"] = caption
-        if not hashtags:
-            hashtags = fallback_hashtags
-            result["reels_hashtagleri"] = hashtags
-    threads = str(result.get("threads_aciklamasi") or "").strip()
-    if not threads:
-        _, _, threads = _social_fallbacks(result)
-        result["threads_aciklamasi"] = threads
+    caption, hashtags, threads = _ensure_social_outputs(result, warnings)
     for i in range(len(TEXT_PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
     edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))

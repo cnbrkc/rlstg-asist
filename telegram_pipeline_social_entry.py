@@ -5,23 +5,8 @@ launcher thin, but add final compatibility guards before the production guard
 is loaded so transient Gemini/Duo failures cannot strand a valid render.
 """
 
-import re
 import pipeline as _pipeline
-
-
-def _text(value):
-    return str(value or "").strip()
-
-
-def _artifact(value):
-    text = _text(value).lower()
-    return (
-        not text
-        or text.startswith(("/tmp/", "/home/runner/", "data/", "./data/", "../"))
-        or bool(re.search(r"\.(wav|mp3|m4a|aac|mp4|mov|webm)(?:\b|$)", text))
-        or "\\tmp\\" in text
-        or "\\home\\runner\\" in text
-    )
+from social_fallbacks import looks_like_artifact, text as _text
 
 
 _original_qa_regeneration_loop = _pipeline._qa_regeneration_loop
@@ -197,7 +182,7 @@ def _hard_caption_guard(router, reels_state, fact_state, editorial_state, video_
     state = state if isinstance(state, dict) else {}
     description = _text(state.get("reels_aciklamasi"))
     hashtags = state.get("reels_hashtagleri") or []
-    if not _artifact(description) and hashtags:
+    if description and not looks_like_artifact(description) and hashtags:
         return state, model
 
     identity = "bu araç"
