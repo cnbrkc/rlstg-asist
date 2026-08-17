@@ -144,18 +144,6 @@ def _qa_text(qa_result):
         return str(qa_result)
 
 
-def _final_text_report(step_status, warnings, errors, result, tone_key):
-    lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
-    for i, name in enumerate(TEXT_PIPELINE_STEPS):
-        lines.append(f"{step_status.get(i, '⚪')} {i+1}/8 {name}")
-    lines += ["", f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}", f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}", f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or 'Bilinmiyor'}", "⚡ TTS hız: 1.20x", f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1", f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}", "🎬 Video render: atlandı (text-only)", f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}", "", "🔍 QA SONUCU", _qa_text(result.get("qa_result"))[:2200]]
-    if warnings:
-        lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:6]]
-    if errors:
-        lines += ["", "❌ HATALAR"] + [f"• {x}" for x in errors[:6]]
-    return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
-
-
 def _first_verified_fact_for_social(result):
     facts = result.get("fact_lock") if isinstance(result, dict) else {}
     facts = facts.get("facts") if isinstance(facts, dict) else []
@@ -171,7 +159,6 @@ def _first_verified_fact_for_social(result):
 def _social_fallbacks(result):
     result = result if isinstance(result, dict) else {}
     editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
-    identity = result.get("fact_lock") if isinstance(result.get("fact_lock"), dict) else {}
     fact = _first_verified_fact_for_social(result)
     core = str(editorial.get("core_story") or "").strip()
     discussion = str(editorial.get("discussion_territory") or "").strip()
@@ -205,6 +192,16 @@ def _caption_with_hashtags(description, hashtags):
     return desc[:available].rstrip() + suffix, truncated
 
 
+def _social_bundle(caption, hashtags, threads):
+    desc = str(caption or "").strip()
+    tags = " ".join("#" + str(x).lstrip("#").strip() for x in (hashtags or []) if str(x).strip())
+    instagram = desc + ("\n\n" + tags if tags else "")
+    return ("📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n"
+            + instagram
+            + "\n\n🧵 THREADS AÇIKLAMASI\n\n"
+            + str(threads or "").strip())[:TELEGRAM_TEXT_LIMIT]
+
+
 def process(path):
     initial = send_message(_loading_text(0, "Video alındı, pipeline başlatılıyor..."))
     loading_id = initial["result"]["message_id"]
@@ -219,8 +216,6 @@ def process(path):
     tone_key = tone_key if tone_key in TON_MAP else "dengeli"
     selected_tone = TON_MAP[tone_key]
     user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
-    # Telegram video caption'ı zaten kullanıcının analiz notudur. Ek OCR/Tesseract
-    # taraması yapılmaz; bu hem gereksiz gecikmeyi hem de yanlış OCR çıkarımlarını önler.
     video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
 
     def log(msg):
@@ -235,8 +230,6 @@ def process(path):
             warnings.append(text)
 
     def progress(n, total, msg):
-        # pipeline.py çağrıyı aşama başlamadan hemen önce yapıyor.
-        # Bu nedenle n mevcut aşamadır; n-1 aşama tamamlanmıştır.
         done = max(0, min(n - 1, len(PIPELINE_STEPS)))
         if done > 0:
             step_status[done - 1] = "🟢"
@@ -283,13 +276,13 @@ def process(path):
         warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
     video_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
     if caption_truncated:
-        warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; hashtagler korunarak sona alındı.")
+        warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; tam Instagram metni aşağıdaki sosyal çıktıda korunuyor.")
     for i in range(len(PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
     edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
     send_video(final, video_caption)
     send_message(_format_title_options(result.get("kapak_basliklari") or []))
-    send_message(threads)
+    send_message(_social_bundle(caption, hashtags, threads))
     Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -315,8 +308,6 @@ def process_text(text):
             errors.append(text_msg)
 
     def progress(n, total, msg):
-        # pipeline.py çağrıyı aşama başlamadan hemen önce yapıyor.
-        # Bu nedenle n mevcut aşamadır; n-1 aşama tamamlanmıştır.
         done = max(0, min(n - 1, len(TEXT_PIPELINE_STEPS)))
         if done > 0:
             step_status[done - 1] = "🟢"
@@ -330,70 +321,41 @@ def process_text(text):
         result = metin_pipeline_calistir(router=router, metin=text, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
-        try:
-            edit_message(loading_id, _final_text_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe", "qa_result": {}}, tone_key))
-        except Exception:
-            pass
+        edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
         raise
 
-    audio = result.get("ses_dosyasi")
-    if not result.get("ses_basarili") or not audio or not Path(audio).exists():
-        errors.append("Text-only pipeline tamamlandı ancak QA PASS sonrası kullanılabilir TTS dosyası üretilemedi.")
-        edit_message(loading_id, _final_text_report(step_status, warnings, errors, result, tone_key))
-        raise RuntimeError("Text-only pipeline tamamlandı ancak kullanılabilir TTS dosyası üretilemedi.")
-
-    caption = result.get("reels_aciklamasi") or ""
+    caption = str(result.get("reels_aciklamasi") or "").strip()
     hashtags = result.get("reels_hashtagleri") or []
-    if not caption.strip():
-        warnings.append("⚠️ Instagram açıklaması boş üretildi.")
-    if not hashtags:
-        warnings.append("⚠️ Hashtag listesi boş üretildi.")
-    social_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
-    if caption_truncated:
-        warnings.append("⚠️ Telegram metin sınırı nedeniyle Instagram açıklaması kısaltıldı.")
-
-    for i in range(len(TEXT_PIPELINE_STEPS)):
-        step_status.setdefault(i, "🟢")
-    edit_message(loading_id, _final_text_report(step_status, warnings, errors, result, tone_key))
-
-    telegram_audio, cleanup_audio = _telegram_audio_path(audio)
-    try:
-        send_audio(telegram_audio, f"🎧 {result.get('ses_modu_sesi') or result.get('ses_modu') or 'TTS'} — 1.20x")
-    finally:
-        if cleanup_audio:
-            try:
-                telegram_audio.unlink(missing_ok=True)
-            except Exception:
-                pass
-    send_message(_format_title_options(result.get("kapak_basliklari") or []))
+    if not caption.strip() or not hashtags:
+        fallback_caption, fallback_hashtags, fallback_threads = _social_fallbacks(result)
+        if not caption.strip():
+            caption = fallback_caption
+            result["reels_aciklamasi"] = caption
+        if not hashtags:
+            hashtags = fallback_hashtags
+            result["reels_hashtagleri"] = hashtags
     threads = str(result.get("threads_aciklamasi") or "").strip()
     if not threads:
-        _, _, fallback_threads = _social_fallbacks(result)
-        threads = fallback_threads
-        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
-    social_bundle = "📝 INSTAGRAM AÇIKLAMASI + HASHTAGLER\n\n" + f"{social_caption}\n\n" + threads
-    send_message(social_bundle)
-    Path("pipeline_result.json").write_text(json.dumps({"mode": "text", "source": "telegram_text", "content_tone": tone_key, "input_text": text, "seslendirme": result.get("seslendirme_metni", ""), "audio": Path(audio).name, "caption": caption, "caption_telegram": social_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+        _, _, threads = _social_fallbacks(result)
+        result["threads_aciklamasi"] = threads
+    for i in range(len(TEXT_PIPELINE_STEPS)):
+        step_status.setdefault(i, "🟢")
+    edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
+    send_message(_social_bundle(caption, hashtags, threads))
+    Path("pipeline_result.json").write_text(json.dumps({"source": "text", "content_tone": tone_key, "caption": caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
-    raw = os.environ.get("VIDEO_FILES", "").strip()
-    inputs = [Path(line.strip()) for line in raw.splitlines() if line.strip()]
-    text = os.environ.get("TEXT_INPUT", "").strip()
-    if inputs and text:
-        raise ValueError("Aynı çalıştırmada hem video hem text input verilemez.")
-    if inputs:
-        for path in inputs:
-            if not path.exists():
-                raise FileNotFoundError(f"Telegram intake output not found: {path}")
+    video_files = [Path(x.strip()) for x in os.environ.get("VIDEO_FILES", "").split(",") if x.strip()]
+    text_input = os.environ.get("TEXT_INPUT", "").strip()
+    if video_files:
+        for path in video_files:
             print(f"Processing video: {path}", flush=True)
             process(path)
-        return
-    if text:
-        print("Processing Telegram text-only input", flush=True)
-        process_text(text)
-        return
-    raise ValueError("Telegram video veya text input bulunamadı.")
+    elif text_input:
+        process_text(text_input)
+    else:
+        raise RuntimeError("VIDEO_FILES veya TEXT_INPUT bulunamadı.")
 
 
 if __name__ == "__main__":
