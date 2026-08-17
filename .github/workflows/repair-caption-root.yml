@@ -1,0 +1,96 @@
+name: repair-caption-root
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-caption-root.yml'
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Patch caption generation root cause
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def patch(path, replacements):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              original = text
+              for name, old, new in replacements:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'{path}: guard failed for {name}: expected 1, found {count}')
+                  text = text.replace(old, new, 1)
+              p.write_text(text, encoding='utf-8')
+              print(f'{path}: changed={text != original}')
+
+          patch('pipeline.py', [
+              ('caption model routing', '''def _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log):
+    content=girdi_birlestir(durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('VIDEO',video_state))
+    result, model = router.metin_uret(content,caption_promptunu_olustur(),CAPTION_SCHEMA,log,arama_kullan=False)
+    return _caption_state_normalize(result), model
+''', '''def _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log):
+    content=girdi_birlestir(durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('VIDEO',video_state))
+    # Caption is a long-form social-writing task. Prefer the more stable
+    # Flash-Lite structured-output path instead of accepting a schema-valid
+    # empty reels_aciklamasi from the first model.
+    caption_models=['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-3.5-flash-lite','gemini-3.5-flash']
+    prompt=caption_promptunu_olustur()+"\\n\\n🚨 ÇIKTI ZORUNLULUĞU: reels_aciklamasi ASLA boş veya yalnızca birkaç kelime olamaz. En az 5 doğal paragraf katmanını tamamla; açıklama gerçek bir Instagram otomobil caption'ı olarak kullanılabilecek tam metin olmalıdır. Hashtagler ayrı array'de tam 5 adet olmalıdır."
+    result, model = router.metin_uret(content,prompt,CAPTION_SCHEMA,log,model_listesi=caption_models,arama_kullan=False)
+    normalized=_caption_state_normalize(result)
+    if len(str(normalized.get('reels_aciklamasi') or '').strip()) < 180:
+        log('⚠️ Caption modeli schema-valid fakat anlamsal olarak boş/kısa çıktı; başka caption modeliyle recovery deneniyor.')
+        recovery_prompt=caption_promptunu_olustur()+"\\n\\n🚨 CAPTION RECOVERY: Önceki caption kullanılabilir bir açıklama üretmedi. Bu çağrıda yalnızca kullanılabilir final Instagram caption'ını üret. reels_aciklamasi boş OLMAYACAK; en az 500 karakterlik, doğal, paragraf araları gerçek boş satır olan tamamlanmış bir metin yaz. Fact Lock dışına çıkma. reels_hashtagleri tam 5 adet olsun."
+        recovery_models=['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-3.1-flash-lite','gemini-3.5-flash']
+        result, model = router.metin_uret(content,recovery_prompt,CAPTION_SCHEMA,log,model_listesi=recovery_models,arama_kullan=False)
+        normalized=_caption_state_normalize(result)
+    return normalized, model
+'''),
+          ])
+
+          patch('schemas.py', [
+              ('caption schema validation', '''CAPTION_SCHEMA = {"type": "OBJECT", "properties": {"reels_aciklamasi": {"type": "STRING"}, "reels_hashtagleri": {"type": "ARRAY", "items": {"type": "STRING"}}}, "required": ["reels_aciklamasi", "reels_hashtagleri"]}
+''', '''CAPTION_SCHEMA = {"type": "OBJECT", "properties": {"reels_aciklamasi": {"type": "STRING", "description": "ZORUNLU final Instagram/Facebook caption. Boş olamaz; tamamlanmış doğal metin olmalı."}, "reels_hashtagleri": {"type": "ARRAY", "minItems": 5, "maxItems": 5, "items": {"type": "STRING"}}}, "required": ["reels_aciklamasi", "reels_hashtagleri"]}
+'''),
+          ])
+
+          patch('prompts/caption_prompt.txt', [
+              ('caption nonempty guard', '''Çıktın SADECE şu Caption şemasına uygun JSON olacak:
+{
+  "reels_aciklamasi": "...",
+  "reels_hashtagleri": [...]
+}
+''', '''ÇIKTI KİLİDİ — ÇOK ÖNEMLİ:
+- `reels_aciklamasi` ASLA boş, null, "", "string", tek cümlelik placeholder veya birkaç kelimelik özet olamaz.
+- `reels_aciklamasi` finalde doğrudan Instagram/Facebook açıklaması olarak kullanılabilecek tamamlanmış bir caption olmalıdır.
+- Caption'ın 5 katmanı K1-K5 metnin içinde doğal biçimde tamamlanmalıdır; katman isimleri çıktıya yazılmaz.
+- Paragraflar gerçek `\\n\\n` ile ayrılmalıdır; literal `\\\\n` yazma.
+- `reels_hashtagleri` TAM 5 adet olmalıdır.
+
+Çıktın SADECE şu Caption şemasına uygun JSON olacak:
+{
+  "reels_aciklamasi": "...",
+  "reels_hashtagleri": ["...", "...", "...", "...", "..."]
+}
+'''),
+          ])
+
+          subprocess.run(['git','config','user.name','github-actions[bot]'],check=True)
+          subprocess.run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'],check=True)
+          subprocess.run(['git','add','pipeline.py','schemas.py','prompts/caption_prompt.txt','.github/workflows/repair-caption-root.yml'],check=True)
+          subprocess.run(['git','commit','-m','fix: restore reliable caption generation'],check=True)
+          Path('.github/workflows/repair-caption-root.yml').unlink()
+          subprocess.run(['git','add','-u','.github/workflows/repair-caption-root.yml'],check=True)
+          subprocess.run(['git','commit','-m','chore: remove temporary caption repair workflow'],check=True)
+          subprocess.run(['git','push','origin','HEAD:main'],check=True)
+          PY
+      - name: Verify patched files compile
+        run: python -m py_compile pipeline.py schemas.py
