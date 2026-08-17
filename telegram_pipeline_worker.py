@@ -336,7 +336,8 @@ def process_text(text):
     for i in range(len(TEXT_PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
     edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
-    send_message(_social_bundle(caption, hashtags, threads))
+    if threads:
+        send_message(_threads_message(threads))
     Path("pipeline_result.json").write_text(json.dumps({"source": "text", "content_tone": tone_key, "caption": caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
