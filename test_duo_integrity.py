@@ -51,7 +51,7 @@ def test_duo_strategy_and_contract_preserve_two_speakers():
     assert {item["speaker"] for item in contract["conversation_map"]} == {"female", "male"}
 
 
-def test_generated_duo_script_repairs_single_speaker_before_tts():
+def test_generated_duo_script_rejects_single_speaker_for_regeneration():
     contract = build_duo_generation_contract({
         "mode": "DUO",
         "conversation_map": [
@@ -67,9 +67,26 @@ def test_generated_duo_script_repairs_single_speaker_before_tts():
             {"speaker": "female", "text": "İkinci cümle."},
         ]
     }
-    result = validate_generated_duo(contract, generated)
-    assert {item["speaker"] for item in result} == {"female", "male"}
-    assert [item["text"] for item in result] == ["İlk cümle.", "İkinci cümle."]
+    assert validate_generated_duo(contract, generated) == []
+
+
+def test_generated_duo_script_accepts_both_speakers():
+    contract = build_duo_generation_contract({
+        "mode": "DUO",
+        "conversation_map": [
+            {"speaker": "female", "amac": "hook", "detay": "Açılış"},
+            {"speaker": "male", "amac": "fact", "detay": "Detay"},
+        ],
+        "min_words": 2,
+        "max_words": 50,
+    })
+    generated = {
+        "segments": [
+            {"speaker": "female", "text": "İlk cümle."},
+            {"speaker": "male", "text": "İkinci cümle."},
+        ]
+    }
+    assert validate_generated_duo(contract, generated) == generated["segments"]
 
 
 def test_solo_validation_contract_remains_single_speaker():
