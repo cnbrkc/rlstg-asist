@@ -20,6 +20,15 @@ def _clamp(value, default=0.0):
         return default
 
 
+def _duo_scaffold():
+    return [
+        {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü hikâye açısı", "duygu": "curious"},
+        {"sira": 2, "speaker": "male", "amac": "fact", "detay": "en güçlü doğrulanmış detay", "duygu": "confident"},
+        {"sira": 3, "speaker": "female", "amac": "reaction", "detay": "gerçek kullanım açısından doğal tepki", "duygu": "amused"},
+        {"sira": 4, "speaker": "male", "amac": "closing", "detay": "ana çıkarım", "duygu": "serious"},
+    ]
+
+
 def normalize_duo_strategy(reels_state):
     """Model çıktısını deterministik, iki karakterli üretim planına dönüştürür."""
     reels_state = reels_state or {}
@@ -45,14 +54,15 @@ def normalize_duo_strategy(reels_state):
         if purpose not in VALID_PURPOSES:
             purpose = "transition"
         detail = str(item.get("detay") or "").strip()
+        if not detail:
+            # Empty map rows cannot produce a meaningful dialogue turn. Do not
+            # let them survive into the contract and later disappear silently.
+            continue
         emotion = str(item.get("duygu") or "").strip()
         requested_speaker = str(item.get("speaker") or "").strip().lower()
         if requested_speaker not in {"female", "male"}:
             requested_speaker = ""
 
-        # Preserve the creative map's order/details, but repair a solo-only map
-        # into a genuine two-person conversation by alternating speakers. This
-        # does not rewrite the content or invent new facts.
         if requested_speaker:
             speaker = requested_speaker
         else:
@@ -68,16 +78,8 @@ def normalize_duo_strategy(reels_state):
             "duygu": emotion,
         })
 
-    # If the creative map is missing/empty, provide a minimal two-person
-    # conversation scaffold. The duo script model fills the actual wording from
-    # Editorial + Fact Lock; no new factual content is introduced here.
     if not segments:
-        segments = [
-            {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü hikâye açısı", "duygu": "curious"},
-            {"sira": 2, "speaker": "male", "amac": "fact", "detay": "en güçlü doğrulanmış detay", "duygu": "confident"},
-            {"sira": 3, "speaker": "female", "amac": "reaction", "detay": "gerçek kullanım açısından doğal tepki", "duygu": "amused"},
-            {"sira": 4, "speaker": "male", "amac": "closing", "detay": "ana çıkarım", "duygu": "serious"},
-        ]
+        segments = _duo_scaffold()
 
     # Guarantee both voices are represented without forcing equal airtime.
     if not any(x["speaker"] == "female" for x in segments):
