@@ -70,16 +70,24 @@ def normalize_conversation_map(strategy: Dict[str, Any]) -> List[Dict[str, Any]]
         })
 
     if mode == "DUO":
-        # A single-speaker creative map is not allowed to silently collapse the
-        # production to one voice. Repair only speaker assignment; preserve the
-        # original order, purpose and editorial detail.
         if not normalized:
             normalized = _duo_scaffold()
+        elif len(normalized) == 1:
+            # Preserve the only real editorial detail and add one neutral turn
+            # for the missing voice. The script model supplies the wording from
+            # Editorial + Fact Lock; this layer does not invent factual content.
+            missing = "male" if normalized[0]["speaker"] == "female" else "female"
+            normalized.append({
+                "sira": 2,
+                "speaker": missing,
+                "amac": "closing",
+                "detay": "ana çıkarım",
+                "duygu": "natural",
+            })
         elif not any(x["speaker"] == "female" for x in normalized):
             normalized[0]["speaker"] = "female"
         elif not any(x["speaker"] == "male" for x in normalized):
-            idx = 1 if len(normalized) > 1 else 0
-            normalized[idx]["speaker"] = "male"
+            normalized[1]["speaker"] = "male"
 
     return normalized
 
