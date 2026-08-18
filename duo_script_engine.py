@@ -139,9 +139,11 @@ def _segment_word_count(segments: Any) -> int:
 def validate_generated_duo(contract: Dict[str, Any], generated: Any) -> List[Dict[str, str]]:
     """Validate the model's structured response before any TTS use.
 
-    DUO production is strict: both speakers must reach TTS. If the model returns
-    a valid multi-line script using only one speaker, repair the speaker balance
-    deterministically rather than silently falling back to legacy single voice.
+    A DUO script is structurally invalid unless both speakers are present. This
+    validator deliberately does not rewrite speaker identity: doing so could
+    change the intended dramaturgy. The caller's existing regeneration/QA path
+    must regenerate the script instead of silently producing a single-speaker
+    result.
     """
     if isinstance(generated, dict):
         generated = generated.get("segments", [])
@@ -152,20 +154,7 @@ def validate_generated_duo(contract: Dict[str, Any], generated: Any) -> List[Dic
 
     if mode == "DUO":
         speakers_present = {segment["speaker"] for segment in segments}
-        missing = {"female", "male"} - speakers_present
-        if missing:
-            # Prefer changing an existing later turn rather than duplicating
-            # content. The spoken words remain untouched; only speaker identity
-            # is repaired so the strict two-voice production contract survives.
-            if len(segments) < 2:
-                return []
-            replacement = next(iter(missing))
-            current = segments[-1]["speaker"]
-            if current == replacement:
-                replacement = "male" if current == "female" else "female"
-            segments[-1] = {"speaker": replacement, "text": segments[-1]["text"]}
-
-        if {"female", "male"} - {segment["speaker"] for segment in segments}:
+        if not {"female", "male"}.issubset(speakers_present):
             return []
 
     min_words = contract.get("min_words")
