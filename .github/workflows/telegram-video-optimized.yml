@@ -108,6 +108,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Download Telegram video
         if: ${{ inputs.telegram_file_id != '' }}
@@ -118,17 +120,16 @@ jobs:
           TELEGRAM_FILENAME: ${{ inputs.telegram_filename }}
         run: python telegram_webhook_intake.py
 
-      - name: Ensure FFmpeg
-        run: |
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-          else
-            ffmpeg -version | head -n 1
-          fi
-
       - name: Install Python dependencies
         run: pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Verify ffmpeg binary from imageio-ffmpeg
+        run: |
+          python - << 'PY'
+          import imageio_ffmpeg
+          p = imageio_ffmpeg.get_ffmpeg_exe()
+          print("imageio ffmpeg:", p)
+          PY
 
       - name: Compile check
         run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py social_fallbacks.py telegram_pipeline_runner.py telegram_pipeline_worker.py telegram_pipeline_guard.py telegram_pipeline_social_entry.py telegram_webhook_intake.py utils.py
