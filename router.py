@@ -41,7 +41,6 @@ class SmartRouter:
 
     def _ordered_api_items(self):
         def _rank(name: str):
-            # Önce ana key, sonra numaralı keyler (1,2,3...), sonra kalanlar.
             if name == "GEMINI_API_KEY":
                 return (0, 0)
             m = re.match(r"^GEMINI_API_KEY_(\d+)$", str(name))
@@ -87,9 +86,7 @@ class SmartRouter:
     def _parse_hata(self, hata_metni: str) -> Tuple[str, int]:
         m = (hata_metni or "").lower()
         if "404" in m or "not_found" in m or "model not found" in m:
-            if "no longer available to new users" in m or "new users" in m:
-                return "model_key", COOLDOWN_BULUNAMADI
-            return "model", COOLDOWN_BULUNAMADI
+            return "model_key", COOLDOWN_BULUNAMADI
         if "limit: 0" in m or 'limit\\": 0' in m:
             return "free_tier_yok", COOLDOWN_FREE_TIER_YOK
         if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
@@ -112,9 +109,9 @@ class SmartRouter:
             self._last_request_had_quota = True
             self._ban(mail, model, COOLDOWN_SUNUCU, "combo")
             return "quota"
-        if scope == "model_key":
+        if scope in ("model_key", "combo"):
             self._ban(mail, model, cooldown, "combo")
-            log_ekle(f"⚠️ {mail}+{model}: bu key/model erişimi yok; sonraki key deneniyor.")
+            log_ekle(f"⚠️ {mail}+{model}: gecici hata / erisim sorunu; sonraki key deneniyor.")
             return "continue"
 
         self._ban(mail, model, cooldown, "model" if scope in ("model", "model_config") else "combo")
@@ -133,10 +130,13 @@ class SmartRouter:
     ):
         son_hata = None
         self._last_request_had_quota = False
+        
+        # Her yeni istekte (farkli bir pipeline adimina gecildiginde)
+        # eski asamalardan kalan gecici engelleri temizle ki sistem kilitlenmesin.
+        self.blacklist.clear()
+        
         modeller = list(model_listesi or [])
 
-        # Kritik kural: model dış döngüde, key iç döngüde.
-        # Yani bir model için tüm keyler tükenmeden sonraki modele geçilmez.
         for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
 
@@ -359,7 +359,6 @@ class SmartRouter:
         raise ValueError("TTS yanıtında audio bulunamadı")
 
     def _tts_kaydet(self, audio: bytes, cikti_dosyasi: str, hiz_carpani: float, log_ekle) -> Tuple[bool, Optional[str]]:
-        """TTS audio bytes'i wav olarak yazar; 1.0x değilse ffmpeg ile hızlandırır."""
         if abs(hiz_carpani - 1.0) < 0.001:
             wav_yaz(cikti_dosyasi, audio)
             return True
