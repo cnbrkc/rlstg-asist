@@ -16,11 +16,39 @@ for _i in range(1, 21):
 if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
-# 2.5 flash ilk sırada: önce en stabil model denensin.
-VIDEO_ANALIZ_MODELLERI = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
-METIN_MODELLERI = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
-ARAMA_MODELLERI = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
-SES_MODELLERI = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
+# GÜNCEL MODELLER (Ağustos 2026) - 404 veren eski lite sürümleri kaldırıldı.
+# 3.x serisi güncel, stabil ve hızlı olduğu için önceliklendirildi.
+VIDEO_ANALIZ_MODELLERI = [
+    "gemini-3.7-flash", 
+    "gemini-3.6-flash", 
+    "gemini-3.5-flash", 
+    "gemini-3.1-pro-preview", 
+    "gemini-2.5-pro",
+    "gemini-2.5-flash"
+]
+
+METIN_MODELLERI = [
+    "gemini-3.7-flash", 
+    "gemini-3.6-flash", 
+    "gemini-3.5-flash", 
+    "gemini-3.1-pro-preview", 
+    "gemini-3.5-flash-lite", 
+    "gemini-3.1-flash-lite", 
+    "gemini-2.5-flash"
+]
+
+ARAMA_MODELLERI = [
+    "gemini-3.7-flash", 
+    "gemini-3.6-flash", 
+    "gemini-3.5-flash", 
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash"
+]
+
+SES_MODELLERI = [
+    "gemini-3.1-flash-tts-preview", 
+    "gemini-2.5-flash-preview-tts"
+]
 
 COOLDOWN_SUNUCU = 30
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
@@ -51,4 +79,4 @@ PIPELINE_ADIMLARI = [
 ]
 
 def model_arama_destekliyor_mu(model_adi: str) -> bool:
-    return model_adi.startswith("gemini-2.5") or model_adi.startswith("gemini-3")
+    return model_adi in ARAMA_MODELLERI
