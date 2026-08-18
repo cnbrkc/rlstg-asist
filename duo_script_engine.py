@@ -137,12 +137,25 @@ def _segment_word_count(segments: Any) -> int:
 
 
 def validate_generated_duo(contract: Dict[str, Any], generated: Any) -> List[Dict[str, str]]:
-    """Validate the model's structured response before any TTS use."""
+    """Validate the model's structured response before any TTS use.
+
+    A DUO script is structurally invalid unless both speakers are present. This
+    validator deliberately does not rewrite speaker identity: doing so could
+    change the intended dramaturgy. The caller's existing regeneration/QA path
+    must regenerate the script instead of silently producing a single-speaker
+    result.
+    """
     if isinstance(generated, dict):
         generated = generated.get("segments", [])
-    segments = validate_script_segments(generated, contract.get("mode", "DUO"))
+    mode = str(contract.get("mode", "DUO") or "DUO").upper()
+    segments = validate_script_segments(generated, mode)
     if not segments:
         return []
+
+    if mode == "DUO":
+        speakers_present = {segment["speaker"] for segment in segments}
+        if not {"female", "male"}.issubset(speakers_present):
+            return []
 
     min_words = contract.get("min_words")
     max_words = contract.get("max_words")

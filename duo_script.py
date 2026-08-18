@@ -24,8 +24,23 @@ def _mode(strategy: Dict[str, Any]) -> str:
     return value if value in _ALLOWED_MODES else "DUO"
 
 
+def _duo_scaffold() -> List[Dict[str, Any]]:
+    """Return a neutral two-speaker scaffold when the creative map is unusable."""
+    return [
+        {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü hikâye açısı", "duygu": "curious"},
+        {"sira": 2, "speaker": "male", "amac": "fact", "detay": "en güçlü doğrulanmış detay", "duygu": "confident"},
+        {"sira": 3, "speaker": "female", "amac": "reaction", "detay": "gerçek kullanım açısından doğal tepki", "duygu": "amused"},
+        {"sira": 4, "speaker": "male", "amac": "closing", "detay": "ana çıkarım", "duygu": "serious"},
+    ]
+
+
 def normalize_conversation_map(strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Return a safe, ordered conversation map without changing editorial content."""
+    """Return a safe, ordered conversation map without changing editorial content.
+
+    DUO is a production contract: a malformed/solo creative map must be repaired
+    here as well because this helper is also called directly by the pipeline and
+    by the script contract builder. SOLO modes retain their single-speaker rules.
+    """
     mode = _mode(strategy)
     selected = (strategy or {}).get("konusma_haritasi") or (strategy or {}).get("conversation_map") or []
     if not isinstance(selected, list):
@@ -54,11 +69,31 @@ def normalize_conversation_map(strategy: Dict[str, Any]) -> List[Dict[str, Any]]
             "duygu": str(item.get("duygu", "natural")).strip() or "natural",
         })
 
+    if mode == "DUO":
+        if not normalized:
+            normalized = _duo_scaffold()
+        elif len(normalized) == 1:
+            # Preserve the only real editorial detail and add one neutral turn
+            # for the missing voice. The script model supplies the wording from
+            # Editorial + Fact Lock; this layer does not invent factual content.
+            missing = "male" if normalized[0]["speaker"] == "female" else "female"
+            normalized.append({
+                "sira": 2,
+                "speaker": missing,
+                "amac": "closing",
+                "detay": "ana çıkarım",
+                "duygu": "natural",
+            })
+        elif not any(x["speaker"] == "female" for x in normalized):
+            normalized[0]["speaker"] = "female"
+        elif not any(x["speaker"] == "male" for x in normalized):
+            normalized[1]["speaker"] = "male"
+
     return normalized
 
 
 def validate_script_segments(segments: Any, mode: str = "DUO") -> List[Dict[str, str]]:
-    """Validate generated speaker lines without enabling them in production yet."""
+    """Validate generated speaker lines before any TTS use."""
     mode = str(mode or "DUO").upper()
     if mode not in _ALLOWED_MODES:
         mode = "DUO"
@@ -77,4 +112,3 @@ def validate_script_segments(segments: Any, mode: str = "DUO") -> List[Dict[str,
             continue
         result.append({"speaker": speaker, "text": text})
     return result
-
