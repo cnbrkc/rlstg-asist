@@ -16,13 +16,12 @@ for _i in range(1, 21):
 if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
-VIDEO_ANALIZ_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
-METIN_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
-ARAMA_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+# 2.5-flash-lite yeni hesaplarda sıkça 404 verdiği için listeden çıkarıldı.
+VIDEO_ANALIZ_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+METIN_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+ARAMA_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 SES_MODELLERI = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 
-# 503 is a transient server condition. A 15-minute combo ban made a single
-# pipeline unnecessarily wait behind stale cooldowns. Keep failover fast.
 COOLDOWN_SUNUCU = 30
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
 COOLDOWN_DIGER = 5 * 60
@@ -39,9 +38,18 @@ SES_GENISLIK = 2
 VIDEO_CRF = 20
 VIDEO_PRESET = "veryfast"
 SES_HIZ_CARPANI = 1.2
-PIPELINE_ADIMLARI = ["🎥 Video analiz ediliyor (Forensic)...", "🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...", "🧠 Hikâye seçiliyor (Editorial Brain)...", "🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover)...", "📝 Caption + hashtag hazırlanıyor...", "🧵 Threads hazırlanıyor...", "🔍 Son kalite kontrol (QA)...", "🎧 Ses üretiliyor (TTS)...", "🎬 Video hazırlanıyor (render)..."]
+PIPELINE_ADIMLARI = [
+    "🎥 Video analiz ediliyor (Forensic)...",
+    "🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...",
+    "🧠 Hikâye seçiliyor (Editorial Brain)...",
+    "🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover)...",
+    "📝 Caption + hashtag hazırlanıyor...",
+    "🧵 Threads hazırlanıyor...",
+    "🔍 Son kalite kontrol (QA)...",
+    "🎧 Ses üretiliyor (TTS)...",
+    "🎬 Video hazırlanıyor (render)...",
+]
 
 
 def model_arama_destekliyor_mu(model_adi: str) -> bool:
     return model_adi.startswith("gemini-2.5") or model_adi.startswith("gemini-3")
-
