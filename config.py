@@ -16,10 +16,10 @@ for _i in range(1, 21):
 if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
-# 2.5-flash-lite yeni hesaplarda sıkça 404 verdiği için listeden çıkarıldı.
-VIDEO_ANALIZ_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-METIN_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-ARAMA_MODELLERI = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+# 2.5 flash ilk sırada: önce en stabil model denensin.
+VIDEO_ANALIZ_MODELLERI = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
+METIN_MODELLERI = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
+ARAMA_MODELLERI = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
 SES_MODELLERI = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 
 COOLDOWN_SUNUCU = 30
@@ -49,7 +49,6 @@ PIPELINE_ADIMLARI = [
     "🎧 Ses üretiliyor (TTS)...",
     "🎬 Video hazırlanıyor (render)...",
 ]
-
 
 def model_arama_destekliyor_mu(model_adi: str) -> bool:
     return model_adi.startswith("gemini-2.5") or model_adi.startswith("gemini-3")
