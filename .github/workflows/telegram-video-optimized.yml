@@ -79,29 +79,13 @@ jobs:
         with:
           fetch-depth: 1
           sparse-checkout: |
-            .github
-            cloudflare
-            data/pending
-            prompts
-            character_profiles.py
-            config.py
-            duo_audio.py
-            duo_script.py
-            duo_script_engine.py
-            duo_strategy.py
-            media.py
-            pipeline.py
-            prompts.py
-            router.py
-            schemas.py
-            social_fallbacks.py
-            telegram_pipeline_runner.py
-            telegram_pipeline_worker.py
-            telegram_pipeline_guard.py
-            telegram_pipeline_social_entry.py
-            telegram_webhook_intake.py
+            .github/
+            cloudflare/
+            data/pending/
+            core/
+            duo/
+            telegram/
             requirements.txt
-            utils.py
           sparse-checkout-cone-mode: false
 
       - name: Setup Python
@@ -118,7 +102,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
           TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
           TELEGRAM_FILENAME: ${{ inputs.telegram_filename }}
-        run: python telegram_webhook_intake.py
+        run: python -m telegram.telegram_webhook_intake
 
       - name: Install Python dependencies
         run: pip install --disable-pip-version-check -r requirements.txt
@@ -132,7 +116,7 @@ jobs:
           PY
 
       - name: Compile check
-        run: python -m compileall -q config.py character_profiles.py duo_strategy.py duo_script.py duo_script_engine.py duo_audio.py media.py pipeline.py prompts.py router.py schemas.py social_fallbacks.py telegram_pipeline_runner.py telegram_pipeline_worker.py telegram_pipeline_guard.py telegram_pipeline_social_entry.py telegram_webhook_intake.py utils.py
+        run: python -m compileall -q core duo telegram
 
       - name: Run Reels pipeline
         env:
@@ -145,4 +129,4 @@ jobs:
           VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
           CONTENT_TONE: ${{ inputs.content_tone }}
           PYTHONUNBUFFERED: "1"
-        run: python telegram_pipeline_social_entry.py
+        run: python -m telegram.telegram_pipeline_social_entry
