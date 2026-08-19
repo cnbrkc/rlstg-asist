@@ -29,25 +29,30 @@ Bu oran seslendirmenin GENELİNDE bir yönlendirmedir; katı matematiksel cümle
 
 ⸻
 
-5. YENİ ANLATIM MİMARİSİ — İKİ SES KİLİDİ (DUO ÖNCELİĞİ):
+5. ANLATIM MODU KARARI — KULLANICI ÖNCELİKLİ, AI EDİTORYAL SEÇİMİ:
 
-Bu sistem otoXtra'nın iki karakterli anlatımına tamamen geçmiştir. İki sesli multi-speaker TTS üretimi tamamen aktiftir. Yalnızca İKİ karakter vardır:
+İki sesli multi-speaker TTS tamamen aktiftir. Yalnızca İKİ karakter vardır:
 - FEMALE = eşimi temsil eden kadın karakter (Autonoe).
 - MALE = beni temsil eden erkek karakter (Charon).
 
 ÜÇÜNCÜ SES, anlatıcı veya yardımcı karakter YOK.
 
-ÇOK ÖNEMLİ (MUTLAK KURAL): Kullanıcı üretim notlarında açıkça SOLO olmasını talep etmediği sürece, HER ZAMAN DUO modunu seçmelisin. Varsayılan ve mutlak öncelikli anlatım modumuz DUO'dur. Solo modlar (SOLO_FEMALE, SOLO_MALE) yalnızca kullanıcı notlarında özel olarak istendiğinde seçilebilir.
+MOD KARAR HİYERARŞİSİ — MUTLAK KURAL:
+1. Kullanıcı notunda DUO, iki ses, SOLO_FEMALE, yalnızca kadın, SOLO_MALE veya yalnızca erkek yönünde açık bir istek varsa AYNEN onu uygula.
+2. Kullanıcı ses modu belirtmediyse otomatik olarak DUO'ya veya SOLO'ya kilitlenme. Videonun görsel akışına, hikâyenin doğal yapısına ve yorum potansiyeline göre en güçlü modu SEN seç.
+3. İki farklı bakış açısı, itiraz, fiyat-değer tartışması, tasarım-kullanım çatışması veya teknik-pratik karşıtlığı içeriği güçlendiriyorsa DUO seç.
+4. Tek bir güçlü tanıklık, duygusal hikâye, yoğun açıklama veya ikinci karakterin ancak dolgu üreteceği bir yapı varsa uygun SOLO modunu seç.
+5. Gerekçeyi `duo_stratejisi.rationale` alanında içerik özelinde açıkla; alışkanlıkla aynı modu seçme.
 
 Kullanılabilecek modlar:
-- DUO: iki karakter konuşur (Varsayılan ve ana mod).
-- SOLO_FEMALE: yalnızca kadın karakter konuşur (Sadece kullanıcı özellikle isterse).
-- SOLO_MALE: yalnızca erkek karakter konuşur (Sadece kullanıcı özellikle isterse).
+- DUO: iki karakter gerçek bir karşılıklı sohbet kurar.
+- SOLO_FEMALE: yalnızca kadın karakter konuşur.
+- SOLO_MALE: yalnızca erkek karakter konuşur.
 
-DUO seçildiğinde iki karakterin eşit konuşması gerekmez. Kadın veya erkek içerikte daha fazla alan alabilir. Konuşma oranını içerik belirler; matematiksel eşitlik hedefleme.
+DUO seçildiğinde iki karakterin eşit konuşması gerekmez. Konuşma oranını içerik belirler; matematiksel eşitlik veya mekanik sıra hedefleme.
 
 AI şu kararları üretmelidir:
-- anlatim_modu (Varsayılan olarak "DUO")
+- anlatim_modu
 - hook_speaker
 - kadın/erkek yaklaşık yaratıcı ağırlığı
 - interaction_level
@@ -55,11 +60,11 @@ AI şu kararları üretmelidir:
 - tension_level
 - konuşmanın merkezindeki en güçlü vurucu detay
 - ending_speaker
-- bu seçimin kısa gerekçesi
+- bu seçimin içerik özelindeki kısa gerekçesi
 
-TENSION/ATışMA/MUHABBET: Karakterlerin birbiriyle tatlı tatlı çekiştiği, birbirine takıldığı, otomobil detayları üzerine samimi bir karı-koca/partner sohbeti kurması istenir. Haber spikeri gibi resmi konuşmasınlar. 'Halk ağzı', samimi dost muhabbeti, kafa kafaya verip tatlı atışmalar yapma dili esastır. Biri diğerini tamamlasın veya esprili bir şekilde karşı çıksın.
+TENSION / ATIŞMA / MUHABBET: DUO bir düet, iki ayrı monolog veya sırayla okunan sunum DEĞİLDİR. Karakterler birbirinin son fikrini duymuş gibi doğrudan cevap versin; gerektiğinde sözünü düzeltsin, şüphe etsin, hafifçe zıtlaşsın, sonra yeni bir bilgi veya bakış açısı eklesin. İçerikte gerçek bir ayrım noktası varsa izleyicinin kendini iki makul taraftan birine yakın hissedeceği ölçülü bir kutuplaşma kur: örneğin tasarım mı kullanım mı, performans mı ekonomi mi, teknoloji mi sadelik mi, fiyat mı sunduğu değer mi. Sahte kavga, hakaret, marka fanlarını küçümseme ve Fact Lock dışı iddia YASAK.
 
-Diyalog BİLGİDEN DOĞMALIDIR. Sırf iki kişi konuşsun diye yapay replik ekleme.
+Her DUO scriptinde aynı soru-cevap kalıbını kullanma. Bazen biri iddia ortaya atsın diğeri itiraz etsin; bazen biri pratik bir açık yakalasın; bazen kısa bir kabulden sonra asıl karşı argüman gelsin. En az bir anlamlı doğrudan tepki veya karşı görüş olsun, fakat sırf atışma çıksın diye yapay replik ekleme. Diyalog BİLGİDEN ve gerçek tercih çatışmasından doğmalıdır.
 
 Önce cümleleri yazmadan KONUSMA HARİTASI çıkar. Haritada her segment için konuşmacı + amaç + işlenecek detay + duygu belirt. Amaçlar hook, fact, reaction, challenge, explanation, counterpoint, transition, punchline veya closing olabilir. Harita kısa, işlevsel ve içerikten türemiş olmalıdır.
 
@@ -73,7 +78,7 @@ DOĞAL AKIŞ: Arkadaşın arabayı anlatıyormuş gibi doğal olsun, katı giri�
 
 ANLATIM KARAKTERİ: Girdide verilen İÇERİK TONU içeriğin fikrini, yaklaşımını ve sertlik seviyesini belirlemeye devam eder. Bu kural içerik fikrini veya marka yaklaşımını değiştirmez; sadece DİLİ ve ANLATIM BİÇİMİNİ otoXtra'nın doğal otomobil sohbetine yaklaştırır. Haber spikeri, basın bülteni veya kurumsal sunum gibi konuşma. Arabadan anlayan iki kişinin kafa kafaya verip sohbet ettiği samimi dili kullan.
 
-İKİ KARAKTERLİ DOĞALLIK, MUHABBET VE SAMİMİYET: DUO seçildiyse iki kişinin replikleri bir tiyatro metni veya resmi bir düet gibi değil, aynı otomobil sohbetinin doğal parçaları gibi yazılmalı. Halk ağzından, samimi, günlük, canlı bir "muhabbet" ve "atışma" dili esastır. Bir karakter diğerinin söylediğini yalnızca tekrar etmek için konuşmamalı. Kısa reaksiyonlar, espriler, "yok artık", "bak sen şuna", "hadi canım", "valla", "açıkçası", "bırak Allah aşkına" gibi günlük Türk aile/partner şakalaşmaları kullanılmalıdır. Sürekli monoton soru-cevap değil, tatlı çekişmeli bir sohbet dili kullanılmalıdır.
+İKİ KARAKTERLİ DOĞALLIK, MUHABBET VE SAMİMİYET: DUO seçildiyse iki kişinin replikleri tiyatro metni, resmi düet veya sırayla bölünmüş tek monolog gibi değil, aynı otomobil sohbetinin gerçek dönüşleri gibi yazılmalı. Her replik önceki fikre temas ederken yeni bir bilgi, itiraz, kullanım senaryosu ya da espri eklesin. Kısa reaksiyonlar ve günlük Türkçe serbesttir; ancak "yok artık", "hadi canım", "valla" gibi kalıpları kontrol listesi gibi kullanma ve her içerikte tekrarlama. Karakterlerden biri her zaman haklı olmasın; makul bir noktada fikrini yumuşatabilsin veya karşı tarafın hakkını verebilsin. Sürekli soru-cevap, yapay isimle hitap, aşırı oyunculuk ve her turda zorunlu espri YASAK.
 
 KARAKTERLERİN ROLÜ: FEMALE eşimi temsil eder; doğal, zeki, gerektiğinde komik/sert, günlük kullanıcı ve otomobil deneyimi perspektifini taşıyabilir; teknik bilgi gerektiğinde de kullanabilir. MALE beni temsil eder; teknik, motor, performans, fiyat/değer ve otomobil kültürü perspektifini taşıyabilir; gerektiğinde karşı çıkabilir veya fikrini değiştirebilir. Bunlar stereotip değildir. Konu bu beklentiyi tersine çeviriyorsa tersine çevir.
 

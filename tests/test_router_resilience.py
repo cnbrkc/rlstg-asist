@@ -182,6 +182,77 @@ class PermanentBanTests(unittest.TestCase):
         self.assertEqual(router.clients["k1"].models.calls.count("bad-tts"), 0)
 
 
+class MultiSpeakerConfigTests(unittest.TestCase):
+    """DUO isteğinin API'ye boş SpeechConfig olarak gitmesini engeller."""
+
+    def test_duo_config_is_nested_under_speech_config(self):
+        router = SmartRouter.__new__(SmartRouter)
+        captured = {}
+
+        class _Inline:
+            data = b"pcm"
+
+        class _Part:
+            inline_data = _Inline()
+
+        class _Content:
+            parts = [_Part()]
+
+        class _Candidate:
+            content = _Content()
+
+        class _Response:
+            candidates = [_Candidate()]
+
+        def fake_request(models, contents, config, log):
+            captured["prompt"] = contents
+            captured["config"] = config
+            return _Response(), "key+tts"
+
+        router._make_request = fake_request
+        router._tts_kaydet = lambda audio, path, speed, log: audio == b"pcm"
+        logs = []
+
+        ok, _ = router.coklu_ses_uret(
+            "Autonoe: Merhaba.\nCharon: Selam.",
+            [("Autonoe", "Autonoe"), ("Charon", "Charon")],
+            "/tmp/not-written.wav",
+            logs.append,
+        )
+
+        self.assertTrue(ok)
+        speech = captured["config"].speech_config
+        self.assertIsNotNone(speech)
+        multi = speech.multi_speaker_voice_config
+        self.assertIsNotNone(multi)
+        self.assertEqual(
+            [(item.speaker, item.voice_config.prebuilt_voice_config.voice_name)
+             for item in multi.speaker_voice_configs],
+            [("Autonoe", "Autonoe"), ("Charon", "Charon")],
+        )
+        # SDK'nin API'ye göndereceği wire shape boş `speechConfig: {}` değil,
+        # mutlaka nested `multiSpeakerVoiceConfig` içermeli.
+        wire = captured["config"].model_dump(exclude_none=True, by_alias=True)
+        self.assertEqual(
+            len(wire["speechConfig"]["multiSpeakerVoiceConfig"]["speakerVoiceConfigs"]),
+            2,
+        )
+        self.assertTrue(any("Multi-speaker API config doğrulandı" in line for line in logs))
+
+    def test_rejects_duplicate_voice(self):
+        router = SmartRouter.__new__(SmartRouter)
+        logs = []
+        ok, info = router.coklu_ses_uret(
+            "A: Bir.\nB: İki.",
+            [("A", "Autonoe"), ("B", "Autonoe")],
+            "/tmp/not-written.wav",
+            logs.append,
+        )
+        self.assertFalse(ok)
+        self.assertIsNone(info)
+        self.assertTrue(any("sesler farklı olmalı" in line for line in logs))
+
+
 class FreeTierPerKeyTests(unittest.TestCase):
     """free-tier key/project'e bağlı: yalnızca o key yasaklanır."""
 

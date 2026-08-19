@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/setup") {
       const webhookUrl = `${url.origin}/`;
@@ -9,6 +9,7 @@ export default {
     if (request.method !== "POST") return new Response("RLSTG Telegram Webhook OK", { status: 200 });
     const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
     if (!env.TELEGRAM_WEBHOOK_SECRET || secret !== env.TELEGRAM_WEBHOOK_SECRET) return new Response("Unauthorized", { status: 401 });
+    ctx?.waitUntil(cleanupStalePending(env).catch(error => console.log("Pending cleanup failed", String(error))));
     let update;
     try { update = await request.json(); } catch { return new Response("Bad JSON", { status: 400 }); }
     const callback = update?.callback_query;
@@ -17,25 +18,6 @@ export default {
     const chatId = message?.chat?.id;
     if (!chatId) return new Response("OK", { status: 200 });
 
-    if (message.text && message.text !== "/start") {
-      const waitingPath = `data/pending/chat_${chatId}_awaiting_note.json`;
-      const waitingResponse = await githubGet(env, waitingPath);
-      if (waitingResponse.ok) {
-        const waitingMeta = await waitingResponse.json();
-        const waiting = JSON.parse(await decodeGitHubContent(waitingMeta));
-        const updateId = String(waiting.update_id || "");
-        const pendingPath = `data/pending/${updateId}.json`;
-        const pendingResponse = await githubGet(env, pendingPath);
-        if (pendingResponse.ok) {
-          const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
-          pending.video_note = String(message.text).trim();
-          pending.note_source = "telegram_followup_text";
-          await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Attach Telegram note ${updateId}`);
-          await githubDelete(env, waitingPath, waitingMeta.sha, `Clear note request ${updateId}`);
-          return await dispatchPipeline(env, chatId, pending, updateId, waiting.tone, waiting.message_id);
-        }
-      }
-    }
 
     let fileId = null, filename = "", videoNote = "", textInput = "", inputType = "text";
     if (message.video) {
@@ -58,7 +40,7 @@ export default {
 
     const updateId = String(update.update_id);
     const pendingPath = `data/pending/${updateId}.json`;
-    const pending = { file_id: fileId, chat_id: String(chatId), filename, video_note: videoNote, text_input: textInput, input_type: inputType };
+    const pending = { file_id: fileId, chat_id: String(chatId), filename, video_note: videoNote, text_input: textInput, input_type: inputType, created_at: new Date().toISOString() };
     const saved = await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Queue Telegram ${inputType} ${updateId}`);
     if (!saved.ok) {
       const body = await saved.text();
@@ -74,40 +56,20 @@ export default {
 
 async function handleCallback(callback, env) {
   const chatId = callback?.message?.chat?.id;
-  const data = String(callback?.data || "");
-  const modeMatch = data.match(/^mode:(eglence|dengeli|bilgi|teknik):(\d+)$/);
-  const noteYesMatch = data.match(/^note:yes:(\d+)$/);
-  const noteNoMatch = data.match(/^note:no:(\d+)$/);
-  if (!chatId || (!modeMatch && !noteYesMatch && !noteNoMatch)) {
+  const modeMatch = String(callback?.data || "").match(/^mode:(eglence|dengeli|bilgi|teknik):(\d+)$/);
+  if (!chatId || !modeMatch) {
     await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "Geçersiz seçim." });
     return new Response("OK", { status: 200 });
   }
-  if (modeMatch) {
-    const tone = modeMatch[1], updateId = modeMatch[2], pendingPath = `data/pending/${updateId}.json`;
-    try {
-      const pendingResponse = await githubGet(env, pendingPath);
-      if (!pendingResponse.ok) return new Response("Pending lookup failed", { status: 502 });
-      const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
-      const labels = { eglence: "🎭 Eğlence Ağırlıklı", dengeli: "⚖️ Dengeli", bilgi: "🧠 Bilgi Ağırlıklı", teknik: "📊 Teknik / Detaylı" };
-      const isVideo = pending.input_type === "video" && !!pending.file_id;
-      if (!isVideo) return await dispatchPipeline(env, chatId, pending, updateId, tone, callback.message.message_id, callback.id);
-      await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: `${labels[tone]} seçildi.` });
-      return await dispatchPipeline(env, chatId, pending, updateId, tone, callback.message.message_id, callback.id);
-    } catch (error) { return await callbackError(env, callback, chatId, error); }
+  const tone = modeMatch[1], updateId = modeMatch[2], pendingPath = `data/pending/${updateId}.json`;
+  try {
+    const pendingResponse = await githubGet(env, pendingPath);
+    if (!pendingResponse.ok) return new Response("Pending lookup failed", { status: 502 });
+    const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
+    return await dispatchPipeline(env, chatId, pending, updateId, tone, callback.message.message_id, callback.id);
+  } catch (error) {
+    return await callbackError(env, callback, chatId, error);
   }
-  const updateId = (noteYesMatch || noteNoMatch)[1];
-  const pendingPath = `data/pending/${updateId}.json`;
-  const pendingResponse = await githubGet(env, pendingPath);
-  if (!pendingResponse.ok) return new Response("Pending lookup failed", { status: 502 });
-  const pending = JSON.parse(await decodeGitHubContent(await pendingResponse.json()));
-  if (noteNoMatch) return await dispatchPipeline(env, chatId, pending, updateId, pending.selected_tone || "dengeli", callback.message.message_id, callback.id);
-  pending.selected_tone = pending.selected_tone || "dengeli";
-  await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Store selected tone ${updateId}`);
-  const waitingPath = `data/pending/chat_${chatId}_awaiting_note.json`;
-  await githubPut(env, waitingPath, JSON.stringify({ update_id: updateId, tone: pending.selected_tone, message_id: callback.message.message_id }, null, 2), `Await Telegram note ${updateId}`);
-  await telegram(env, "answerCallbackQuery", { callback_query_id: callback.id, text: "Not bekleniyor." });
-  await safeEdit(env, chatId, callback.message.message_id, "📝 Analiz notunu ayrı mesaj olarak gönder.");
-  return new Response("OK");
 }
 
 async function dispatchPipeline(env, chatId, pending, updateId, tone, messageId, callbackId = "") {
@@ -129,6 +91,26 @@ async function dispatchPipeline(env, chatId, pending, updateId, tone, messageId,
   const pendingMeta = await githubGet(env, `data/pending/${updateId}.json`);
   if (pendingMeta.ok) { const meta = await pendingMeta.json(); await githubDelete(env, `data/pending/${updateId}.json`, meta.sha, `Remove processed Telegram input ${updateId}`); }
   return new Response("OK");
+}
+
+async function cleanupStalePending(env) {
+  const listing = await githubGet(env, "data/pending");
+  if (!listing.ok) return;
+  const files = await listing.json();
+  if (!Array.isArray(files)) return;
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const file of files.slice(0, 50)) {
+    if (file?.type !== "file" || !String(file.name || "").endsWith(".json")) continue;
+    const response = await githubGet(env, `data/pending/${file.name}`);
+    if (!response.ok) continue;
+    const metadata = await response.json();
+    let pending;
+    try { pending = JSON.parse(await decodeGitHubContent(metadata)); } catch { pending = {}; }
+    const createdAt = Date.parse(String(pending.created_at || ""));
+    if (Number.isFinite(createdAt) && createdAt < cutoff) {
+      await githubDelete(env, `data/pending/${file.name}`, metadata.sha, `Remove stale Telegram input ${file.name}`);
+    }
+  }
 }
 
 async function callbackError(env, callback, chatId, error) {

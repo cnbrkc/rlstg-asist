@@ -79,6 +79,6 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
         hiz_carpani=hiz_carpani,
     )
     if not ok:
-        log_ekle("⚠️ Tek çağrı DUO TTS başarısız; legacy fallback kullanılacak.")
+        log_ekle("❌ Tek çağrı DUO TTS başarısız; tek sesli fallback engellendi.")
         return False, None
     return True, info

@@ -1,9 +1,8 @@
-"""Duo conversation script normalization.
+"""Production DUO/SOLO conversation-map normalization.
 
-This module is intentionally isolated from the production TTS/render path.
-It converts the planned conversation map into a validated speaker script that
-future multi-speaker TTS can consume, while keeping the legacy single-voice
-representation available.
+The normalized map feeds the active Gemini multi-speaker TTS path. DUO maps
+are repaired to contain both voices; explicitly requested SOLO maps retain
+only their requested speaker.
 """
 
 from typing import Any, Dict, List

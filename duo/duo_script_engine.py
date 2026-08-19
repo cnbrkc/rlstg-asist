@@ -1,7 +1,8 @@
-"""Duo script generation/validation layer.
+"""DUO/SOLO script generation and validation layer.
 
-Keeps the legacy single-speaker production path intact while turning the
-normalized conversation plan into a strict, validated speaker script.
+Turns the normalized voice plan into a strict script contract. DUO requires
+both speakers; SOLO follows either an explicit user override or the model's
+content-based editorial mode decision.
 """
 
 from typing import Any, Dict, List
@@ -83,9 +84,11 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
         "rules": [
             "Yalnızca planlanmış speaker'ları kullan.",
             "Fact Lock dışına çıkma; kullanıcı notunu değiştirme.",
-            "Karakterler birbirine değil konuya tepki versin.",
-            "Gereksiz ping-pong ve aynı fikrin tekrarını engelle.",
-            "Diyalog doğal konuşma ritminde olsun; sırf iki ses var diye cümleleri bölme.",
+            "Karakterler birbirinin son fikrine doğal biçimde tepki verirken konuya yeni değer katsın.",
+            "En az bir anlamlı itiraz, düzeltme, şüphe veya karşı görüş bulunsun; sahte kavga üretme.",
+            "İki makul tercih tarafı oluşabiliyorsa fiyat-değer, teknik-pratik veya tasarım-kullanım ekseninde ölçülü gerilim kur.",
+            "Gereksiz ping-pong, mekanik soru-cevap ve aynı fikrin tekrarını engelle.",
+            "Diyalog doğal konuşma ritminde olsun; sırf iki ses var diye tek monoloğu cümle ortasından bölme.",
             "Marka/üretici hedefleme, hakaret veya düşmanca ifade üretme.",
             "Her replik videoya veya otomobil tartışmasına yeni bir değer katmalı.",
             "Seslendirme süresini korumak için hedef kelime aralığı verildiyse bunun dışına çıkma.",
@@ -115,11 +118,12 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
         "HEDEF: Doğal, samimi ve son derece canlı bir eş/partner otomobil sohbeti. "
         "Diyaloglar yapay bir tiyatro sahnesi veya haber spikerlerinin düeti gibi asla olmamalıdır.\n\n"
         "MUTLAK KURALLAR (SAMİMİ SOHBET, MUHABBET VE ATIŞMA DİLİ):\n"
-        "1. HALK AĞZI VE GÜNLÜK TÜRKÇE: Karakterler birbirlerine 'yok artık', 'bak sen şuna', 'hadi canım', 'valla mı', 'açıkçası', 'bırak Allah aşkına', 'hayırlısı be', 'ne bileyim' gibi son derece samimi, günlük ve sıcak ifadelerle hitap etmelidir.\n"
-        "2. TATLI ATIŞMALAR VE ÇEKİŞME: Karakterlerin kafa kafaya verip otomobil özellikleri, fiyatı veya tasarımı üzerine tatlı tatlı çekiştiği (atışma/muhabbet) bir partner enerjisi kur. Biri bir teknik veri söylediğinde diğeri 'E o fiyata da bir zahmet olsun artık' veya 'Kağıt üstünde öyle de, gerçekte kim bilir nasıldır?' gibi esprili karşı çıkışlarla diyaloğu canlı tutsun.\n"
-        "3. MONOLOG BÖLMEYE SON: Sırf iki kişi konuşsun diye tek bir monolog cümlesini ortadan ikiye bölme! Her spiker satırı, kendi içinde anlamı olan, doğal bir reaksiyon, soru, cevap veya tatlı bir takılma barındıran gerçek birer konuşma sırası (turn) olsun.\n"
-        "4. KİMLİK TUTARLILIĞI: Female (Autonoe) zeki, pratik, günlük kullanım ve esprili partner bakış açısını; Male (Charon) ise teknik, meraklı, motor ve performans odaklı meraklı bakış açısını yansıtsın. Ancak birbirlerini tamamlayıp tatlı takılmalar yapsınlar.\n"
-        "5. KONUŞMA HARİTASINDAKİ HER GEÇERLİ SEGMENT İÇİN BİR REPLİK ÜRET; haritayı boş bırakma.\n"
+        "1. GÜNLÜK TÜRKÇE: Yazı dili veya spiker tonu kullanma. Günlük reaksiyonlar doğal yerde çıkabilir ama aynı 'yok artık/hadi canım/valla' kalıplarını kontrol listesi gibi dizme.\n"
+        "2. GERÇEK KARŞILIKLILIK: Her karakter öncekinin söylediği belirli bir noktaya temas etsin ve ardından yeni bilgi, itiraz, düzeltme, kullanım örneği veya espri eklesin. Yan yana iki bağımsız monolog yazma.\n"
+        "3. ÖLÇÜLÜ ÇEKİŞME: Fact Lock'un desteklediği gerçek bir tercih ekseninde en az bir anlamlı karşı görüş kur. İzleyici iki makul taraftan birini seçebilsin; fakat sahte kavga, marka/fan küçümsemesi veya dayanaksız iddia üretme.\n"
+        "4. MONOLOG BÖLMEYE SON: Sırf iki kişi konuşsun diye tek monoloğu bölme. Her satır kendi amacı olan gerçek bir konuşma sırası olsun; mekanik soru-cevap ve sürekli sırayla konuşma zorunluluğu yok.\n"
+        "5. İNSANİ DEĞİŞİM: Karakterlerden biri uygun bir noktada karşı tarafın hakkını verebilir, fikrini yumuşatabilir veya 'orada haklısın ama...' diyerek karşı argümana geçebilir. Her turda espri yapma.\n"
+        "6. KONUŞMA HARİTASINDAKİ HER GEÇERLİ SEGMENT İÇİN BİR REPLİK ÜRET; haritayı boş bırakma.\n"
         f"{tone_rule}"
         f"{length_rule}\n"
         f"SÖZLEŞME:\n{contract}\n\n"

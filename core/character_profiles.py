@@ -1,8 +1,7 @@
-"""otoXtra Duo karakter profilleri ve ses kimlikleri.
+"""otoXtra karakter profilleri ve üretimdeki Gemini voice kimlikleri.
 
-Bu katman Phase 2'de yalnızca karakter/voice kimliğini merkezileştirir.
-Mevcut tek sesli TTS akışı hâlâ kadın karakteri (Autonoe) kullanır.
-Multi-speaker TTS sonraki aşamada bu haritayı kullanacaktır.
+DUO üretiminde Autonoe ve Charon aynı multi-speaker TTS çağrısında kullanılır.
+SOLO kullanıcı override'ı veya içerik-temelli AI kararıyla bu haritadaki tek voice'a iner.
 """
 
 CHARACTER_VOICES = {

@@ -40,7 +40,7 @@ def test_duo_empty_map_gets_two_speaker_scaffold():
     assert {item["speaker"] for item in result} == {"female", "male"}
 
 
-def test_duo_strategy_and_contract_preserve_two_speakers():
+def test_ai_selected_solo_strategy_is_preserved_without_user_override():
     state = {
         "anlatim_modu": "SOLO_FEMALE",
         "duo_stratejisi": {"uygunluk": "SOLO_FEMALE"},
@@ -51,8 +51,8 @@ def test_duo_strategy_and_contract_preserve_two_speakers():
     }
     plan = normalize_duo_strategy(state)
     contract = build_duo_generation_contract(plan)
-    assert contract["mode"] == "DUO"
-    assert {item["speaker"] for item in contract["conversation_map"]} == {"female", "male"}
+    assert contract["mode"] == "SOLO_FEMALE"
+    assert {item["speaker"] for item in contract["conversation_map"]} == {"female"}
 
 
 def test_generated_duo_script_rejects_single_speaker_for_regeneration():

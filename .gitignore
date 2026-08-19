@@ -2,6 +2,7 @@
 data/*.mp4
 data/*.mov
 data/*.webm
+data/pending/*.json
 *.telegram.mp3
 pipeline_result.json
 __pycache__/

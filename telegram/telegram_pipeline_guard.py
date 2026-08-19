@@ -103,7 +103,7 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
         ton, log, KELIME_HIZI_ORANI, ek_talimat=baslangic_talimati or ""
     )
     reels_state = _pipeline._object_state_or_empty(reels_state)
-    duo_plan = _pipeline._duo_plan_hazirla(reels_state, sure_saniye, ton)
+    duo_plan = _pipeline._duo_plan_hazirla(reels_state, sure_saniye, ton, notes=notes)
     mode = str(duo_plan.get("mode") or duo_plan.get("uygunluk") or reels_state.get("anlatim_modu") or "DUO").upper()
     conversation_map = duo_plan.get("conversation_map") or []
 
@@ -138,13 +138,22 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
             }
 
     ses_path = gecici_ses_yolu()
-    if segments:
-        ok, info = duo_ses_uret(router, segments, ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
+    if mode == "DUO" and segments:
+        ok, info = _pipeline._run_timed(
+            log, "DUO multi-speaker TTS + WAV hazırlama",
+            lambda: duo_ses_uret(router, segments, ses_path, log, hiz_carpani=SES_HIZ_CARPANI),
+        )
+        mod = "DUO"
+    elif mode in {"SOLO_FEMALE", "SOLO_MALE"} and segments:
+        solo_voice = _pipeline._mod_icin_legacy_ses(mode, legacy_voice)
+        ok, info = _pipeline._run_timed(
+            log, f"{mode} tek ses TTS + WAV hazırlama",
+            lambda: router.ses_uret(segments[0]["text"], solo_voice, ses_path, log, hiz_carpani=SES_HIZ_CARPANI),
+        )
         mod = mode
     else:
-        log("⚠️ Conversation map boş; legacy tek sesli TTS yolu kullanılıyor.")
-        ok, info = router.ses_uret(reels_state.get("seslendirme_metni", ""), legacy_voice, ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
-        mod = "LEGACY"
+        log("❌ Konuşma segmentleri üretilemedi; TTS güvenli biçimde durduruldu.")
+        ok, info, mod = False, None, mode
 
     if not ok or not os.path.exists(ses_path):
         temp_dosya_temizle(ses_path)

@@ -46,6 +46,7 @@ def _qa_regeneration_loop_compat(*args, **kwargs):
         and normalized_targets
         and normalized_targets <= {"DUO_SCRIPT_FAIL"}
         and ses_basarili
+        and ses_modu == "DUO"
         and ses_dosyasi
         and _pipeline.os.path.exists(ses_dosyasi)
     ):
@@ -158,22 +159,9 @@ def _duo_ve_ses_yenile_compat(router, reels_state, duo_plan, editorial_state, fa
             instruction += " Önceki Duo/TTS üretimi doğrulanamadı; yalnızca izin verilen speakerları kullan, hedef kelime aralığına uy ve metni doğal konuşulabilirlikte tut."
             continue
 
-    fallback_path = _pipeline.gecici_ses_yolu()
-    try:
-        fallback_ok, fallback_info = router.ses_uret(
-            reels_state.get("seslendirme_metni", "") if isinstance(reels_state, dict) else "",
-            _pipeline._mod_icin_legacy_ses("DUO", legacy_voice),
-            fallback_path,
-            log,
-            hiz_carpani=_pipeline.SES_HIZ_CARPANI,
-        )
-        if fallback_ok and _pipeline.os.path.exists(fallback_path):
-            fallback_sure = _pipeline._ses_suresini_al(fallback_path)
-            log(f"↩️ Duo fallback: geçerli legacy TTS korundu ({fallback_sure:.2f}s); render Duo katmanına bağlı olmadan devam edecek.")
-            return last_duo, True, (fallback_info, fallback_path), "LEGACY_DUO"
-    except Exception as exc:
-        log(f"⚠️ Legacy Duo fallback başarısız: {str(exc)[:180]}")
-    _pipeline.temp_dosya_temizle(fallback_path)
+    # DUO sözleşmesi tek sesli fallback'e düşemez. Aksi hâlde QA geçerli bir
+    # WAV gördüğü için tek sesli dosyayı yanlışlıkla onaylayabilir.
+    log("❌ DUO yenileme tükendi; tek sesli fallback engellendi.")
     return last_duo, False, None, last_mod
 
 

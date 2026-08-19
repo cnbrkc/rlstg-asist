@@ -1,9 +1,8 @@
-"""otoXtra Duo anlatım stratejisi için güvenli normalizasyon katmanı.
+"""otoXtra DUO/SOLO anlatım stratejisi için güvenli normalizasyon katmanı.
 
-Reels Creative'in anlati_modu + duo_stratejisi + konusma_haritasi çıktısını
-kontrollü bir plana dönüştürür. Yaratıcı modelin seçtiği mod (SOLO_FEMALE /
-SOLO_MALE / DUO) korunur; bu katman yalnızca veriyi doğrular/normalize eder,
-modelin editoryal kararını ezmez.
+Kullanıcının açık mod talebi runtime işaretiyle mutlak öncelik taşır. Kullanıcı
+mod belirtmediyse Reels Creative modelinin video ve içeriğe göre verdiği karar
+korunur; geçersiz karar güvenli biçimde DUO'ya düşer.
 """
 
 VALID_MODES = {"SOLO_FEMALE", "SOLO_MALE", "DUO"}
@@ -39,24 +38,25 @@ def _solo_scaffold(speaker):
 
 
 def _resolve_mode(reels_state, raw):
-    """Yaratıcı modelin seçtiği modu oku; yalnızca gerçekten geçersizse DUO'ya düş."""
-    candidate = (
+    """Kullanıcı override'ını, yoksa modelin editoryal mod kararını uygula."""
+    explicit = str(reels_state.get("_explicit_voice_mode") or "").strip().upper()
+    if explicit in VALID_MODES:
+        return explicit
+    candidate = str(
         reels_state.get("anlatim_modu")
         or raw.get("uygunluk")
         or raw.get("anlatim_modu")
         or raw.get("mode")
         or "DUO"
-    )
-    candidate = str(candidate).strip().upper()
+    ).strip().upper()
     return candidate if candidate in VALID_MODES else "DUO"
 
 
 def normalize_duo_strategy(reels_state):
-    """Model çıktısını doğrulanmış, editoryal kararı koruyan bir üretim planına dönüştürür."""
+    """Kullanıcı öncelikli model kararını doğrulanmış üretim planına dönüştürür."""
     reels_state = reels_state or {}
     raw = reels_state.get("duo_stratejisi") or {}
 
-    # Modelin seçtiği SOLO_FEMALE / SOLO_MALE / DUO kararı burada korunur.
     mode = _resolve_mode(reels_state, raw)
     allowed_speakers = (
         {"female"} if mode == "SOLO_FEMALE"
@@ -116,12 +116,21 @@ def normalize_duo_strategy(reels_state):
 
     if mode == "DUO":
         # Yalnızca DUO modunda iki sesin de temsil edilmesini garanti et;
-        # tek tek her segmentin alternatif olmasını zorlamaz.
-        if not any(x["speaker"] == "female" for x in segments):
+        # tek satırlı planı diğer sesi ezerek değil güvenli bir dönüş ekleyerek
+        # tamamla. Tek tek her segmentin alternatif olması zorunlu değildir.
+        if len(segments) == 1:
+            missing = "male" if segments[0]["speaker"] == "female" else "female"
+            segments.append({
+                "sira": 2,
+                "speaker": missing,
+                "amac": "closing",
+                "detay": "ana çıkarım",
+                "duygu": "natural",
+            })
+        elif not any(x["speaker"] == "female" for x in segments):
             segments[0]["speaker"] = "female"
-        if not any(x["speaker"] == "male" for x in segments):
-            idx = 1 if len(segments) > 1 else 0
-            segments[idx]["speaker"] = "male"
+        elif not any(x["speaker"] == "male" for x in segments):
+            segments[1]["speaker"] = "male"
 
     female_count = sum(1 for x in segments if x["speaker"] == "female")
     male_count = sum(1 for x in segments if x["speaker"] == "male")
