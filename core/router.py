@@ -26,10 +26,19 @@ RETRY_503_DELAY_SECONDS = 2
 RETRY_QUOTA_MAX = 0
 RETRY_QUOTA_MAX_DELAY_SECONDS = 8
 
+# Geçici (503/aşırı yüklenme) hatalarda artan backoff.
+# Sürekli 503 veren bir model her pipeline adımında yeniden denenseydi tüm
+# çalışma dakikalarca uzardı. Model her başarısız olduğunda yasak süresi
+# katlanarak artar; model toparlandığında (başarı) sayaç sıfırlanır.
+TRANSIENT_BASE_COOLDOWN = COOLDOWN_SUNUCU            # ilk hata: 30 sn
+TRANSIENT_MAX_COOLDOWN = 15 * 60                     # tavan: 15 dk
+
 
 class SmartRouter:
     def __init__(self) -> None:
         self.blacklist = {}
+        # model -> arka arkaya geçici (503) hata sayısı (artan backoff için)
+        self._transient_fails = {}
         self._last_request_had_quota = False
         self.clients = {}
         for mail, api_key in self._ordered_api_items():
@@ -64,13 +73,42 @@ class SmartRouter:
         key = f"*+{model}" if scope == "model" else (f"{mail}+*" if scope == "key" else f"{mail}+{model}")
         self.blacklist[key] = time.time() + cooldown
 
-    def _clear_cooldowns(self, model_listesi=None) -> None:
-        if not model_listesi:
-            self.blacklist.clear()
-            return
-        modeller = set(model_listesi)
+    def _transient_cooldown_for(self, model: str) -> int:
+        """Modelin mevcut geçici-hata sayısına karşılık gelen backoff süresi."""
+        n = int(self._transient_fails.get(model, 0))
+        if n <= 0:
+            return TRANSIENT_BASE_COOLDOWN
+        cooldown = TRANSIENT_BASE_COOLDOWN * (2 ** (n - 1))
+        return min(cooldown, TRANSIENT_MAX_COOLDOWN)
+
+    def _record_transient_failure(self, model: str) -> int:
+        n = int(self._transient_fails.get(model, 0)) + 1
+        self._transient_fails[model] = n
+        return self._transient_cooldown_for(model)
+
+    def _record_success(self, model: str) -> None:
+        self._transient_fails.pop(model, None)
+
+    def _has_available_combo(self, modeller) -> bool:
+        for model_adi in modeller:
+            for mail in self.clients:
+                if not self._is_banned(mail, model_adi):
+                    return True
+        return False
+
+    def _clear_transient_bans(self, model_listesi=None) -> None:
+        """Yalnızca geçici (combo) yasakları temizler.
+
+        Kalıcı model düzeyinde yasakları (*+model: 404 / free-tier / bozuk
+        config) korur; böylece gerçekten desteklenmeyen bir model tüm çalışma
+        boyunca tekrar tekrar denenmez. combo yasakları (503/quota/timeout)
+        silinir.
+        """
+        modeller = set(model_listesi) if model_listesi else None
         for key in list(self.blacklist):
-            if "+" in key and key.split("+", 1)[1] in modeller:
+            if key.startswith("*+"):
+                continue  # kalıcı model düzeyi yasağı koru
+            if modeller is None or ("+" in key and key.split("+", 1)[1] in modeller):
                 self.blacklist.pop(key, None)
 
     def _retry_delay_cikar(self, hata_metni: str) -> int:
@@ -94,7 +132,7 @@ class SmartRouter:
         if "400" in m or "invalid_argument" in m or "unsupported" in m:
             return "model_config", COOLDOWN_BULUNAMADI
         if "503" in m or "unavailable" in m:
-            return "combo", COOLDOWN_SUNUCU
+            return "unavailable", TRANSIENT_BASE_COOLDOWN
         if "timeout" in m or "timed out" in m:
             return "combo", COOLDOWN_DIGER
         return "combo", COOLDOWN_DIGER
@@ -109,14 +147,24 @@ class SmartRouter:
             self._last_request_had_quota = True
             self._ban(mail, model, COOLDOWN_SUNUCU, "combo")
             return "quota"
-        if scope in ("model_key", "combo"):
+        if scope == "unavailable":
+            # Model tarafında aşırı yüklenme (503): backoff artarak büyüsün ki
+            # sürekli çöken bir model her adımda yeniden denemekle zaman
+            # harcamasın. Aynı model diğer key'lerde de çöküyorsa yasak süresi
+            # hızla uzar ve sonraki adımlarda doğrudan çalışan modele geçilir.
+            cooldown = self._record_transient_failure(model)
             self._ban(mail, model, cooldown, "combo")
             log_ekle(f"⚠️ {mail}+{model}: gecici hata / erisim sorunu; sonraki key deneniyor.")
             return "continue"
+        if scope in ("model_key", "model_config"):
+            self._ban(mail, model, cooldown, "model")
+            log_ekle(f"⚠️ {mail}+{model}: {scope} bu ortamda desteklenmiyor.")
+            return "break_model"
 
-        self._ban(mail, model, cooldown, "model" if scope in ("model", "model_config") else "combo")
-        log_ekle(f"⚠️ {mail}+{model}: {scope}")
-        return "break_model" if scope in ("model", "model_config") else "continue"
+        # timeout / bilinmeyen geçici hata
+        self._ban(mail, model, cooldown, "combo")
+        log_ekle(f"⚠️ {mail}+{model}: gecici hata / erisim sorunu; sonraki key deneniyor.")
+        return "continue"
 
     def _make_request(
         self,
@@ -130,12 +178,18 @@ class SmartRouter:
     ):
         son_hata = None
         self._last_request_had_quota = False
-        
-        # Her yeni istekte (farkli bir pipeline adimina gecildiginde)
-        # eski asamalardan kalan gecici engelleri temizle ki sistem kilitlenmesin.
-        self.blacklist.clear()
-        
+
         modeller = list(model_listesi or [])
+
+        # ÖNEMLİ: Eski sürüm her yeni istekte tüm blacklist'i temizliyordu. Bu,
+        # sürekli 503 veren bir modelin (ör. gemini-3.7-flash) HER adımda tüm
+        # key'lerde yeniden denenmesine ve dakikalarca zaman kaybına yol
+        # açıyordu. Artık yalnızca gerçek bir kilitlenme riski varsa (istenen
+        # modellerin hiçbiri denenebilir değilse) ve yalnızca geçici yasakları
+        # temizliyoruz. Kalıcı yasaklar (404/free-tier/bozuk config) korunur.
+        if modeller and not self._has_available_combo(modeller):
+            self._clear_transient_bans(modeller)
+            log_ekle("♻️ Tüm kombinasyonlar geçici olarak yasaklı; geçici engeller temizlenip yeniden deneniyor.")
 
         for model_adi in modeller:
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
@@ -167,6 +221,8 @@ class SmartRouter:
                             self._ban(mail, model_adi, COOLDOWN_DIGER, "combo")
                             break
 
+                        # Model sağlıklı çalıştı: geçici hata sayacını sıfırla.
+                        self._record_success(model_adi)
                         log_ekle(f"✅ Başarılı → {mail} + {model_adi}")
                         return response, f"{mail}+{model_adi}"
 
