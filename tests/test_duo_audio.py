@@ -6,7 +6,11 @@ TTS network çağrısını GitHub Actions üzerinde izole çalıştırmak pahal�
 """
 import unittest
 
-from duo_audio import _duo_transcript, _performance_tag
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from duo.duo_audio import _duo_transcript, _performance_tag
 
 
 class DuoAudioTests(unittest.TestCase):

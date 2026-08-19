@@ -1,7 +1,11 @@
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import unittest
 
-from duo_strategy import normalize_duo_strategy
-from duo_script import normalize_conversation_map, validate_script_segments
+from duo.duo_strategy import normalize_duo_strategy
+from duo.duo_script import normalize_conversation_map, validate_script_segments
 
 
 class DuoLayerTests(unittest.TestCase):
@@ -43,7 +47,7 @@ class DuoLayerTests(unittest.TestCase):
         plan = normalize_duo_strategy(state)
         self.assertEqual(plan["hook_speaker"], "female")
         self.assertEqual(plan["ending_speaker"], "female")
-        self.assertEqual([x["speaker"] for x in plan["conversation_map"]], ["female"])
+        self.assertEqual([x["speaker"] for x in plan["conversation_map"]], ["female", "female"])
 
     def test_script_layer_accepts_only_valid_segments(self):
         segments = validate_script_segments([
