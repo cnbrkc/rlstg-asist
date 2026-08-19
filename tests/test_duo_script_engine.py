@@ -1,6 +1,10 @@
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import unittest
 
-from duo_script_engine import build_duo_generation_contract, build_generation_prompt, validate_generated_duo
+from duo.duo_script_engine import build_duo_generation_contract, build_generation_prompt, validate_generated_duo
 
 
 class DuoScriptEngineTests(unittest.TestCase):
