@@ -90,7 +90,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
           TELEGRAM_FILE_ID: ${{ inputs.telegram_file_id }}
           TELEGRAM_FILENAME: ${{ inputs.telegram_filename }}
-        run: python telegram_webhook_intake.py
+        run: python -m telegram.telegram_webhook_intake
 
       - name: Save video to repository
         if: ${{ inputs.telegram_file_id != '' }}
@@ -138,4 +138,4 @@ jobs:
           TEXT_INPUT: ${{ inputs.telegram_text }}
           VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
           CONTENT_TONE: ${{ inputs.content_tone }}
-        run: python telegram_pipeline_runner.py
+        run: python -m telegram.telegram_pipeline_runner
