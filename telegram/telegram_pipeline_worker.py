@@ -2,7 +2,6 @@ import json
 import mimetypes
 import os
 import sys
-import subprocess
 from pathlib import Path
 
 # Add repository root to search path
@@ -13,6 +12,7 @@ import requests
 from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from core.pipeline import pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
+from core.media import video_suresini_al
 from core.social_fallbacks import (
     first_fact as first_verified_fact, model_identity,
     text as _text,
@@ -56,9 +56,13 @@ def send_video(path, caption):
 
 
 def video_duration(path):
+    # Doğrudan ffprobe çağırmıyoruz: GitHub Actions ortamında ffprobe kurulmuyor
+    # (ffmpeg yalnızca imageio-ffmpeg'den geliyor). core.media.video_suresini_al
+    # ffprobe varsa onu, yoksa ffmpeg -i Duration çıktısını kullanır; böylece
+    # süre her ortamda güvenle okunur. Pipeline iç düşüşüyle aynı mantık.
     try:
-        out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], text=True, timeout=30)
-        return float(out.strip())
+        sure = video_suresini_al(str(path))
+        return sure if sure and sure > 0 else None
     except Exception:
         return None
 
