@@ -124,9 +124,36 @@ jobs:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
-          VIDEO_FILES: ${{ inputs.telegram_file_id != '' && format('data/{0}', inputs.telegram_filename) || '' }}
           TEXT_INPUT: ${{ inputs.telegram_text }}
           VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
           CONTENT_TONE: ${{ inputs.content_tone }}
           PYTHONUNBUFFERED: "1"
-        run: python -m telegram.telegram_pipeline_social_entry
+        run: |
+          echo "::group::Reels pipeline ayrıntılı zamanlama"
+          /usr/bin/time -v python -m telegram.telegram_pipeline_social_entry
+          echo "::endgroup::"
+
+      - name: Publish diagnostic summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Reels pipeline diagnostics"
+            echo "- Workflow: $GITHUB_WORKFLOW"
+            echo "- Run ID: $GITHUB_RUN_ID"
+            echo "- Attempt: $GITHUB_RUN_ATTEMPT"
+            echo "- Result JSON exists: $([ -f pipeline_result.json ] && echo yes || echo no)"
+            if [ -f pipeline_result.json ]; then
+              python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("pipeline_result.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          print(f"- Result size: {p.stat().st_size} bytes")
+          print(f"- QA pass: {data.get('qa_pass')}")
+          print(f"- QA regeneration rounds: {data.get('qa_regeneration_rounds', 0)}")
+          print(f"- Voice mode: {data.get('voice_mode', 'unknown')}")
+          print(f"- Warnings: {len(data.get('warnings') or [])}")
+          print(f"- Errors: {len(data.get('errors') or [])}")
+          PY
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
