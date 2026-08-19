@@ -41,7 +41,10 @@ def _duo_transcript(segments: List[Dict[str, Any]]) -> str:
 
 
 def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CARPANI):
-    """Generate the complete two-speaker conversation in ONE TTS request."""
+    """Generate the complete two-speaker conversation in ONE TTS request.
+
+    Returns (ok, info): ok bool, info model kimliği (başarısızsa None).
+    """
     valid = [
         s for s in (segments or [])
         if isinstance(s, dict)
@@ -49,7 +52,7 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
         and str(s.get("speaker", "")).strip().lower() in ("female", "male")
     ]
     if not valid:
-        return False, None, []
+        return False, None
 
     speakers_present = []
     if any(str(s.get("speaker", "")).strip().lower() == "female" for s in valid):
@@ -61,11 +64,11 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     # script reaches this layer, do not silently turn it into a single voice.
     if len(speakers_present) != 2:
         log_ekle("❌ DUO TTS reddedildi: Autonoe + Charon birlikte bulunmuyor.")
-        return False, None, []
+        return False, None
 
     transcript = _duo_transcript(valid)
     if not transcript:
-        return False, None, []
+        return False, None
 
     log_ekle(f"🎙️ DUO TTS tek çağrı: Autonoe + Charon | {len(valid)} segment | expressive tags + kısa duraklar")
     ok, info = router.coklu_ses_uret(
@@ -77,5 +80,5 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     )
     if not ok:
         log_ekle("⚠️ Tek çağrı DUO TTS başarısız; legacy fallback kullanılacak.")
-        return False, None, []
-    return True, info, []
+        return False, None
+    return True, info

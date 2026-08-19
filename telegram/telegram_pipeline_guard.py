@@ -139,7 +139,7 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
 
     ses_path = gecici_ses_yolu()
     if segments:
-        ok, info, _ = duo_ses_uret(router, segments, ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
+        ok, info = duo_ses_uret(router, segments, ses_path, log, hiz_carpani=SES_HIZ_CARPANI)
         mod = mode
     else:
         log("⚠️ Conversation map boş; legacy tek sesli TTS yolu kullanılıyor.")
@@ -160,7 +160,3 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
 _pipeline._caption_calistir = _caption_guard
 _pipeline._threads_calistir = _threads_guard
 _pipeline._reels_ve_ses_uyumlu_uret = _single_pass_reels_and_tts
-
-from telegram import telegram_pipeline_worker as _worker  # noqa: E402
-
-_worker.main()

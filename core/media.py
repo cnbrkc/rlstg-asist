@@ -74,51 +74,148 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
     finally:
         temp_dosya_temizle(ara_dosya)
 
+def _ffprobe_yolu() -> str:
+    """ffprobe binary yolunu döndürür; yoksa boş string.
+
+    imageio_ffmpeg yalnızca ffmpeg'i paketler, ffprobe'yi değil. Eskiden
+    FFMPEG_BIN.replace("ffmpeg","ffprobe") var olmayan bir yola işaret edip
+    sessizce FileNotFoundError fırlatıyordu; bu yüzden tüm çözünürlük/FPS/kodek
+    bilgisi kayboluyordu. Artık yol gerçekten var mı diye kontrol ediyoruz.
+    """
+    candidate = shutil.which("ffprobe")
+    if candidate:
+        return candidate
+    candidate = FFMPEG_BIN.replace("ffmpeg", "ffprobe")
+    if candidate and candidate != FFMPEG_BIN and os.path.exists(candidate):
+        return candidate
+    return ""
+
+
+def _parse_ffmpeg_stderr(stderr: str) -> dict:
+    """``ffmpeg -i`` stderr metninden akış bilgisini ayrıştırır (ffprobe yedeği).
+
+    ffprobe kullanılamadığında tek güvenilir kaynak ffmpeg'in açılış banner
+    çıktısıdır. Aşağıdaki gibi satırları işler:
+      Duration: 00:01:31.83, start: 0.000000, bitrate: 4908 kb/s
+      Stream #0:0(...): Video: h264 (...), yuv420p, 1080x1920 [...], 4908 kb/s, 30 fps, 30 tbr, 90k tbn
+      Stream #0:1(...): Audio: aac (LC), 48000 Hz, stereo, fltp, 127 kb/s
+    """
+    out = {"duration": 0.0, "width": 0, "height": 0, "fps": 0.0, "video_codec": "",
+           "video_bitrate": 0, "audio_sample_rate": 0, "audio_channels": 0,
+           "audio_bitrate": 0, "audio_codec": ""}
+    stderr = stderr or ""
+
+    dm = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr)
+    if dm:
+        try:
+            out["duration"] = int(dm.group(1)) * 3600 + int(dm.group(2)) * 60 + float(dm.group(3))
+        except Exception:
+            pass
+
+    vline = next((l for l in stderr.splitlines() if " Video:" in l), "")
+    if vline:
+        cm = re.search(r"Video:\s*([A-Za-z0-9_]+)", vline)
+        if cm:
+            out["video_codec"] = cm.group(1)
+        # "Video: h264 ..., 1080x1920 ..." — satırdaki ilk WxH.
+        dm = re.search(r"(\d{2,5})x(\d{2,5})", vline)
+        if dm:
+            out["width"], out["height"] = int(dm.group(1)), int(dm.group(2))
+        fm = re.search(r"(\d+(?:\.\d+)?)\s*fps", vline)
+        if not fm:
+            fm = re.search(r"(\d+(?:\.\d+)?)\s*tbr", vline)
+        if fm:
+            try:
+                out["fps"] = float(fm.group(1))
+            except Exception:
+                pass
+        bm = re.search(r"(\d+)\s*kb/s", vline)
+        if bm:
+            try:
+                out["video_bitrate"] = int(bm.group(1)) * 1000
+            except Exception:
+                pass
+
+    aline = next((l for l in stderr.splitlines() if " Audio:" in l), "")
+    if aline:
+        cm = re.search(r"Audio:\s*([A-Za-z0-9_]+)", aline)
+        if cm:
+            out["audio_codec"] = cm.group(1)
+        hz = re.search(r"(\d+)\s*Hz", aline)
+        if hz:
+            try:
+                out["audio_sample_rate"] = int(hz.group(1))
+            except Exception:
+                pass
+        chm = re.search(r"Hz,\s*(mono|stereo|\d+(?:\.\d+)?)", aline)
+        if chm:
+            chmap = {"mono": 1, "stereo": 2, "2.1": 3, "3.0": 3, "4.0": 4,
+                     "5.0": 5, "5.1": 6, "6.1": 7, "7.1": 8}
+            out["audio_channels"] = chmap.get(chm.group(1), 0)
+        bm = re.search(r"(\d+)\s*kb/s", aline)
+        if bm:
+            try:
+                out["audio_bitrate"] = int(bm.group(1)) * 1000
+            except Exception:
+                pass
+    return out
+
+
 def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
     sonuc={"width":0,"height":0,"fps":0.0,"fps_rational":"","duration":0.0,"video_bitrate":0,"audio_sample_rate":0,"audio_channels":0,"audio_bitrate":0,"audio_codec":"","video_codec":""}
-    try:
-        ffprobe=shutil.which("ffprobe") or FFMPEG_BIN.replace("ffmpeg","ffprobe")
-        p=subprocess.run([ffprobe,"-v","error","-show_streams","-show_format","-of","json",dosya_yolu],capture_output=True,text=True,timeout=30)
-        data=json.loads(p.stdout or "{}")
-        streams=data.get("streams") or []
-        video=next((s for s in streams if s.get("codec_type")=="video"),None)
-        audio=next((s for s in streams if s.get("codec_type")=="audio"),None)
-        if video:
-            sonuc["video_codec"]=video.get("codec_name") or ""; sonuc["width"]=int(video.get("width") or 0); sonuc["height"]=int(video.get("height") or 0)
-            fps_raw=video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1"
-            try:
-                num,den=fps_raw.split("/",1); num_i,den_i=int(num),int(den)
-                if den_i: sonuc["fps"]=num_i/den_i; sonuc["fps_rational"]=f"{num_i}/{den_i}"
-            except Exception:
-                try: sonuc["fps"]=float(fps_raw)
-                except Exception: pass
-            try: sonuc["duration"]=float(video.get("duration") or 0.0)
-            except Exception: pass
-            try: sonuc["video_bitrate"]=int(video.get("bit_rate") or 0)
-            except Exception: pass
-        if audio:
-            sonuc["audio_codec"]=audio.get("codec_name") or ""
-            try: sonuc["audio_sample_rate"]=int(audio.get("sample_rate") or 0)
-            except Exception: pass
-            try: sonuc["audio_channels"]=int(audio.get("channels") or 0)
-            except Exception: pass
-            try: sonuc["audio_bitrate"]=int(audio.get("bit_rate") or 0)
-            except Exception: pass
-            if sonuc["duration"]<=0:
-                try: sonuc["duration"]=float(audio.get("duration") or 0.0)
-                except Exception: pass
-        if sonuc["duration"]<=0:
-            try: sonuc["duration"]=float((data.get("format") or {}).get("duration") or 0.0)
-            except Exception: pass
-    except Exception:
-        pass
-    # ffprobe başarısız olursa veya duration alınamadıysa, ffmpeg -i çıktısından süre çıkar
-    if sonuc["duration"]<=0:
+    ffprobe = _ffprobe_yolu()
+    if ffprobe:
         try:
-            r=subprocess.run([FFMPEG_BIN,"-i",dosya_yolu],capture_output=True,text=True,timeout=30)
-            m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr or "")
-            if m: sonuc["duration"]=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3))
-        except Exception: pass
+            p=subprocess.run([ffprobe,"-v","error","-show_streams","-show_format","-of","json",dosya_yolu],capture_output=True,text=True,timeout=30)
+            data=json.loads(p.stdout or "{}")
+            streams=data.get("streams") or []
+            video=next((s for s in streams if s.get("codec_type")=="video"),None)
+            audio=next((s for s in streams if s.get("codec_type")=="audio"),None)
+            if video:
+                sonuc["video_codec"]=video.get("codec_name") or ""; sonuc["width"]=int(video.get("width") or 0); sonuc["height"]=int(video.get("height") or 0)
+                fps_raw=video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1"
+                try:
+                    num,den=fps_raw.split("/",1); num_i,den_i=int(num),int(den)
+                    if den_i: sonuc["fps"]=num_i/den_i; sonuc["fps_rational"]=f"{num_i}/{den_i}"
+                except Exception:
+                    try: sonuc["fps"]=float(fps_raw)
+                    except Exception: pass
+                try: sonuc["duration"]=float(video.get("duration") or 0.0)
+                except Exception: pass
+                try: sonuc["video_bitrate"]=int(video.get("bit_rate") or 0)
+                except Exception: pass
+            if audio:
+                sonuc["audio_codec"]=audio.get("codec_name") or ""
+                try: sonuc["audio_sample_rate"]=int(audio.get("sample_rate") or 0)
+                except Exception: pass
+                try: sonuc["audio_channels"]=int(audio.get("channels") or 0)
+                except Exception: pass
+                try: sonuc["audio_bitrate"]=int(audio.get("bit_rate") or 0)
+                except Exception: pass
+                if sonuc["duration"]<=0:
+                    try: sonuc["duration"]=float(audio.get("duration") or 0.0)
+                    except Exception: pass
+            if sonuc["duration"]<=0:
+                try: sonuc["duration"]=float((data.get("format") or {}).get("duration") or 0.0)
+                except Exception: pass
+        except Exception:
+            pass
+
+    # ffprobe yoksa veya çözünürlük/FPS/kodek/süre bilgisi eksik kaldıysa,
+    # ffmpeg -i stderr'ini tek seferde ayrıştırıp eksik alanları tamamla. Bu,
+    # imageio_ffmpeg (yalnızca ffmpeg) kullanan ortamlarda medya_raporu'nun
+    # "? | ? FPS | ses yok" gibi yanlış/eksik bilgi göstermesini engeller.
+    if not sonuc["width"] or not sonuc["height"] or not sonuc["fps"] \
+            or sonuc["duration"] <= 0 or not sonuc["audio_sample_rate"]:
+        try:
+            r = subprocess.run([FFMPEG_BIN, "-hide_banner", "-i", dosya_yolu],
+                               capture_output=True, text=True, timeout=30)
+            parsed = _parse_ffmpeg_stderr(r.stderr or "")
+            for k, v in parsed.items():
+                if not sonuc.get(k) and v:
+                    sonuc[k] = v
+        except Exception:
+            pass
     return sonuc
 
 def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:

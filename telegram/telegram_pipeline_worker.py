@@ -2,7 +2,6 @@ import json
 import mimetypes
 import os
 import sys
-import subprocess
 from pathlib import Path
 
 # Add repository root to search path
@@ -13,14 +12,24 @@ import requests
 from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from core.pipeline import pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
+from core.media import video_suresini_al
 from core.social_fallbacks import (
     first_fact as first_verified_fact, model_identity,
     text as _text,
 )
 
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-BASE = f"https://api.telegram.org/bot{TOKEN}"
+
+def _token():
+    return os.environ["TELEGRAM_BOT_TOKEN"]
+
+
+def _chat_id():
+    return os.environ["TELEGRAM_CHAT_ID"]
+
+
+def _base():
+    return f"https://api.telegram.org/bot{_token()}"
+
 
 PIPELINE_STEPS = [
     "🎥 Forensic video analizi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
@@ -39,26 +48,30 @@ TELEGRAM_VIDEO_CAPTION_LIMIT = 1024
 
 
 def send_message(text):
-    r = requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
+    r = requests.post(f"{_base()}/sendMessage", data={"chat_id": _chat_id(), "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
     r.raise_for_status()
     return r.json()
 
 
 def edit_message(message_id, text):
-    r = requests.post(f"{BASE}/editMessageText", data={"chat_id": CHAT_ID, "message_id": message_id, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
+    r = requests.post(f"{_base()}/editMessageText", data={"chat_id": _chat_id(), "message_id": message_id, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
     r.raise_for_status()
 
 
 def send_video(path, caption):
     with open(path, "rb") as fh:
-        r = requests.post(f"{BASE}/sendVideo", data={"chat_id": CHAT_ID, "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
+        r = requests.post(f"{_base()}/sendVideo", data={"chat_id": _chat_id(), "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
     r.raise_for_status()
 
 
 def video_duration(path):
+    # Doğrudan ffprobe çağırmıyoruz: GitHub Actions ortamında ffprobe kurulmuyor
+    # (ffmpeg yalnızca imageio-ffmpeg'den geliyor). core.media.video_suresini_al
+    # ffprobe varsa onu, yoksa ffmpeg -i Duration çıktısını kullanır; böylece
+    # süre her ortamda güvenle okunur. Pipeline iç düşüşüyle aynı mantık.
     try:
-        out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], text=True, timeout=30)
-        return float(out.strip())
+        sure = video_suresini_al(str(path))
+        return sure if sure and sure > 0 else None
     except Exception:
         return None
 

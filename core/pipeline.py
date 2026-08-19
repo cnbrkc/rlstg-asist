@@ -279,7 +279,7 @@ def _duo_ses_veya_legacy_uret(router, duo_script, legacy_text, legacy_voice, log
         if not (duo_script and duo_script.get('status') == 'ready' and duo_script.get('segments')):
             log("❌ DUO mode aktif ama doğrulanmış duo_script yok; legacy fallback engellendi.")
             return False, None, "DUO"
-        ok, info, _ = duo_ses_uret(router, duo_script['segments'], output_path, log, hiz_carpani=SES_HIZ_CARPANI)
+        ok, info = duo_ses_uret(router, duo_script['segments'], output_path, log, hiz_carpani=SES_HIZ_CARPANI)
         if ok and os.path.exists(output_path):
             return True, info, "DUO"
         log("❌ DUO TTS üretilemedi; DUO modunda legacy fallback kapalı.")

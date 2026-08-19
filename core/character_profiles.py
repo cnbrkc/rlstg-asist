@@ -10,11 +10,6 @@ CHARACTER_VOICES = {
     "male": "Charon",
 }
 
-CHARACTER_LABELS = {
-    "female": "Eş karakteri",
-    "male": "Erkek karakter",
-}
-
 DEFAULT_SINGLE_SPEAKER = "female"
 
 

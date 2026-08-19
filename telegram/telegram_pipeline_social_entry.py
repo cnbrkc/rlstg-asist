@@ -12,7 +12,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import pipeline as _pipeline
-from core.social_fallbacks import looks_like_artifact, text as _text
+from core.social_fallbacks import text as _text
 
 
 _original_qa_regeneration_loop = _pipeline._qa_regeneration_loop
@@ -181,5 +181,10 @@ _pipeline._duo_ve_ses_yenile = _duo_ve_ses_yenile_compat
 
 
 # _pipeline._caption_calistir override will be owned and handled cleanly by telegram_pipeline_guard.py
-
+# Guard importu yalnızca monkey-patching yan etkisi içindir (artık main() çağırmaz).
 from telegram import telegram_pipeline_guard  # noqa: F401,E402
+
+
+if __name__ == "__main__":
+    from telegram import telegram_pipeline_worker as _worker
+    _worker.main()

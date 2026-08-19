@@ -11,7 +11,6 @@ from core.config import (
     ARAMA_MODELLERI,
     SES_MODELLERI,
     VIDEO_ANALIZ_MODELLERI,
-    COOLDOWN_SUNUCU,
     COOLDOWN_BULUNAMADI,
     COOLDOWN_DIGER,
     COOLDOWN_FREE_TIER_YOK,
@@ -21,16 +20,29 @@ from core.utils import guvenli_json_yukle
 from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
 REQUEST_TIMEOUT_MS = 60_000
-RETRY_503_MAX = 1
-RETRY_503_DELAY_SECONDS = 2
-RETRY_QUOTA_MAX = 0
-RETRY_QUOTA_MAX_DELAY_SECONDS = 8
+
+# ---
+# Yönlendirme felsefesi (kullanıcı talebi):
+# Geçici (503 / kota / zaman aşımı) hatalarda BEKLEME veya dakikalarca yasaklama
+# YOK. Her model tüm API key'lerinde 1'er kez, seri biçimde denenir; bir tam tur
+# (tüm key'ler) başarısız olursa bir sonraki modele geçilir. Aynı modelın 3.
+# key'inde hata verip 4. key'inde çalışabileceği ihtimali her zaman korunur.
+# Geçici yasağın adımlar (pipeline adımları) arası hafızası yoktur: her adım
+# turları fresh olarak yeniden yapar.
+#
+# Yalnızca iki durum "kalıcı" sayılır ve adımlar boyunca hatırlanır ( zaman
+# tasarrufu için; key'den bağımsız her key'de aynı sonucu verirler):
+#   * 404 / model_config  -> model düzeyinde yasak (*+model)
+#   * free_tier_yok       -> key/project'e bağlı, yalnızca o key yasaklanır
+# ---
 
 
 class SmartRouter:
     def __init__(self) -> None:
+        # blacklist: yalnızca KALICI yasaklar. Geçici hatalar buraya yazılmaz.
+        #   "*+{model}"        -> model düzeyi (404 / bozuk config)
+        #   "{mail}+{model}"   -> key düzeyi (free-tier)
         self.blacklist = {}
-        self._last_request_had_quota = False
         self.clients = {}
         for mail, api_key in self._ordered_api_items():
             if api_key and api_key.strip():
@@ -50,38 +62,30 @@ class SmartRouter:
 
         return sorted(API_KEYS.items(), key=lambda kv: _rank(kv[0]))
 
-    def _is_banned(self, mail: str, model: str) -> bool:
-        now = time.time()
-        bl = self.blacklist
-        for key in [f"*+{model}", f"{mail}+*", f"{mail}+{model}"]:
-            if key in bl:
-                if now < bl[key]:
-                    return True
-                del bl[key]
-        return False
-
     def _ban(self, mail: str, model: str, cooldown: int, scope: str) -> None:
         key = f"*+{model}" if scope == "model" else (f"{mail}+*" if scope == "key" else f"{mail}+{model}")
         self.blacklist[key] = time.time() + cooldown
 
-    def _clear_cooldowns(self, model_listesi=None) -> None:
-        if not model_listesi:
-            self.blacklist.clear()
-            return
-        modeller = set(model_listesi)
-        for key in list(self.blacklist):
-            if "+" in key and key.split("+", 1)[1] in modeller:
-                self.blacklist.pop(key, None)
+    def _is_model_banned(self, model: str) -> bool:
+        """Model düzeyinde kalıcı yasağı kontrol eder (404 / bozuk config)."""
+        key = f"*+{model}"
+        bl = self.blacklist
+        if key in bl:
+            if time.time() < bl[key]:
+                return True
+            bl.pop(key, None)
+        return False
 
-    def _retry_delay_cikar(self, hata_metni: str) -> int:
-        for pattern in [r'retryDelay["\':\s]+(\d+)', r"retry in (\d+(?:\.\d+)?)s"]:
-            m = re.search(pattern, hata_metni, re.I)
-            if m:
-                try:
-                    return int(float(m.group(1))) + 1
-                except Exception:
-                    pass
-        return 0
+    def _is_key_banned(self, mail: str, model: str) -> bool:
+        """Yalnızca bu key'e özel yasağı kontrol eder (ör. free-tier)."""
+        now = time.time()
+        bl = self.blacklist
+        for key in (f"{mail}+*", f"{mail}+{model}"):
+            if key in bl:
+                if now < bl[key]:
+                    return True
+                bl.pop(key, None)
+        return False
 
     def _parse_hata(self, hata_metni: str) -> Tuple[str, int]:
         m = (hata_metni or "").lower()
@@ -94,29 +98,17 @@ class SmartRouter:
         if "400" in m or "invalid_argument" in m or "unsupported" in m:
             return "model_config", COOLDOWN_BULUNAMADI
         if "503" in m or "unavailable" in m:
-            return "combo", COOLDOWN_SUNUCU
+            return "unavailable", COOLDOWN_DIGER
         if "timeout" in m or "timed out" in m:
             return "combo", COOLDOWN_DIGER
         return "combo", COOLDOWN_DIGER
 
-    def _handle_hata(self, mail, model, hata_metni, log_ekle) -> str:
-        scope, cooldown = self._parse_hata(hata_metni)
-        if scope == "free_tier_yok":
-            self._ban(mail, model, cooldown, "model")
-            log_ekle(f"🚫 {model} free tier'da yok.")
-            return "break_model"
-        if scope == "quota":
-            self._last_request_had_quota = True
-            self._ban(mail, model, COOLDOWN_SUNUCU, "combo")
-            return "quota"
-        if scope in ("model_key", "combo"):
-            self._ban(mail, model, cooldown, "combo")
-            log_ekle(f"⚠️ {mail}+{model}: gecici hata / erisim sorunu; sonraki key deneniyor.")
-            return "continue"
-
-        self._ban(mail, model, cooldown, "model" if scope in ("model", "model_config") else "combo")
-        log_ekle(f"⚠️ {mail}+{model}: {scope}")
-        return "break_model" if scope in ("model", "model_config") else "continue"
+    @staticmethod
+    def _reason_for(scope: str) -> str:
+        return {
+            "unavailable": "503 servis yoğunluğu",
+            "combo": "zaman aşımı/geçici hata",
+        }.get(scope, "geçici hata")
 
     def _make_request(
         self,
@@ -125,83 +117,68 @@ class SmartRouter:
         config,
         log_ekle,
         stop_on_quota=False,
-        son_fallback=True,
         require_text=False,
     ):
         son_hata = None
-        self._last_request_had_quota = False
-        
-        # Her yeni istekte (farkli bir pipeline adimina gecildiginde)
-        # eski asamalardan kalan gecici engelleri temizle ki sistem kilitlenmesin.
-        self.blacklist.clear()
-        
         modeller = list(model_listesi or [])
 
         for model_adi in modeller:
+            # Kalıcı model yasağı (404 / bozuk config) → tüm key'lerde geçersiz,
+            # bu modeli tamamen atla. (Adımlar boyunca korunur.)
+            if self._is_model_banned(model_adi):
+                continue
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
 
             for mail, _api_key in self._ordered_api_items():
-                if self._is_banned(mail, model_adi):
+                # Bu key'e özel kalıcı yasak (free-tier) → bu key'i atla, diğer
+                # key denenir (farklı key/project farklı tier'a sahip olabilir).
+                if self._is_key_banned(mail, model_adi):
                     continue
-
                 client = self.clients.get(mail)
                 if client is None:
                     continue
 
-                retry_503 = 0
-                retry_quota = 0
+                try:
+                    response = client.models.generate_content(
+                        model=model_adi,
+                        contents=contents,
+                        config=config,
+                    )
+                except Exception as e:
+                    son_hata = e
+                    scope, cooldown = self._parse_hata(str(e))
 
-                while True:
-                    try:
-                        response = client.models.generate_content(
-                            model=model_adi,
-                            contents=contents,
-                            config=config,
-                        )
-
-                        if require_text and not str(getattr(response, "text", "") or "").strip():
-                            log_ekle(
-                                f"⚠️ {mail}+{model_adi}: model başarılı göründü ancak metin yanıtı boş; sonraki key/model deneniyor."
-                            )
-                            son_hata = ValueError("Model boş yanıt verdi.")
-                            self._ban(mail, model_adi, COOLDOWN_DIGER, "combo")
-                            break
-
-                        log_ekle(f"✅ Başarılı → {mail} + {model_adi}")
-                        return response, f"{mail}+{model_adi}"
-
-                    except Exception as e:
-                        son_hata = e
-                        hata_metni = str(e)
-                        lower = hata_metni.lower()
-
-                        is_503 = "503" in hata_metni or "unavailable" in lower
-                        is_quota = any(x in lower for x in ("429", "resource_exhausted", "quota", "rate limit"))
-
-                        if is_503 and retry_503 < RETRY_503_MAX:
-                            retry_503 += 1
-                            log_ekle(
-                                f"⏳ {mail}+{model_adi}: geçici 503, {RETRY_503_DELAY_SECONDS}s sonra aynı key bir kez daha deneniyor ({retry_503}/{RETRY_503_MAX})"
-                            )
-                            time.sleep(RETRY_503_DELAY_SECONDS)
-                            continue
-
-                        if is_quota and retry_quota < RETRY_QUOTA_MAX:
-                            retry_quota += 1
-                            parsed_delay = self._retry_delay_cikar(hata_metni)
-                            delay = min(parsed_delay, RETRY_QUOTA_MAX_DELAY_SECONDS) if parsed_delay > 0 else 2
-                            log_ekle(
-                                f"⏳ {mail}+{model_adi}: quota/rate-limit, en fazla {delay}s beklenip aynı key bir kez daha denenecek ({retry_quota}/{RETRY_QUOTA_MAX})"
-                            )
-                            time.sleep(delay)
-                            continue
-
-                        aksiyon = self._handle_hata(mail, model_adi, hata_metni, log_ekle)
-                        if stop_on_quota and aksiyon == "quota":
+                    if scope == "quota":
+                        # Kota key'e özeldir ve dolar; beklemeden diğer key.
+                        if stop_on_quota:
                             raise
-                        if aksiyon in ("break_model", "quota"):
-                            break
-                        break
+                        log_ekle(f"⚠️ {mail}+{model_adi}: kota dolu; sonraki key deneniyor.")
+                        continue
+                    if scope == "free_tier_yok":
+                        # Tier key/project'e bağlı → yalnızca bu key yasakla.
+                        self._ban(mail, model_adi, cooldown, "combo")
+                        log_ekle(f"🚫 {mail}+{model_adi}: free tier'da yok; sonraki key deneniyor.")
+                        continue
+                    if scope in ("model_key", "model_config"):
+                        # Model yok / config uyumsuz → tüm key'lerde geçersiz.
+                        self._ban(mail, model_adi, cooldown, "model")
+                        log_ekle(f"⚠️ {model_adi}: bu model/config desteklenmiyor; sonraki modele geçiliyor.")
+                        break  # bu modelin kalan key'lerini atla → sonraki model
+
+                    # unavailable (503) / combo (timeout) / bilinmeyen -> GEÇICI.
+                    # Bekleme yok, yasaklama yok: hemen diğer key. Bir tam tur
+                    # (tüm key'ler) tamamlanmadan diğer modele geçilmez; bir
+                    # sonraki pipeline adımında bu model yeniden fresh denenir.
+                    log_ekle(f"⚠️ {mail}+{model_adi}: {self._reason_for(scope)}; sonraki key deneniyor.")
+                    continue
+
+                if require_text and not str(getattr(response, "text", "") or "").strip():
+                    log_ekle(f"⚠️ {mail}+{model_adi}: yanıt boş; sonraki key/model deneniyor.")
+                    son_hata = ValueError("Model boş yanıt verdi.")
+                    continue
+
+                log_ekle(f"✅ Başarılı → {mail} + {model_adi}")
+                return response, f"{mail}+{model_adi}"
 
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
 
@@ -391,7 +368,6 @@ class SmartRouter:
                 self._tts_performans_promptu_olustur(metin, ses_adi),
                 config,
                 log_ekle,
-                son_fallback=False,
             )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
@@ -437,7 +413,6 @@ class SmartRouter:
                 prompt,
                 config,
                 log_ekle,
-                son_fallback=False,
             )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)

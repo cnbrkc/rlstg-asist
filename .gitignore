@@ -6,3 +6,4 @@ data/*.webm
 pipeline_result.json
 __pycache__/
 *.pyc
+.venv/

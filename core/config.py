@@ -46,11 +46,15 @@ ARAMA_MODELLERI = [
 ]
 
 SES_MODELLERI = [
-    "gemini-3.1-flash-tts-preview", 
-    "gemini-2.5-flash-preview-tts"
+    # gemini-3.1-flash-tts-preview bu kodun gönderdiği multi-speaker/prebuilt
+    # voice config'iyle sürekli 400 (model_config) hatası veriyor; bu yüzden
+    # çalışan gemini-2.5-flash-preview-tts önceliklendirildi. (Kalıcı ban
+    # mekanizması zaten 3.1-flash-tts-preview'i ilk hatadan sonra atlar, ancak
+    # her çalışmanın ilk TTS çağrısındaki boş denemeyi de böyle önlemiş oluyoruz.)
+    "gemini-2.5-flash-preview-tts",
+    "gemini-3.1-flash-tts-preview",
 ]
 
-COOLDOWN_SUNUCU = 30
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
 COOLDOWN_DIGER = 5 * 60
 COOLDOWN_FREE_TIER_YOK = 7 * 24 * 60 * 60

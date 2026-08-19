@@ -161,12 +161,21 @@ def validate_generated_duo(contract: Dict[str, Any], generated: Any) -> List[Dic
         if not {"female", "male"}.issubset(speakers_present):
             return []
 
+    # Kelime sayısı yalnızca AŞIRI uçları yakalamak için kullanılır. Eski sürüm,
+    # hedefe ±%10 uymayan (ör. 198 hedefe karşın 190 kelime) geçerli iki sesli
+    # bir script'i tamamen reddedip split_for_speakers kural tabanlı yedeğine
+    # (daha kısa ve daha düşük kaliteli) düşürüyordu; bu da fazladan bir
+    # LLM+TTS yeniden üretim döngüsüne mal oluyordu. Süre/oran denetimi
+    # pipeline'ın FFmpeg senkron katmanında yapıldığı için burada yalnızca
+    # belirgin şekilde kırık/çok kısa/çok şişirilmiş çıktıları ele.
+    count = _segment_word_count(segments)
     min_words = contract.get("min_words")
     max_words = contract.get("max_words")
-    if min_words is not None or max_words is not None:
-        count = _segment_word_count(segments)
-        if min_words is not None and count < int(min_words):
-            return []
-        if max_words is not None and count > int(max_words):
-            return []
+    hard_min = 1
+    if min_words is not None:
+        hard_min = max(1, int(int(min_words) * 0.4))   # hedefin ~%40'ının altı = kırık
+    if count < hard_min:
+        return []
+    if max_words is not None and count > int(max_words) * 3:   # 3 kat aşırı şişme
+        return []
     return segments
