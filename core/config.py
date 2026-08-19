@@ -55,7 +55,6 @@ SES_MODELLERI = [
     "gemini-3.1-flash-tts-preview",
 ]
 
-COOLDOWN_SUNUCU = 30
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
 COOLDOWN_DIGER = 5 * 60
 COOLDOWN_FREE_TIER_YOK = 7 * 24 * 60 * 60

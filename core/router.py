@@ -43,7 +43,6 @@ class SmartRouter:
         #   "*+{model}"        -> model düzeyi (404 / bozuk config)
         #   "{mail}+{model}"   -> key düzeyi (free-tier)
         self.blacklist = {}
-        self._last_request_had_quota = False
         self.clients = {}
         for mail, api_key in self._ordered_api_items():
             if api_key and api_key.strip():
@@ -118,11 +117,9 @@ class SmartRouter:
         config,
         log_ekle,
         stop_on_quota=False,
-        son_fallback=True,
         require_text=False,
     ):
         son_hata = None
-        self._last_request_had_quota = False
         modeller = list(model_listesi or [])
 
         for model_adi in modeller:
@@ -153,7 +150,6 @@ class SmartRouter:
 
                     if scope == "quota":
                         # Kota key'e özeldir ve dolar; beklemeden diğer key.
-                        self._last_request_had_quota = True
                         if stop_on_quota:
                             raise
                         log_ekle(f"⚠️ {mail}+{model_adi}: kota dolu; sonraki key deneniyor.")
@@ -372,7 +368,6 @@ class SmartRouter:
                 self._tts_performans_promptu_olustur(metin, ses_adi),
                 config,
                 log_ekle,
-                son_fallback=False,
             )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
@@ -418,7 +413,6 @@ class SmartRouter:
                 prompt,
                 config,
                 log_ekle,
-                son_fallback=False,
             )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
