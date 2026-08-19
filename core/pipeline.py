@@ -6,6 +6,7 @@ Streamlit bağımlılığı yoktur; Telegram/GitHub Actions tarafından doğruda
 import json
 import os, re
 import shutil
+import time
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI, PIPELINE_ADIMLARI
 from core.schemas import VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA, REELS_CREATIVE_SCHEMA, CAPTION_SCHEMA, THREADS_SCHEMA, QA_SCHEMA, DUO_SCRIPT_SCHEMA
 from core.prompts import (forensic_analiz_promptunu_olustur, research_promptunu_olustur, editorial_promptunu_olustur,
@@ -22,7 +23,6 @@ from core.media import (
     video_suresini_al,
 )
 from duo.duo_strategy import normalize_duo_strategy
-from duo.duo_script import normalize_conversation_map
 from duo.duo_script_engine import build_duo_generation_contract, build_generation_prompt, validate_generated_duo
 from duo.duo_audio import duo_ses_uret
 
@@ -39,6 +39,46 @@ QA_REGEN_TARGETS = {
     "CAPTION_FAIL",
     "THREADS_FAIL",
 }
+
+
+def _safe_result_summary(value):
+    """Log model çıktısının içeriğini değil yalnızca güvenli yapısal özetini."""
+    state = value[0] if isinstance(value, tuple) and value else value
+    model = value[1] if isinstance(value, tuple) and len(value) > 1 else None
+    if isinstance(state, dict):
+        keys = sorted(str(k) for k in state.keys())
+        try:
+            json_chars = len(json.dumps(state, ensure_ascii=False, default=str))
+        except Exception:
+            json_chars = 0
+        list_items = sum(len(v) for v in state.values() if isinstance(v, list))
+        text_chars = sum(len(v) for v in state.values() if isinstance(v, str))
+        detail = (
+            f"dict keys={keys[:16]}" + (f" (+{len(keys)-16})" if len(keys) > 16 else "")
+            + f" | json_chars={json_chars} text_chars={text_chars} list_items={list_items}"
+        )
+    elif isinstance(state, list):
+        detail = f"list items={len(state)}"
+    elif isinstance(state, str):
+        detail = f"text chars={len(state)}"
+    else:
+        detail = type(state).__name__
+    return detail + (f" | model={model}" if model else "")
+
+
+def _run_timed(log, label, callback):
+    """Actions loguna başlangıç/bitiş/hata süresi yazan ortak ölçüm katmanı."""
+    started = time.perf_counter()
+    log(f"⏱️ START | {label}")
+    try:
+        result = callback()
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        log(f"⏱️ FAIL  | {label} | {elapsed:.2f}s ({elapsed/60:.2f} dk) | {type(exc).__name__}: {str(exc)[:180]}")
+        raise
+    elapsed = time.perf_counter() - started
+    log(f"⏱️ END   | {label} | {elapsed:.2f}s ({elapsed/60:.2f} dk) | {_safe_result_summary(result)}")
+    return result
 
 
 def _coerce_positive_float(value):
@@ -172,7 +212,10 @@ def _forensic_analiz_calistir(router, video_bytes, mime_type, analiz_notlari, su
     ek = ''
     if analiz_notlari and analiz_notlari.strip():
         ek = f"\nÖNEMLİ VİDEO ANALİZ NOTLARI:\n{analiz_notlari.strip()}\n"
-    return router.video_analiz_et(video_bytes,mime_type,forensic_analiz_promptunu_olustur(ek,sure_saniye),VIDEO_ANALYSIS_SCHEMA,log)
+    return _run_timed(
+        log, "Forensic video analizi (Gemini)",
+        lambda: router.video_analiz_et(video_bytes,mime_type,forensic_analiz_promptunu_olustur(ek,sure_saniye),VIDEO_ANALYSIS_SCHEMA,log),
+    )
 
 
 def _research_calistir(router, video_state, log):
@@ -184,31 +227,46 @@ def _research_calistir(router, video_state, log):
         durumu_metne_donustur('POSSIBLE INFERENCE',video_state.get('possible_inference',[])),
         durumu_metne_donustur('ARAŞTIRMA İHTİYAÇLARI',video_state.get('viral_arastirma_ihtiyaclari',[]))
     )
-    return router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=True)
+    return _run_timed(
+        log, "Research / Fact Lock (Gemini + Search/fallback)",
+        lambda: router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=True),
+    )
 
 
 def _editorial_calistir(router, video_state, fact_state, notes, log):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE',video_state),durumu_metne_donustur('FACT LOCK',fact_state),notes or '')
-    return router.metin_uret(content,editorial_promptunu_olustur(),EDITORIAL_SCHEMA,log,arama_kullan=False)
+    return _run_timed(
+        log, "Editorial Brain (Gemini)",
+        lambda: router.metin_uret(content,editorial_promptunu_olustur(),EDITORIAL_SCHEMA,log,arama_kullan=False),
+    )
 
 
 def _reels_creative_calistir(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, log, kelime_hizi_orani=None, ek_talimat=""):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),notes or '')
     prompt = reels_creative_promptunu_olustur(sure_saniye,ton,kelime_hizi_orani,ek_talimat=ek_talimat)
-    result, model = router.metin_uret(content,prompt,REELS_CREATIVE_SCHEMA,log,arama_kullan=False)
+    result, model = _run_timed(
+        log, "Reels Creative (Gemini)",
+        lambda: router.metin_uret(content,prompt,REELS_CREATIVE_SCHEMA,log,arama_kullan=False),
+    )
     result = _object_state_or_empty(result)
     return result, model
 
 
 def _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log):
     content = girdi_birlestir(durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('VIDEO',video_state))
-    result, model = router.metin_uret(content,caption_promptunu_olustur(),CAPTION_SCHEMA,log,arama_kullan=False)
+    result, model = _run_timed(
+        log, "Caption + Hashtag (Gemini)",
+        lambda: router.metin_uret(content,caption_promptunu_olustur(),CAPTION_SCHEMA,log,arama_kullan=False),
+    )
     return _caption_state_normalize(result), model
 
 
 def _threads_calistir(router,video_state,fact_state,editorial_state,log):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state))
-    result, model = router.metin_uret(content,threads_promptunu_olustur(),THREADS_SCHEMA,log,arama_kullan=False)
+    result, model = _run_timed(
+        log, "Threads (Gemini)",
+        lambda: router.metin_uret(content,threads_promptunu_olustur(),THREADS_SCHEMA,log,arama_kullan=False),
+    )
     return _threads_state_normalize(result), model
 
 
@@ -229,10 +287,58 @@ def _duo_kelime_sayisi(duo_script):
     return sum(_kelime_sayisi(seg.get('text','')) for seg in duo_script.get('segments',[]) if isinstance(seg,dict))
 
 
-def _duo_plan_hazirla(reels_state, sure_saniye, ton):
+def _explicit_voice_mode_from_notes(notes):
+    """Kullanıcı notundaki açık ses modu talebini dar ve güvenli biçimde çöz."""
+    text = str(notes or "").casefold().replace("_", " ")
+    # Kullanıcı kararı özellikle AI'ya bırakıyorsa mod kelimelerini override
+    # sayma (örn. "solo mu duo mu videoya göre sen seç").
+    if re.search(r"\b(sen\s+seç|ai.{0,20}karar\s+ver|içeriğe\s+göre\s+seç|videoya\s+göre\s+seç)\b", text):
+        return ""
+
+    duo_pattern = r"\b(duo|dual|iki\s+ses(?:li)?|çift\s+ses(?:li)?)\b"
+    solo_pattern = r"\b(solo|tek\s+ses(?:li)?)\b"
+    duo_negated = bool(re.search(duo_pattern + r".{0,18}\b(olmasın|istemiyorum|isteme)\b", text))
+    solo_negated = bool(re.search(solo_pattern + r".{0,18}\b(olmasın|istemiyorum|isteme)\b", text))
+
+    candidates = []
+    for pattern, mode in (
+        (r"\b(solo\s+female|sadece\s+kadın|yalnızca\s+kadın|tek\s+kadın\s+sesi)\b", "SOLO_FEMALE"),
+        (r"\b(solo\s+male|sadece\s+erkek|yalnızca\s+erkek|tek\s+erkek\s+sesi)\b", "SOLO_MALE"),
+    ):
+        match = re.search(pattern, text)
+        if match and not solo_negated:
+            candidates.append((match.start(), mode))
+    if not solo_negated:
+        match = re.search(solo_pattern, text)
+        if match:
+            candidates.append((match.start(), "SOLO"))
+    if not duo_negated:
+        match = re.search(duo_pattern, text)
+        if match:
+            candidates.append((match.start(), "DUO"))
+    return max(candidates, default=(-1, ""))[1]
+
+
+def _duo_plan_hazirla(reels_state, sure_saniye, ton, notes=""):
     reels_state = _object_state_or_empty(reels_state)
+    mode_request = _explicit_voice_mode_from_notes(notes)
+    if mode_request:
+        reels_state = dict(reels_state)
+        if mode_request == "SOLO":
+            raw_strategy = reels_state.get("duo_stratejisi") or {}
+            ai_mode = str(reels_state.get("anlatim_modu") or raw_strategy.get("uygunluk") or "").upper()
+            if ai_mode in {"SOLO_FEMALE", "SOLO_MALE"}:
+                mode_request = ai_mode
+            else:
+                try:
+                    female_weight = float(raw_strategy.get("female_agirligi") or 0)
+                    male_weight = float(raw_strategy.get("male_agirligi") or 0)
+                except (TypeError, ValueError):
+                    female_weight = male_weight = 0
+                hook = str(raw_strategy.get("hook_speaker") or "").lower()
+                mode_request = "SOLO_MALE" if male_weight > female_weight or (male_weight == female_weight and hook == "male") else "SOLO_FEMALE"
+        reels_state["_explicit_voice_mode"] = mode_request
     strategy = normalize_duo_strategy(reels_state)
-    strategy["conversation_map"] = normalize_conversation_map(reels_state)
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     strategy["target_words"] = hedef
     strategy["min_words"] = minimum
@@ -248,13 +354,16 @@ def _duo_script_calistir(router, duo_plan, editorial_state, fact_state, video_st
     video = durumu_metne_donustur('VIDEO', video_state)
     prompt = build_generation_prompt(contract, editorial_context=girdi_birlestir(editorial, video), fact_lock=facts, regeneration_instruction=regeneration_instruction)
     try:
-        generated, model = router.metin_uret(girdi_birlestir(editorial, video, facts), prompt, DUO_SCRIPT_SCHEMA, log, arama_kullan=False)
+        generated, model = _run_timed(
+            log, "DUO diyalog senaryosu (Gemini)",
+            lambda: router.metin_uret(girdi_birlestir(editorial, video, facts), prompt, DUO_SCRIPT_SCHEMA, log, arama_kullan=False),
+        )
         segments = validate_generated_duo(contract, generated)
         if not segments:
             raise ValueError('Duo script doğrulama sonrası boş kaldı.')
         return {"contract": contract, "segments": segments, "model": model, "status": "ready"}
     except Exception as exc:
-        log(f'⚠️ Duo script üretimi başarısız; legacy tek sesli akış korunuyor: {str(exc)[:180]}')
+        log(f'⚠️ Konuşma scripti üretimi başarısız; mod sözleşmesine uygun yeniden üretim gerekecek: {str(exc)[:180]}')
         return {"contract": contract, "segments": [], "model": "hata", "status": "fallback", "error": str(exc)[:180]}
 
 
@@ -279,14 +388,20 @@ def _duo_ses_veya_legacy_uret(router, duo_script, legacy_text, legacy_voice, log
         if not (duo_script and duo_script.get('status') == 'ready' and duo_script.get('segments')):
             log("❌ DUO mode aktif ama doğrulanmış duo_script yok; legacy fallback engellendi.")
             return False, None, "DUO"
-        ok, info = duo_ses_uret(router, duo_script['segments'], output_path, log, hiz_carpani=SES_HIZ_CARPANI)
+        ok, info = _run_timed(
+            log, "DUO multi-speaker TTS + WAV hazırlama",
+            lambda: duo_ses_uret(router, duo_script['segments'], output_path, log, hiz_carpani=SES_HIZ_CARPANI),
+        )
         if ok and os.path.exists(output_path):
             return True, info, "DUO"
         log("❌ DUO TTS üretilemedi; DUO modunda legacy fallback kapalı.")
         return False, None, "DUO"
 
-    ok, info = router.ses_uret(legacy_text, effective_legacy_voice, output_path, log, hiz_carpani=SES_HIZ_CARPANI)
-    return ok, info, 'LEGACY_' + mode
+    ok, info = _run_timed(
+        log, "Legacy tek ses TTS + WAV hazırlama",
+        lambda: router.ses_uret(legacy_text, effective_legacy_voice, output_path, log, hiz_carpani=SES_HIZ_CARPANI),
+    )
+    return ok, info, mode
 
 
 def _ses_sure_uyumlu_mu(ses_dosyasi, video_suresi):
@@ -308,7 +423,7 @@ def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, 
         adet,hedef,minimum,maksimum=_reels_kelime_kontrolu(reels_state,sure_saniye,KELIME_HIZI_ORANI)
         log(f'📝 Seslendirme uzunluk kontrolü: {adet} kelime | hedef {hedef} | izin verilen {minimum}-{maksimum}')
 
-        duo_plan=_duo_plan_hazirla(reels_state,sure_saniye,ton)
+        duo_plan=_duo_plan_hazirla(reels_state,sure_saniye,ton,notes=notes)
         log('🗣️ Konuşma metni hazırlanıyor...' if deneme==0 else f'🗣️ Konuşma metni yenileniyor ({deneme}/{VOICE_REGEN_MAX})...')
         duo_script=_duo_script_calistir(router,duo_plan,editorial_state,fact_state,video_state,log)
         son_duo_plan,son_duo_script=duo_plan,duo_script
@@ -399,17 +514,20 @@ def _ses_modu_sesi(mode):
 
 def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}')
-    result, model = router.metin_uret(content,qa_promptunu_olustur(),QA_SCHEMA,log,arama_kullan=False)
+    result, model = _run_timed(
+        log, "Final QA (Gemini)",
+        lambda: router.metin_uret(content,qa_promptunu_olustur(),QA_SCHEMA,log,arama_kullan=False),
+    )
     result = _object_state_or_empty(result)
     if not result:
         result = {"overall":"FAIL","regeneration_targets":["QA_PARSE_FAIL"]}
     return result, model
 
 
-def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction=''):
+def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction='',production_notes=''):
     qa_state={}; qa_rounds=0; ses_basarili=False; kullanilan_ses_modeli=None; ses_modu='LEGACY'; ses_dosyasi=''
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi=_reels_ve_ses_uyumlu_uret(
-        router,editorial_state,fact_state,video_state,'',sure_saniye,ton,legacy_voice,log,baslangic_talimati=voice_initial_instruction
+        router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=voice_initial_instruction
     )
     try:
         caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)
@@ -466,7 +584,7 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
 
         if creative_needed:
             reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi=_reels_ve_ses_uyumlu_uret(
-                router,editorial_state,fact_state,video_state,'',sure_saniye,ton,legacy_voice,log,baslangic_talimati=instruction
+                router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=instruction
             )
         elif duo_needed:
             duo_script,ses_basarili,duo_info,ses_modu=_duo_ve_ses_yenile(router,reels_state,duo_plan,editorial_state,fact_state,video_state,sure_saniye,legacy_voice,log,instruction)
@@ -513,7 +631,7 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     _ilerleme(ilerlemeyi_guncelle,4); log_ekle('🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover + Duo)...')
     legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
-        router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle
+        router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle, production_notes=metin_uretim_notlari
     )
     state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass
     if ses_basarili and ses_dosyasi and os.path.exists(ses_dosyasi):
@@ -571,7 +689,10 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     _ilerleme(ilerlemeyi_guncelle,8); log_ekle(f'🎧 Hazır ses kullanılıyor ({ses_modu} → {_ses_modu_sesi(ses_modu)}).')
     _ilerleme(ilerlemeyi_guncelle,9); log_ekle('🎬 Videoya AI sesi ekleniyor (FFmpeg)...')
     output=gecici_dosya_yolu('output','mp4')
-    render_ok=ses_basarili and video_ve_sesi_birlestir(temp_input_video,ses_dosyasi,output,log_ekle)
+    render_ok = ses_basarili and _run_timed(
+        log_ekle, "FFmpeg video + TTS render",
+        lambda: video_ve_sesi_birlestir(temp_input_video, ses_dosyasi, output, log_ekle),
+    )
     final=output if render_ok and os.path.exists(output) else ''
     input_media=medya_raporu(temp_input_video,'INPUT FINAL',log_ekle) if os.path.exists(temp_input_video) else {}
     output_media=medya_raporu(final,'OUTPUT FINAL',log_ekle) if final else {}
@@ -603,7 +724,7 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain'); editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle); state['editorial_state']=editorial_state
     _ilerleme(ilerlemeyi_guncelle,4,'🎙️ Reels Creative'); legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
-        router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle
+        router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle, production_notes=metin
     )
     state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass
     state['caption_state']=_caption_state_normalize(caption_state); state['threads_state']=_threads_state_normalize(threads_state); state['qa_state_final']=qa_state

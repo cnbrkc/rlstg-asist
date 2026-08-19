@@ -1,7 +1,8 @@
 import os
+import re
 import sys
-import urllib.request
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # Add repository root to search path
@@ -38,8 +39,14 @@ def send(text):
         raise RuntimeError(f"Telegram sendMessage failed: {result}")
 
 
+def _safe_filename(value):
+    basename = Path(str(value or "telegram_video.mp4").replace("\\", "/")).name
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", basename).strip("._")
+    return (cleaned or "telegram_video.mp4")[:160]
+
+
 def main():
-    filename = Path(os.environ.get("TELEGRAM_FILENAME", "telegram_video.mp4")).name
+    filename = _safe_filename(os.environ.get("TELEGRAM_FILENAME"))
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
     destination = data_dir / filename
@@ -52,6 +59,10 @@ def main():
     urllib.request.urlretrieve(url, destination)
     size_mb = destination.stat().st_size / (1024 * 1024)
     send(f"✅ Video indirildi.\n\n📁 {filename}\n📦 {size_mb:.1f} MB\n\nPipeline devam ediyor...")
+    github_env = os.environ.get("GITHUB_ENV", "").strip()
+    if github_env:
+        with open(github_env, "a", encoding="utf-8") as env_file:
+            env_file.write(f"VIDEO_FILES={destination.as_posix()}\n")
     print(f"VIDEO_PATH={destination}")
 
 

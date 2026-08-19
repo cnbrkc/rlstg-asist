@@ -2,6 +2,8 @@ import json
 import mimetypes
 import os
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add repository root to search path
@@ -45,6 +47,20 @@ TON_MAP = {"eglence": TON_EGLENCE, "dengeli": TON_DENGELI, "bilgi": TON_BILGI, "
 TON_LABELS = {"eglence": "🎭 Eğlence Ağırlıklı", "dengeli": "⚖️ Dengeli", "bilgi": "🧠 Bilgi Ağırlıklı", "teknik": "📊 Teknik / Detaylı"}
 TELEGRAM_TEXT_LIMIT = 4096
 TELEGRAM_VIDEO_CAPTION_LIMIT = 1024
+
+
+def _timed_action(log, label, callback):
+    started = time.perf_counter()
+    log(f"⏱️ START | {label}")
+    try:
+        result = callback()
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        log(f"⏱️ FAIL  | {label} | {elapsed:.2f}s ({elapsed/60:.2f} dk) | {type(exc).__name__}: {str(exc)[:180]}")
+        raise
+    elapsed = time.perf_counter() - started
+    log(f"⏱️ END   | {label} | {elapsed:.2f}s ({elapsed/60:.2f} dk)")
+    return result
 
 
 def send_message(text):
@@ -194,10 +210,18 @@ def _setup_env(steps, loading_id):
     tone_key = tone_key if tone_key in TON_MAP else "dengeli"
     selected_tone = TON_MAP[tone_key]
     capture_diagnostics = steps is PIPELINE_STEPS  # video path medya teşhisi satırlarını warnings'e ekler
+    process_started = time.perf_counter()
+    active_stage = {"index": None, "started": None}
+    stage_durations = {}
 
     def log(msg):
+        # Actions satırlarında UTC duvar saati + job başlangıcından itibaren süre.
+        # Ham mesaj warning/error sınıflandırmasında korunur; API anahtar değeri,
+        # prompt veya tam model çıktısı hiçbir zaman yazdırılmaz.
         text = str(msg).strip()
-        print(text, flush=True)
+        elapsed = time.perf_counter() - process_started
+        stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        print(f"[{stamp}] [+{elapsed:8.2f}s] {text}", flush=True)
         lower = text.lower()
         if "⚠️" in text or "uyarı" in lower or "warning" in lower:
             warnings.append(text)
@@ -206,16 +230,48 @@ def _setup_env(steps, loading_id):
         if capture_diagnostics and (text.startswith("📐 ") or text.startswith("🎚️ ")):
             warnings.append(text)
 
+    def _close_active_stage():
+        idx = active_stage["index"]
+        started = active_stage["started"]
+        if idx is None or started is None:
+            return
+        elapsed = time.perf_counter() - started
+        stage_durations[idx] = stage_durations.get(idx, 0.0) + elapsed
+        log(f"📊 STAGE END   | {idx+1}/{len(steps)} {steps[idx]} | {elapsed:.2f}s ({elapsed/60:.2f} dk)")
+        active_stage["index"] = None
+        active_stage["started"] = None
+
     def progress(n, total, msg):
         done = max(0, min(n - 1, len(steps)))
+        idx = n - 1 if 0 < n <= len(steps) else None
+        if idx != active_stage["index"]:
+            _close_active_stage()
+            if idx is not None:
+                active_stage["index"] = idx
+                active_stage["started"] = time.perf_counter()
+                log(f"📊 STAGE START | {idx+1}/{len(steps)} {steps[idx]}")
         if done > 0:
             step_status[done - 1] = "🟢"
-        current = steps[n - 1] if 0 < n <= len(steps) else str(msg)
+        current = steps[idx] if idx is not None else str(msg)
         try:
             edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors), steps=steps))
         except Exception as exc:
-            print(f"Loading mesajı güncellenemedi: {exc}", flush=True)
+            log(f"⚠️ Loading mesajı güncellenemedi: {type(exc).__name__}: {str(exc)[:160]}")
 
+    def finish_timing(status="SUCCESS"):
+        _close_active_stage()
+        total_elapsed = time.perf_counter() - process_started
+        log("=" * 72)
+        log(f"📈 PIPELINE TIMING SUMMARY | status={status}")
+        for idx, name in enumerate(steps):
+            if idx in stage_durations:
+                seconds = stage_durations[idx]
+                log(f"📈 {idx+1}/{len(steps)} {name}: {seconds:.2f}s ({seconds/60:.2f} dk)")
+        log(f"🏁 PIPELINE WALL TIME: {total_elapsed:.2f}s ({total_elapsed/60:.2f} dk)")
+        log("=" * 72)
+
+    log.finish_timing = finish_timing
+    log.close_stage = _close_active_stage
     return step_status, warnings, errors, tone_key, selected_tone, log, progress
 
 
@@ -252,20 +308,31 @@ def process(path):
     step_status, warnings, errors, tone_key, selected_tone, log, progress = _setup_env(PIPELINE_STEPS, loading_id)
     user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
     video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
+    log(
+        f"🚀 PIPELINE INPUT | mode=video | file={path.name} | bytes={len(raw)} | "
+        f"duration={duration if duration is not None else 'unknown'}s | mime={mime} | "
+        f"tone={tone_key} | note_chars={len(user_video_note)}"
+    )
 
     try:
         result = pipeline_calistir(router=router, video_bytes=raw, mime_type=mime, temp_input_video=str(path), video_analiz_notlari=video_note, metin_uretim_notlari=video_note, sure_saniye=duration, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
+        log(f"❌ Pipeline exception: {type(exc).__name__}: {str(exc)[:300]}")
+        log.finish_timing("FAIL")
         try:
             edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
         except Exception:
             pass
         raise
 
+    # Pipeline çekirdek aşamalarını sosyal gönderim süresinden ayrı ölç.
+    log.close_stage()
     final = result.get("final_video")
     if not final or not Path(final).exists():
         errors.append("Pipeline tamamlandı ancak final video üretilemedi.")
+        log("❌ Pipeline tamamlandı ancak final video üretilemedi.")
+        log.finish_timing("FAIL_NO_VIDEO")
         edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
@@ -276,12 +343,13 @@ def process(path):
         warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; tam Instagram metni aşağıdaki sosyal çıktıda korunuyor.")
     for i in range(len(PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
-    edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
-    send_video(final, video_caption)
-    send_message(_format_title_options(result.get("kapak_basliklari") or []))
+    _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
+    _timed_action(log, "Telegram final video upload", lambda: send_video(final, video_caption))
+    _timed_action(log, "Telegram başlık seçenekleri", lambda: send_message(_format_title_options(result.get("kapak_basliklari") or [])))
     if threads:
-        send_message(_threads_message(threads))
+        _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
     Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.finish_timing("SUCCESS")
 
 
 def process_text(text):
@@ -290,21 +358,26 @@ def process_text(text):
     loading_id = initial["result"]["message_id"]
     router = SmartRouter()
     step_status, warnings, errors, tone_key, selected_tone, log, progress = _setup_env(TEXT_PIPELINE_STEPS, loading_id)
+    log(f"🚀 PIPELINE INPUT | mode=text | text_chars={len(text)} | tone={tone_key}")
 
     try:
         result = metin_pipeline_calistir(router=router, metin=text, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
+        log(f"❌ Text pipeline exception: {type(exc).__name__}: {str(exc)[:300]}")
+        log.finish_timing("FAIL")
         edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
         raise
 
+    log.close_stage()
     caption, hashtags, threads = _ensure_social_outputs(result, warnings)
     for i in range(len(TEXT_PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
-    edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
+    _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
     if threads:
-        send_message(_threads_message(threads))
+        _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
     Path("pipeline_result.json").write_text(json.dumps({"source": "text", "content_tone": tone_key, "caption": caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.finish_timing("SUCCESS")
 
 
 def main():

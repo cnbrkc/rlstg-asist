@@ -37,6 +37,7 @@ class DuoLayerTests(unittest.TestCase):
 
     def test_solo_mode_filters_other_speaker(self):
         state = {
+            "_explicit_voice_mode": "SOLO_FEMALE",
             "anlatim_modu": "SOLO_FEMALE",
             "duo_stratejisi": {"hook_speaker": "male", "ending_speaker": "male"},
             "konusma_haritasi": [
@@ -45,6 +46,7 @@ class DuoLayerTests(unittest.TestCase):
             ],
         }
         plan = normalize_duo_strategy(state)
+        self.assertEqual(plan["mode"], "SOLO_FEMALE")
         self.assertEqual(plan["hook_speaker"], "female")
         self.assertEqual(plan["ending_speaker"], "female")
         self.assertEqual([x["speaker"] for x in plan["conversation_map"]], ["female", "female"])

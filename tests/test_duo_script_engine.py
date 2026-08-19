@@ -42,6 +42,8 @@ class DuoScriptEngineTests(unittest.TestCase):
         prompt = build_generation_prompt(contract, "editorial", "fact lock")
         self.assertIn("Sadece bu JSON'u döndür", prompt)
         self.assertIn("FACT LOCK", prompt)
+        self.assertIn("GERÇEK KARŞILIKLILIK", prompt)
+        self.assertIn("ÖLÇÜLÜ ÇEKİŞME", prompt)
 
     def test_invalid_generated_speaker_is_rejected(self):
         contract = build_duo_generation_contract({"mode": "DUO"})

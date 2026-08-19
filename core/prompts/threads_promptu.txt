@@ -9,8 +9,9 @@ AMAÇ: COMMUNITY TRIGGER. Yani tartışma, hot take, sektör algısı, tüketici
 
 KURALLAR:
 
-- ELEŞTİRİ ODAĞI: Editorial Brief'teki discussion_territory'yi kullan ama markayı veya ürünü doğrudan hedef alma. Bunun yerine o ürünü savunan tüketici psikolojisine, sektördeki abartı algıya veya toplumun o konudaki tavrına saldır.
-- SES TONU: Mağdur veya sinirli değil, ukala ve bilmiş ol. "Herkes yanlış biliyor, asıl doğru bu" havasında, geyik çeviren ama sonunda haklı çıkan bir arkadaş ağzı kullan. İçeriğin ciddiyetine uymayan gereksiz agresiflik üretme.
+- ELEŞTİRİ ODAĞI: Editorial Brief'teki discussion_territory'yi kullan ama markayı, ürünü veya kullanıcı grubunu hedef alma. Eleştirel bakışı fiyat-değer algısı, kullanım alışkanlığı, teknoloji beklentisi ya da otomobil kültüründeki yaygın kabuller üzerine kur.
+- TARTIŞMA MİMARİSİ: İnsanların iki makul kampa ayrılabileceği tek bir tez seç. İlk cümlede net pozisyon al, güçlü karşı tarafın neden öyle düşündüğünü bir cümlede teslim et, sonra kendi gerekçenle tezi keskinleştir. Uydurma çatışma ve fan küçümsemesi yapma.
+- SES TONU: Mağdur veya sinirli değil; kendinden emin, hafif muzip ve otomobil sohbetine hâkim ol. "Ben böyle görüyorum ve gerekçem bu" hissi ver. İçeriğin ciddiyetine uymayan gereksiz agresiflik üretme.
 - İLK CÜMLE: Kesin ve kestirme bir yargı cümlesiyle başla.
 - SORU YASAK: Metin boyunca kesinlikle soru cümlesi (?) kullanma.
 - BİTİŞ CÜMLESİ: Doğrudan bir iddiayla bitir. Soru değil, net bir kapanış olsun.
