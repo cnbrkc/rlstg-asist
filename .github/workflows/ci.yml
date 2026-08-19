@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEMINI_API_KEY: test-only-not-a-real-key
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --disable-pip-version-check -r requirements.txt
+          pip install --disable-pip-version-check pytest ruff pyyaml
+
+      - name: Compile Python
+        run: python -m compileall -q core duo telegram tests
+
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Fatal lint checks
+        run: ruff check core duo telegram tests --select F,E9
+
+      - name: Validate workflow YAML
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          for path in Path('.github/workflows').glob('*.yml'):
+              yaml.safe_load(path.read_text(encoding='utf-8'))
+              print('OK', path)
+          PY
+
+      - name: Validate Cloudflare Worker syntax
+        run: node --check cloudflare/telegram-webhook.js
