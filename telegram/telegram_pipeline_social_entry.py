@@ -47,6 +47,7 @@ def _qa_regeneration_loop_compat(*args, **kwargs):
         and normalized_targets <= {"DUO_SCRIPT_FAIL"}
         and ses_basarili
         and ses_modu == "DUO"
+        and not (duo_script.get("conversation_quality_issues") if isinstance(duo_script, dict) else ["unknown_script"])
         and ses_dosyasi
         and _pipeline.os.path.exists(ses_dosyasi)
     ):
@@ -111,6 +112,7 @@ def _research_compat(router, video_state, log):
             "turkiye_satis_durumu": "BILINMIYOR",
             "turkiye_fiyati": "",
             "global_fiyat_bilgisi": "",
+            "turkiye_ilgi_sinyalleri": [],
             "arastirma_notu": "Search fallback: dış doğrulama yapılamadı; yeni iddia eklenmedi.",
         }, "forensic-fallback"
 

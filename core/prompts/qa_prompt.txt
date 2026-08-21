@@ -18,7 +18,9 @@ Aşağıdaki her kontrolü ayrı ayrı yap ve her biri için "PASS: ..." veya "F
 - hashtag_check: Tam 5 hashtag mi, yasaklı etiket var mı, dağılım kurallarına uygun mu?
 - threads_check: 500 karakter altında mı, soru cümlesi/hashtag var mı, tartışma başlatma potansiyeli var mı, caption'ın yeniden yazımı mı? 280 karakterin altındaysa veya yalnızca tek cümle/genel fallback metniyse FAIL. 3-5 cümlelik, konuya özgü, net görüş içeren Threads beklenir.
 - brand_check: otoXtra'nın samimi/halk ağzı tonu korunuyor mu?
-- duo_check: Seçilen mod ile Duo script uyumlu mu? Speaker eşleşmeleri ve doğal konuşma korunuyor mu?
+- tone_check: Editorial Brief, seslendirme, caption ve Threads runtime'da verilen SEÇİLEN İÇERİK TÜRÜNÜ gerçekten yansıtıyor mu? Özellikle eğlence/bilgi/teknik yoğunluğu seçimi varsayılan dengeli tona yuvarlanmışsa FAIL.
+- viral_priority_check: Fact Lock'taki `turkiye_ilgi_sinyalleri` ve Editorial `story_options` puanlarına göre Türkiye kitlesi için en güçlü doğrulanmış açı final hook + seslendirmede gerçekten merkezde mi? Güçlü fiyat/değer, erişilebilirlik, kullanım maliyeti veya sıra dışı teknik fark varken içerik gerekçesiz biçimde kapı/far/ekran gibi zayıf mikro detaya sapmışsa FAIL. En güçlü aday seçilmediyse `selection_rationale` somut ve ikna edici olmalı. Türkiye'de satılmayan araçta global fiyatın Türkiye fiyatı gibi sunulması da FAIL.
+- duo_check: Seçilen mod ile Duo script uyumlu mu? İki speaker gerçekten birbirinin belirli sözüne karşılık veriyor mu; hook→friction→proof→reversal→payoff akışı, asimetrik replik ritmi, anlamlı fikir dönüşü ve callback var mı? İki bağımsız monolog, token ikinci ses, röportaj soru-cevabı, eşit uzunlukta mekanik kadın-erkek salınımı veya şarkıcı düeti hissi varsa FAIL.
 
 SONUÇ:
 - overall: Yukarıdaki kontrollerden herhangi biri FAIL ise "FAIL", hepsi PASS ise "PASS".
@@ -29,6 +31,8 @@ SONUÇ:
   - COVER_FAIL → cover_check, visual_match_check
   - THREADS_FAIL → threads_check
   - FACT_FAIL → fact_check, model_check, video_check, current_data_check
+  - tone_check FAIL ise uyumsuz çıktıya göre hedef seç: seslendirme/ana hikâye için VOICEOVER_FAIL, caption için CAPTION_FAIL, Threads için THREADS_FAIL. Yalnız gerçekten uyumsuz olan kolları işaretle.
+  - viral_priority_check FAIL ise hook/seslendirme yanlış açıdaysa VOICEOVER_FAIL; yalnız caption güçlü ana hikâyeden kopmuşsa CAPTION_FAIL. Yeni gerçek uydurma, mevcut doğrulanmış önceliğe geri dön.
 
 Yalnızca gerçekten FAIL olan hedefleri listele. Hiçbir FAIL yoksa regeneration_targets boş array olsun.
 

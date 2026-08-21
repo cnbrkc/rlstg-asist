@@ -238,6 +238,9 @@ class MultiSpeakerConfigTests(unittest.TestCase):
             2,
         )
         self.assertTrue(any("Multi-speaker API config doğrulandı" in line for line in logs))
+        self.assertIn("Do not sing, chant, harmonize", captured["prompt"])
+        self.assertIn("Never insert the same pause between every speaker", captured["prompt"])
+        self.assertIn("Fast, alert cold open", captured["prompt"])
 
     def test_rejects_duplicate_voice(self):
         router = SmartRouter.__new__(SmartRouter)

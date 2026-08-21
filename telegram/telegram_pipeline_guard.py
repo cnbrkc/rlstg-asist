@@ -28,10 +28,10 @@ _original_threads = _pipeline._threads_calistir
 _original_reels_creative = _pipeline._reels_creative_calistir
 
 
-def _caption_guard(router, reels_state, fact_state, editorial_state, video_state, log):
+def _caption_guard(router, reels_state, fact_state, editorial_state, video_state, log, ton=None):
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _original_caption(router, reels_state, fact_state, editorial_state, video_state, log)
+            state, model = _original_caption(router, reels_state, fact_state, editorial_state, video_state, log, ton)
         except Exception as exc:
             log(f"⚠️ Caption üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"reels_aciklamasi": "", "reels_hashtagleri": []}, "hata"
@@ -47,10 +47,10 @@ def _caption_guard(router, reels_state, fact_state, editorial_state, video_state
     return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, "local-fallback"
 
 
-def _threads_guard(router, video_state, fact_state, editorial_state, log):
+def _threads_guard(router, video_state, fact_state, editorial_state, log, ton=None):
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _original_threads(router, video_state, fact_state, editorial_state, log)
+            state, model = _original_threads(router, video_state, fact_state, editorial_state, log, ton)
         except Exception as exc:
             log(f"⚠️ Threads üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"threads_aciklamasi": ""}, "hata"
@@ -130,11 +130,17 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
         if not segments:
             log("⚠️ LLM tabanlı diyalog üretilemedi, kural tabanlı split_for_speakers fallback olarak devreye alınıyor...")
             segments = _split_for_speakers(reels_state.get("seslendirme_metni", ""), conversation_map)
+            fallback_contract = duo_script.get("contract") or {**duo_plan, "mode": mode}
+            fallback_generated = {"segments": segments}
             duo_script = {
-                "contract": {"mode": mode},
+                "contract": fallback_contract,
+                "conversation_design": {},
                 "segments": segments,
                 "model": "local-fallback-split",
                 "status": "ready" if segments else "fallback",
+                "conversation_quality_issues": _pipeline.duo_conversation_quality_issues(
+                    fallback_contract, fallback_generated
+                ) if segments else ["empty_fallback"],
             }
 
     ses_path = gecici_ses_yolu()
