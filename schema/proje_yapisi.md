@@ -1,6 +1,6 @@
 # otoXtra Reels & Telegram Asistanı — Güncel Mimari Şema
 
-> Son güncelleme: 19 Ağustos 2026
+> Son güncelleme: 21 Ağustos 2026
 >
 > Bu belge üretimdeki gerçek kod akışını, veri sözleşmelerini ve güvenlik kurallarını açıklar.
 
@@ -68,10 +68,10 @@ Tek üretim yolu `telegram-video-optimized.yml` dosyasıdır. Böylece farklı g
    tüm model rotaları başarısızsa yalnızca OBSERVED verilerle güvenli fallback
 
 3. Editorial Brain
-   video_state + fact_lock + kullanıcı notu → EDITORIAL_SCHEMA
+   video_state + fact_lock + kullanıcı notu + runtime içerik türü kilidi → EDITORIAL_SCHEMA
 
 4. Reels Creative
-   editorial + fact_lock + video + runtime süre/ton → REELS_CREATIVE_SCHEMA
+   editorial + fact_lock + video + runtime süre/içerik türü kilidi → REELS_CREATIVE_SCHEMA
 
 5. Voice plan
    kullanıcı açık mod söylediyse mutlak override
@@ -87,10 +87,11 @@ Tek üretim yolu `telegram-video-optimized.yml` dosyasıdır. Böylece farklı g
    SOLO: kullanıcı override'ı veya AI editoryal kararıyla tek prebuilt voice
 
 8. Caption + Threads
-   structured output; boş/artifact yanıtta Fact Lock tabanlı yerel fallback
+   aynı Editorial/Fact Lock ve içerik türü sözleşmesiyle birbirinden bağımsız iki kol paralel çalışır;
+   boş/artifact yanıtta Fact Lock tabanlı yerel fallback
 
 9. QA
-   Fact Lock, voice mode, TTS dosyası ve sosyal çıktılar doğrulanır
+   Fact Lock, seçilen içerik türü, voice mode, TTS dosyası ve sosyal çıktılar doğrulanır
 
 10. FFmpeg render
    gerçek WAV süresi ölçülür; video güvenli hız sınırları içinde senkronlanır
@@ -154,7 +155,9 @@ DUO üretiminde:
 | `DUO_SCRIPT_SCHEMA` | `segments[].speaker`, `segments[].text` |
 | `CAPTION_SCHEMA` | `reels_aciklamasi`, `reels_hashtagleri` |
 | `THREADS_SCHEMA` | `threads_aciklamasi` |
-| `QA_SCHEMA` | `overall`, `regeneration_targets` |
+| `QA_SCHEMA` | `tone_check`, `overall`, `regeneration_targets` |
+
+Seçilen içerik türü (`eglence`, `dengeli`, `bilgi`, `teknik`) Telegram'dan pipeline'a taşınır ve yalnız Reels metninde değil Editorial Brain, Reels Creative, Caption, Threads ve Final QA katmanlarının tamamında aynı runtime sözleşmesi olarak kilitlenir. Pipeline sonucu ve logu uygulanan türü ayrıca kaydeder.
 
 `anlatim_modu` ve `duo_stratejisi.uygunluk` değerleri `DUO`, `SOLO_FEMALE`, `SOLO_MALE` enum'larıyla sınırlandırılmıştır. Runtime kullanıcı override'ı model kararından üstündür; override yoksa doğrulanmış model kararı korunur.
 

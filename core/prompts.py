@@ -35,18 +35,53 @@ def forensic_analiz_promptunu_olustur(ek_notlar="",sure_saniye=0):
 
 
 def research_promptunu_olustur(): return _oku("research_prompt.txt")+"\n"+_oku("guncellik_talimati.txt")+_otorite_talimati()
-def editorial_promptunu_olustur(): return _oku("editorial_prompt.txt")+_otorite_talimati()
+
+
+_TON_PROFILLERI = {
+    "eglence": (
+        "EĞLENCE AĞIRLIKLI: yaklaşık %25 bilgi, %75 hikâye/reaksiyon/yorum. "
+        "En fazla 1-2 güçlü olgusal dayanak seç; teknik veri yığma. Açıyı şaşırtıcı görsel, "
+        "gündelik kullanım, doğal mizah veya karakter tepkisi taşısın. Bilgiyi yalnızca hikâyeyi güçlendirdiği yerde kullan."
+    ),
+    "dengeli": (
+        "DENGELİ: yaklaşık %50 bilgi, %50 yorum/reaksiyon/hikâye. Bilgiyi arka arkaya dizme; "
+        "aynı teknik özelliği farklı cümlelerle tekrar etme. En fazla 2 bilgi yoğun cümlenin ardından "
+        "doğal yorum, kullanım karşılığı, reaksiyon veya geçiş getir."
+    ),
+    "bilgi": (
+        "BİLGİ AĞIRLIKLI: yaklaşık %75 bilgi, %25 yorum/reaksiyon. Birden fazla doğrulanmış olguyu "
+        "neden-sonuç ve kullanıcıya etkisiyle açıkla. Teknik ayrıntılar önemli ama katalog gibi sıralanmasın; "
+        "her bilgi anlamı veya gerçek kullanım karşılığıyla hikâyeye bağlansın."
+    ),
+    "teknik": (
+        "TEKNİK / DETAYLI: yaklaşık %90 bilgi, %10 yorum. Mekanizma, ölçülebilir veri, donanım farkı, "
+        "teknik neden-sonuç ve gerekiyorsa doğrulanmış karşılaştırma önceliklidir. Terimleri doğru ve kısa biçimde açıkla; "
+        "liste/katalog dili, veri uydurma ve genel geçer reaksiyonlarla alan doldurma."
+    ),
+}
 
 
 def _reels_ton_ayarlarini_hazirla(icerik_tonu):
     ton=(icerik_tonu or "dengeli").strip().lower()
-    oranlar={
-        "eglence":"EĞLENCE AĞIRLIKLI: yaklaşık %25 bilgi, %75 hikâye/reaksiyon/yorum. Teknik veri yığma. Bilgi yalnızca hikâyeyi taşıdığı yerde kullan.",
-        "dengeli":"DENGELİ: yaklaşık %50 bilgi, %50 yorum/reaksiyon/hikâye. Bilgiyi arka arkaya dizme; aynı teknik özelliği farklı cümlelerle tekrar etme. En fazla 2 bilgi yoğun cümleyi art arda kullan, ardından doğal yorum/reaksiyon/geçiş getir.",
-        "bilgi":"BİLGİ AĞIRLIKLI: yaklaşık %75 bilgi, %25 yorum/reaksiyon. Teknik ayrıntılar önemli ama katalog gibi sıralanmayacak; her bilgi hikâyeye bağlanacak.",
-        "teknik":"TEKNİK ODAKLI: yaklaşık %90 bilgi, %10 yorum. Teknik doğruluk ve açıklık öncelikli; yine de liste/katalog dili kullanılmayacak."
-    }
-    return ton, oranlar.get(ton, oranlar["dengeli"])
+    if ton not in _TON_PROFILLERI:
+        ton="dengeli"
+    return ton, _TON_PROFILLERI[ton]
+
+
+def icerik_tonu_talimati(icerik_tonu, asama="içerik"):
+    """Seçili türü bütün üretim katmanlarında aynı runtime sözleşmesine çevirir."""
+    ton, profil = _reels_ton_ayarlarini_hazirla(icerik_tonu)
+    return (
+        f"\n\n🚨 RUNTIME İÇERİK TÜRÜ KİLİDİ — {asama.upper()} 🚨\n"
+        f"Seçili tür: {ton}. Bu seçim tavsiye değil, bu üretime ait editoryal sözleşmedir.\n"
+        f"{profil}\n"
+        "Fact Lock, kullanıcı notu ve güvenlik kuralları her zaman üst sınırdır; tür uğruna bilgi uydurma. "
+        "Buna karşılık seçili türü varsayılan 'dengeli' tona yuvarlama ve başka bir türün yaklaşımıyla ezme."
+    )
+
+
+def editorial_promptunu_olustur(icerik_tonu=None):
+    return _oku("editorial_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Editorial Brain") + _otorite_talimati()
 
 
 def _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani=None):
@@ -77,14 +112,22 @@ def reels_creative_promptunu_olustur(sure_saniye,icerik_tonu,kelime_hizi_orani=N
         f"izin verilen aralık {minimum}-{maksimum} kelime; içerik tonu {ton}. "
         "Bu değerler prompt içindeki örneklerden veya önceki üretimlerden bağımsız olarak geçerlidir. "
         "Seslendirme metnini bu kelime aralığının dışına çıkarma. Bilgi yoğunluğunu seçilen tona uygun tut."
+        + icerik_tonu_talimati(ton, "Reels Creative")
     )
     if ek_talimat and ek_talimat.strip(): runtime += "\n\n🚨 YENİDEN ÜRETİM TALİMATI:\n" + ek_talimat.strip()
     return template + runtime + _otorite_talimati()
 
 
-def caption_promptunu_olustur(): return _oku("caption_prompt.txt")+_otorite_talimati()
-def threads_promptunu_olustur(): return _oku("threads_promptu.txt")+_otorite_talimati()
-def qa_promptunu_olustur(): return _oku("qa_prompt.txt")+_otorite_talimati()
+def caption_promptunu_olustur(icerik_tonu=None):
+    return _oku("caption_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Caption") + _otorite_talimati()
+
+
+def threads_promptunu_olustur(icerik_tonu=None):
+    return _oku("threads_promptu.txt") + icerik_tonu_talimati(icerik_tonu, "Threads") + _otorite_talimati()
+
+
+def qa_promptunu_olustur(icerik_tonu=None):
+    return _oku("qa_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Final QA") + _otorite_talimati()
 
 
 def durumu_metne_donustur(baslik,deger):

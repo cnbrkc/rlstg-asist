@@ -7,6 +7,7 @@ import json
 import os, re
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI, PIPELINE_ADIMLARI
 from core.schemas import VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA, REELS_CREATIVE_SCHEMA, CAPTION_SCHEMA, THREADS_SCHEMA, QA_SCHEMA, DUO_SCRIPT_SCHEMA
 from core.prompts import (forensic_analiz_promptunu_olustur, research_promptunu_olustur, editorial_promptunu_olustur,
@@ -159,6 +160,7 @@ def _payload(reels_state, caption_state, threads_state, ses_basarili, ses_dosyas
         'duo_script': duo_script,
         'qa_result': qa_state,
         'qa_pass': qa_pass,
+        'content_tone': (state or {}).get('content_tone', 'dengeli'),
         'pipeline_state': state,
     }
     if input_media is not None:
@@ -233,11 +235,11 @@ def _research_calistir(router, video_state, log):
     )
 
 
-def _editorial_calistir(router, video_state, fact_state, notes, log):
+def _editorial_calistir(router, video_state, fact_state, notes, log, ton=None):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE',video_state),durumu_metne_donustur('FACT LOCK',fact_state),notes or '')
     return _run_timed(
         log, "Editorial Brain (Gemini)",
-        lambda: router.metin_uret(content,editorial_promptunu_olustur(),EDITORIAL_SCHEMA,log,arama_kullan=False),
+        lambda: router.metin_uret(content,editorial_promptunu_olustur(ton),EDITORIAL_SCHEMA,log,arama_kullan=False),
     )
 
 
@@ -252,22 +254,56 @@ def _reels_creative_calistir(router, editorial_state, fact_state, video_state, n
     return result, model
 
 
-def _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log):
+def _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log,ton=None):
     content = girdi_birlestir(durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('VIDEO',video_state))
     result, model = _run_timed(
         log, "Caption + Hashtag (Gemini)",
-        lambda: router.metin_uret(content,caption_promptunu_olustur(),CAPTION_SCHEMA,log,arama_kullan=False),
+        lambda: router.metin_uret(content,caption_promptunu_olustur(ton),CAPTION_SCHEMA,log,arama_kullan=False),
     )
     return _caption_state_normalize(result), model
 
 
-def _threads_calistir(router,video_state,fact_state,editorial_state,log):
+def _threads_calistir(router,video_state,fact_state,editorial_state,log,ton=None):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state))
     result, model = _run_timed(
         log, "Threads (Gemini)",
-        lambda: router.metin_uret(content,threads_promptunu_olustur(),THREADS_SCHEMA,log,arama_kullan=False),
+        lambda: router.metin_uret(content,threads_promptunu_olustur(ton),THREADS_SCHEMA,log,arama_kullan=False),
     )
     return _threads_state_normalize(result), model
+
+
+def _sosyal_ciktilari_paralel_uret(router, reels_state, fact_state, editorial_state, video_state, log, ton=None):
+    """Birbirine bağımlı olmayan Caption ve Threads isteklerini eşzamanlı üretir.
+
+    İki çıktı da aynı kilitli Fact Lock/Editorial girdisini kullanır; birbirinin
+    sonucunu tüketmediği için seri beklemek kalite sağlamıyor, yalnızca wall time
+    ekliyordu. Her kol kendi mevcut guard/fallback davranışını korur.
+    """
+    started = time.perf_counter()
+    log("⚡ Caption ve Threads bağımsız kolları paralel başlatılıyor.")
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="social-output") as executor:
+        caption_future = executor.submit(
+            _caption_calistir, router, reels_state, fact_state, editorial_state, video_state, log, ton
+        )
+        threads_future = executor.submit(
+            _threads_calistir, router, video_state, fact_state, editorial_state, log, ton
+        )
+        try:
+            caption_state, model_caption = caption_future.result()
+        except Exception as exc:
+            log(f"⚠️ Caption paralel kolu hata verdi: {str(exc)[:160]}")
+            caption_state, model_caption = {"reels_aciklamasi":"", "reels_hashtagleri":[]}, "hata"
+        try:
+            threads_state, model_threads = threads_future.result()
+        except Exception as exc:
+            log(f"⚠️ Threads paralel kolu hata verdi: {str(exc)[:160]}")
+            threads_state, model_threads = {"threads_aciklamasi":""}, "hata"
+    elapsed = time.perf_counter() - started
+    log(f"⚡ Caption + Threads paralel duvar süresi: {elapsed:.2f}s")
+    return (
+        _caption_state_normalize(caption_state), model_caption,
+        _threads_state_normalize(threads_state), model_threads,
+    )
 
 
 def _kelime_sayisi(metin):
@@ -512,11 +548,11 @@ def _ses_modu_sesi(mode):
     return {'SOLO_FEMALE':'Autonoe','SOLO_MALE':'Charon','DUO':'Autonoe + Charon'}.get(mode,mode or 'Bilinmiyor')
 
 
-def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None):
-    content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}')
+def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None,ton=None):
+    content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}',f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}')
     result, model = _run_timed(
         log, "Final QA (Gemini)",
-        lambda: router.metin_uret(content,qa_promptunu_olustur(),QA_SCHEMA,log,arama_kullan=False),
+        lambda: router.metin_uret(content,qa_promptunu_olustur(ton),QA_SCHEMA,log,arama_kullan=False),
     )
     result = _object_state_or_empty(result)
     if not result:
@@ -529,20 +565,13 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi=_reels_ve_ses_uyumlu_uret(
         router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=voice_initial_instruction
     )
-    try:
-        caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)
-    except Exception:
-        caption_state,model_caption={"reels_aciklamasi":"","reels_hashtagleri":[]},'hata'
-    caption_state = _caption_state_normalize(caption_state)
-    try:
-        threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)
-    except Exception:
-        threads_state,model_threads={"threads_aciklamasi":""},'hata'
-    threads_state = _threads_state_normalize(threads_state)
+    caption_state,model_caption,threads_state,model_threads=_sosyal_ciktilari_paralel_uret(
+        router,reels_state,fact_state,editorial_state,video_state,log,ton
+    )
 
     for qa_round in range(MAX_QA_REGEN+1):
         qa_rounds=qa_round
-        qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan,duo_script)
+        qa_state,_=_qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan,duo_script,ton)
         if not isinstance(qa_state, dict):
             qa_state = _object_state_or_empty(qa_state)
 
@@ -595,13 +624,13 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
 
         if downstream_caption:
             try:
-                caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log)
+                caption_state,model_caption=_caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log,ton)
             except Exception:
                 caption_state={"reels_aciklamasi":"","reels_hashtagleri":[]}
             caption_state = _caption_state_normalize(caption_state)
         if downstream_threads:
             try:
-                threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log)
+                threads_state,model_threads=_threads_calistir(router,video_state,fact_state,editorial_state,log,ton)
             except Exception:
                 threads_state={"threads_aciklamasi":""}
             threads_state = _threads_state_normalize(threads_state)
@@ -621,13 +650,14 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
             False, state
         )
 
-    state={}
+    state={'content_tone': str(icerik_tonu or 'dengeli').strip().lower()}
+    log_ekle(f"🎯 İçerik türü runtime kilidi aktif: {state['content_tone']}")
     _ilerleme(ilerlemeyi_guncelle,1); log_ekle('🎥 Video analiz ediliyor (Forensic)...')
     video_state,_=_forensic_analiz_calistir(router,video_bytes,mime_type,video_analiz_notlari,sure_saniye,log_ekle); state['video_state']=video_state
     _ilerleme(ilerlemeyi_guncelle,2); log_ekle('🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...')
     fact_state,_=_research_calistir(router,video_state,log_ekle); state['fact_state']=fact_state
     _ilerleme(ilerlemeyi_guncelle,3); log_ekle('🧠 Hikâye seçiliyor (Editorial Brain)...')
-    editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin_uretim_notlari,log_ekle); state['editorial_state']=editorial_state
+    editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin_uretim_notlari,log_ekle,icerik_tonu); state['editorial_state']=editorial_state
     _ilerleme(ilerlemeyi_guncelle,4); log_ekle('🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover + Duo)...')
     legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
@@ -716,12 +746,13 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     if sure_saniye is None:
         raise ValueError("Metin modu için geçerli bir sure_saniye gerekli (pozitif sayı).")
 
-    state={}
+    state={'content_tone': str(icerik_tonu or 'dengeli').strip().lower()}
+    log_ekle(f"🎯 İçerik türü runtime kilidi aktif: {state['content_tone']}")
     video_state={'video_identity':{'brand':'UNKNOWN','exact_model':'UNKNOWN','confidence':'unknown','source':'telegram_text'},'observed_facts':[metin],'unknowns':[],'possible_inference':[],'viral_arastirma_ihtiyaclari':['Metindeki araç/konu kimliğini ve güncel iddiaları doğrula.'],'visual_opportunities':['Metin tabanlı üretim; video görsel zaman çizelgesi yok.'],'timeline':[]}
     state['video_state']=video_state
     _ilerleme(ilerlemeyi_guncelle,1,'📝 Metin girdisi'); log_ekle('📝 Metin girdisi işleniyor (video analizi atlanıyor)...')
     _ilerleme(ilerlemeyi_guncelle,2,'🔎 Research / Fact Lock'); fact_state,_=_research_calistir(router,video_state,log_ekle); state['fact_state']=fact_state
-    _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain'); editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle); state['editorial_state']=editorial_state
+    _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain'); editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle,icerik_tonu); state['editorial_state']=editorial_state
     _ilerleme(ilerlemeyi_guncelle,4,'🎙️ Reels Creative'); legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
         router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle, production_notes=metin

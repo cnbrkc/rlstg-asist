@@ -1,5 +1,6 @@
 import time
 import re
+import threading
 from typing import List, Tuple, Any, Optional
 
 from google import genai
@@ -45,6 +46,7 @@ class SmartRouter:
         self.blacklist = {}
         self.clients = {}
         self.request_counter = 0
+        self._request_counter_lock = threading.Lock()
         for mail, api_key in self._ordered_api_items():
             if api_key and api_key.strip():
                 self.clients[mail] = genai.Client(
@@ -123,8 +125,12 @@ class SmartRouter:
         son_hata = None
         modeller = list(model_listesi or [])
         request_started = time.perf_counter()
-        self.request_counter = getattr(self, "request_counter", 0) + 1
-        request_id = self.request_counter
+        # Caption ve Threads bağımsız kolları eşzamanlı çalışabilir. Log request
+        # kimlikleri yarışıp aynı numarayı almasın diye yalnız bu küçük sayaç
+        # bölgesini kilitliyoruz; ağ çağrıları paralel kalmaya devam eder.
+        with self._request_counter_lock:
+            self.request_counter = getattr(self, "request_counter", 0) + 1
+            request_id = self.request_counter
         log_ekle(
             f"🌐 API REQUEST #{request_id} START | models={len(modeller)} | "
             f"keys={len(self._ordered_api_items())} | content={type(contents).__name__}"

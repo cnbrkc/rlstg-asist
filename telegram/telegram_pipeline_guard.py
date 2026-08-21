@@ -28,10 +28,10 @@ _original_threads = _pipeline._threads_calistir
 _original_reels_creative = _pipeline._reels_creative_calistir
 
 
-def _caption_guard(router, reels_state, fact_state, editorial_state, video_state, log):
+def _caption_guard(router, reels_state, fact_state, editorial_state, video_state, log, ton=None):
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _original_caption(router, reels_state, fact_state, editorial_state, video_state, log)
+            state, model = _original_caption(router, reels_state, fact_state, editorial_state, video_state, log, ton)
         except Exception as exc:
             log(f"⚠️ Caption üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"reels_aciklamasi": "", "reels_hashtagleri": []}, "hata"
@@ -47,10 +47,10 @@ def _caption_guard(router, reels_state, fact_state, editorial_state, video_state
     return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, "local-fallback"
 
 
-def _threads_guard(router, video_state, fact_state, editorial_state, log):
+def _threads_guard(router, video_state, fact_state, editorial_state, log, ton=None):
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _original_threads(router, video_state, fact_state, editorial_state, log)
+            state, model = _original_threads(router, video_state, fact_state, editorial_state, log, ton)
         except Exception as exc:
             log(f"⚠️ Threads üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"threads_aciklamasi": ""}, "hata"

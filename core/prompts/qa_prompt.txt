@@ -18,6 +18,7 @@ Aşağıdaki her kontrolü ayrı ayrı yap ve her biri için "PASS: ..." veya "F
 - hashtag_check: Tam 5 hashtag mi, yasaklı etiket var mı, dağılım kurallarına uygun mu?
 - threads_check: 500 karakter altında mı, soru cümlesi/hashtag var mı, tartışma başlatma potansiyeli var mı, caption'ın yeniden yazımı mı? 280 karakterin altındaysa veya yalnızca tek cümle/genel fallback metniyse FAIL. 3-5 cümlelik, konuya özgü, net görüş içeren Threads beklenir.
 - brand_check: otoXtra'nın samimi/halk ağzı tonu korunuyor mu?
+- tone_check: Editorial Brief, seslendirme, caption ve Threads runtime'da verilen SEÇİLEN İÇERİK TÜRÜNÜ gerçekten yansıtıyor mu? Özellikle eğlence/bilgi/teknik yoğunluğu seçimi varsayılan dengeli tona yuvarlanmışsa FAIL.
 - duo_check: Seçilen mod ile Duo script uyumlu mu? Speaker eşleşmeleri ve doğal konuşma korunuyor mu?
 
 SONUÇ:
@@ -29,6 +30,7 @@ SONUÇ:
   - COVER_FAIL → cover_check, visual_match_check
   - THREADS_FAIL → threads_check
   - FACT_FAIL → fact_check, model_check, video_check, current_data_check
+  - tone_check FAIL ise uyumsuz çıktıya göre hedef seç: seslendirme/ana hikâye için VOICEOVER_FAIL, caption için CAPTION_FAIL, Threads için THREADS_FAIL. Yalnız gerçekten uyumsuz olan kolları işaretle.
 
 Yalnızca gerçekten FAIL olan hedefleri listele. Hiçbir FAIL yoksa regeneration_targets boş array olsun.
 
