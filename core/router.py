@@ -340,14 +340,26 @@ class SmartRouter:
     def _tts_coklu_promptu_olustur(self, metin: str, speaker_names) -> str:
         names = ", ".join(speaker_names)
         return (
-            f"Perform the following Turkish automotive dialogue as a natural two-person conversation between {names}. "
-            "Use the configured voice for each named speaker and keep each speaker's identity stable. "
-            "This is an expressive conversational performance: vary intonation and energy with the meaning, use subtle "
-            "curiosity, confidence, surprise, amusement or seriousness when appropriate, and leave short natural pauses "
-            "between turns and at punctuation. Avoid a robotic, flat, studio-announcer delivery. Do not overact. "
-            "Keep every spoken word exactly as provided; add no words, omit no words, and do not read speaker labels aloud. "
-            "Preserve order and conversational timing.\n\n"
-            f"TRANSCRIPT:\n{metin}"
+            "# AUDIO PROFILE\n"
+            f"A real Turkish couple/partner conversation between {names} while watching an automotive clip together. "
+            "They know each other well: attentive, quick, relaxed and credible. Neither is a host, announcer, actor or singer.\n\n"
+            "# SCENE\n"
+            "The listener should feel they overheard one spontaneous, tightly edited exchange recorded in the same room. "
+            "There is no audience, stage, studio presentation, podcast intro, music rhythm or turn-taking ceremony.\n\n"
+            "# DIRECTOR'S NOTES\n"
+            "Style: Underplay it. Speak in contemporary conversational Turkish with grounded confidence and dry warmth. "
+            "React to the meaning of the previous line before advancing your own point. Do not sound polished in the same way. "
+            "Do not sing, chant, harmonize, trade symmetrical phrases, use a bouncing cadence, or perform this like a duet.\n"
+            "Turn-taking: Handoffs on rebuttals and short reactions should be immediate, as if the next speaker was already listening. "
+            "Use a pause only where thought or punctuation genuinely needs one. Never insert the same pause between every speaker. "
+            "Consecutive lines by one speaker should feel like that person briefly holding the floor, not restarting a performance.\n"
+            "Pacing: Fast, alert cold open in the first two turns; then natural variation. Short reactions stay short and dry; "
+            "evidence lines may breathe slightly; the reversal lands with a tiny thought beat; the callback ends with momentum, not an outro.\n"
+            "Dynamics: Keep emotional changes subtle and content-led. No alternating 'excited/serious/amazed' pattern, exaggerated gasps, "
+            "radio smile, theatrical projection or overacting. Distinct personalities, shared acoustic space.\n"
+            "Integrity: Keep every spoken word exactly as provided, in order. Add no fillers, laughter or sound effects; omit no words. "
+            "Do not read speaker labels or these directions aloud.\n\n"
+            f"# TRANSCRIPT BETWEEN {names}\n{metin}"
         )
 
     def _tts_response_audio_bytes(self, response):

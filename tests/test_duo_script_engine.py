@@ -4,7 +4,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
 
-from duo.duo_script_engine import build_duo_generation_contract, build_generation_prompt, validate_generated_duo
+from duo.duo_script_engine import (
+    build_duo_generation_contract,
+    build_generation_prompt,
+    duo_conversation_quality_issues,
+    validate_generated_duo,
+)
 
 
 class DuoScriptEngineTests(unittest.TestCase):
@@ -42,8 +47,45 @@ class DuoScriptEngineTests(unittest.TestCase):
         prompt = build_generation_prompt(contract, "editorial", "fact lock")
         self.assertIn("Sadece bu JSON'u döndür", prompt)
         self.assertIn("FACT LOCK", prompt)
-        self.assertIn("GERÇEK KARŞILIKLILIK", prompt)
-        self.assertIn("ÖLÇÜLÜ ÇEKİŞME", prompt)
+        self.assertIn("LEXICAL UPTAKE", prompt)
+        self.assertIn("HOOK → FRICTION → PROOF → REVERSAL → PAYOFF", prompt)
+        self.assertIn("şarkıcı düeti", prompt)
+        self.assertIn("reply_anchor", prompt)
+
+    def test_quality_check_accepts_asymmetric_reactive_conversation(self):
+        contract = build_duo_generation_contract({"mode": "DUO", "target_words": 70})
+        generated = {
+            "conversation_design": {
+                "central_tension": "global fiyat ile Türkiye gerçeği",
+                "hook_open_loop": "bu fiyat neden şaşırtıcı",
+                "reversal": "ucuzluğun Türkiye fiyatı olmadığı kabulü",
+                "payoff_callback": "fiyat avantajına geri dönüş",
+            },
+            "segments": [
+                {"speaker": "female", "reply_anchor": "OPENING", "text": "Bu fiyat doğruysa kapıyı falan boş ver."},
+                {"speaker": "male", "reply_anchor": "bu fiyat", "text": "Doğru, ama Türkiye etiketi değil."},
+                {"speaker": "male", "reply_anchor": "Türkiye etiketi", "text": "Kendi pazarında aynı sınıftaki rakiplerinden belirgin biçimde aşağıda başlıyor."},
+                {"speaker": "female", "reply_anchor": "rakiplerinden aşağıda", "text": "Tamam, o zaman mesele ucuz görünmesi değil; gerçekten aşağıda olması."},
+                {"speaker": "male", "reply_anchor": "gerçekten aşağıda", "text": "Aynen, Türkiye'ye aynı avantajla gelirse kapı detayı sonra konuşulur."},
+            ],
+        }
+        self.assertEqual([], duo_conversation_quality_issues(contract, generated))
+
+    def test_quality_check_flags_token_second_voice_and_duet_cadence(self):
+        contract = build_duo_generation_contract({"mode": "DUO", "target_words": 80})
+        generated = {
+            "segments": [
+                {"speaker": "female", "text": "Bir iki üç dört beş altı."},
+                {"speaker": "male", "text": "Evet."},
+                {"speaker": "female", "text": "Bir iki üç dört beş altı."},
+                {"speaker": "female", "text": "Bir iki üç dört beş altı."},
+            ]
+        }
+        issues = duo_conversation_quality_issues(contract, generated)
+        self.assertIn("speaker_is_only_token_presence", issues)
+        self.assertTrue(any(x.startswith("weak_turn_exchange") for x in issues))
+        self.assertIn("insufficient_lexical_uptake", issues)
+        self.assertTrue(any(x.startswith("missing_design") for x in issues))
 
     def test_invalid_generated_speaker_is_rejected(self):
         contract = build_duo_generation_contract({"mode": "DUO"})

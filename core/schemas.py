@@ -103,9 +103,32 @@ REELS_CREATIVE_SCHEMA = {
 DUO_SCRIPT_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "segments": {"type": "ARRAY", "description": "Sıralı konuşma blokları. Yalnızca sözleşmede izin verilen speaker kullanılabilir.", "items": {"type": "OBJECT", "properties": {"speaker": {"type": "STRING", "description": "female veya male"}, "text": {"type": "STRING"}}, "required": ["speaker", "text"]}},
+        "conversation_design": {
+            "type": "OBJECT",
+            "properties": {
+                "central_tension": {"type": "STRING"},
+                "hook_open_loop": {"type": "STRING"},
+                "reversal": {"type": "STRING"},
+                "payoff_callback": {"type": "STRING"}
+            },
+            "required": ["central_tension", "hook_open_loop", "reversal", "payoff_callback"]
+        },
+        "segments": {
+            "type": "ARRAY",
+            "description": "Sıralı konuşma blokları. Yalnızca sözleşmede izin verilen speaker kullanılabilir.",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "speaker": {"type": "STRING", "description": "female veya male"},
+                    "purpose": {"type": "STRING", "description": "hook / rebuttal / fact / counterpoint / concession / backchannel / callback / closing"},
+                    "reply_anchor": {"type": "STRING", "description": "İlk turda OPENING; diğerlerinde önceki replikten yakalanan kısa somut ifade."},
+                    "text": {"type": "STRING"}
+                },
+                "required": ["speaker", "purpose", "reply_anchor", "text"]
+            }
+        },
     },
-    "required": ["segments"],
+    "required": ["conversation_design", "segments"],
 }
 
 CAPTION_SCHEMA = {"type": "OBJECT", "properties": {"reels_aciklamasi": {"type": "STRING"}, "reels_hashtagleri": {"type": "ARRAY", "items": {"type": "STRING"}}}, "required": ["reels_aciklamasi", "reels_hashtagleri"]}

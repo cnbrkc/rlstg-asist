@@ -76,7 +76,9 @@ TENSION / ATIŞMA / MUHABBET: DUO bir düet, iki ayrı monolog veya sırayla oku
 
 Her DUO scriptinde aynı soru-cevap kalıbını kullanma. Bazen biri iddia ortaya atsın diğeri itiraz etsin; bazen biri pratik bir açık yakalasın; bazen kısa bir kabulden sonra asıl karşı argüman gelsin. En az bir anlamlı doğrudan tepki veya karşı görüş olsun, fakat sırf atışma çıksın diye yapay replik ekleme. Diyalog BİLGİDEN ve gerçek tercih çatışmasından doğmalıdır.
 
-Önce cümleleri yazmadan KONUSMA HARİTASI çıkar. Haritada her segment için konuşmacı + amaç + işlenecek detay + duygu belirt. Amaçlar hook, fact, reaction, challenge, explanation, counterpoint, transition, punchline veya closing olabilir. Harita kısa, işlevsel ve içerikten türemiş olmalıdır.
+Önce cümleleri yazmadan KONUSMA HARİTASI çıkar. Haritada her segment için konuşmacı + amaç + işlenecek detay + duygu belirt. Amaçlar hook, fact, reaction, challenge, rebuttal, explanation, counterpoint, concession, backchannel, transition, punchline, callback veya closing olabilir. Harita kısa, işlevsel ve içerikten türemiş olmalıdır.
+
+DUO haritası kısa video için `HOOK → FRICTION → PROOF → REVERSAL → PAYOFF/CALLBACK` omurgasını taşısın. Bu mekanik beş eşit replik demek değildir: biri kısa itiraz ederken diğeri kanıtı açabilir; aynı karakter gerektiğinde art arda iki tur tutabilir. İlk iki tur mümkünse farklı speaker olsun ve ikinci tur ilk iddianın belirli kelimesini/noktasını yakalasın. Ortada en az bir fikir değişimi, hak verme veya “evet ama asıl mesele...” dönüşü bulunsun. Kapanış açılıştaki merakın cevabını veya zekice callback'ini versin; klasik CTA ve vedayla enerjiyi düşürme.
 
 Solo modda haritada yalnızca seçilen karakter bulunur. Duo modda yalnızca gerçekten değer katan konuşma dönüşleri bulunur; gereksiz ping-pong YASAK.
 

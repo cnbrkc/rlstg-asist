@@ -84,10 +84,15 @@ Tek üretim yolu `telegram-video-optimized.yml` dosyasıdır. Böylece farklı g
 
 6. DUO Script
    plan + Fact Lock → DUO_SCRIPT_SCHEMA
-   speaker değerleri ve aşırı kelime sapmaları doğrulanır
+   hook → friction → proof → reversal → payoff/callback konuşma omurgası
+   conversation_design + her turda purpose/reply_anchor
+   speaker, kelime, turn exchange, konuşmacı katkısı, asimetrik ritim ve lexical uptake doğrulanır
+   kalite işaretlenirse TTS'den önce yalnız script için en fazla 1 kontrollü yenileme
 
 7. TTS
    DUO: tek Gemini çağrısı, Autonoe + Charon
+   sabit döngülü duygu tag'i ve her turda aynı short-pause kullanılmaz
+   sahne düzeyi Audio Profile + Scene + Director's Notes doğal performansı yönetir
    SOLO: kullanıcı override'ı veya AI editoryal kararıyla tek prebuilt voice
 
 8. Caption + Threads
@@ -156,7 +161,7 @@ DUO üretiminde:
 | `FACT_LOCK_SCHEMA` | `facts`, `turkiye_satis_durumu`, `turkiye_ilgi_sinyalleri` |
 | `EDITORIAL_SCHEMA` | `story_options`, `selected_story_index`, `core_story`, `selected_story_category`, `selection_rationale`, `primary_facts`, `audience_trigger`, `tone` |
 | `REELS_CREATIVE_SCHEMA` | `turkiye_ilgi_kancasi`, `ana_hikaye_sadakat_kontrolu`, `hook_families`, `secilen_aile_index`, `kapak_basliklari`, `seslendirme_metni`, `anlatim_modu`, `duo_stratejisi`, `konusma_haritasi` |
-| `DUO_SCRIPT_SCHEMA` | `segments[].speaker`, `segments[].text` |
+| `DUO_SCRIPT_SCHEMA` | `conversation_design` (`central_tension`, `hook_open_loop`, `reversal`, `payoff_callback`), `segments[].speaker`, `purpose`, `reply_anchor`, `text` |
 | `CAPTION_SCHEMA` | `reels_aciklamasi`, `reels_hashtagleri` |
 | `THREADS_SCHEMA` | `threads_aciklamasi` |
 | `QA_SCHEMA` | `tone_check`, `viral_priority_check`, `overall`, `regeneration_targets` |

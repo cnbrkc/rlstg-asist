@@ -1,10 +1,10 @@
 """Duo multi-speaker TTS layer.
 
 A DUO conversation is generated in one Gemini multi-speaker TTS request, with
-Autonoe + Charon configured together. The transcript receives a small amount
-of Gemini-native performance direction (English audio tags) so the voices have
-natural emotional variation and turn-taking pauses without changing spoken
-words or the content/word-count contract.
+Autonoe + Charon configured together. The transcript deliberately stays clean: performance is directed at scene level
+instead of forcing a rotating emotion tag and identical pause onto every turn.
+This leaves Gemini room for content-aware prosody and avoids a staged duet
+cadence while preserving the exact approved spoken words.
 """
 from typing import List, Dict, Any
 
@@ -12,18 +12,9 @@ from core.character_profiles import voice_for_character
 from core.config import SES_HIZ_CARPANI
 
 
-_FEMALE_TAGS = ("[curious]", "[amazed]", "[amused]", "[serious]")
-_MALE_TAGS = ("[confident]", "[excitedly]", "[serious]", "[amused]")
-
-
-def _performance_tag(speaker: str, turn_index: int) -> str:
-    tags = _FEMALE_TAGS if speaker == "female" else _MALE_TAGS
-    return tags[turn_index % len(tags)]
-
-
 def _duo_transcript(segments: List[Dict[str, Any]]) -> str:
+    """Build speaker-labelled clean text; scene-level prompt owns performance."""
     lines = []
-    turn_index = {"female": 0, "male": 0}
     for segment in segments or []:
         if not isinstance(segment, dict):
             continue
@@ -33,10 +24,7 @@ def _duo_transcript(segments: List[Dict[str, Any]]) -> str:
             continue
         voice = voice_for_character(speaker)
         speaker_name = "Autonoe" if voice == "Autonoe" else "Charon"
-        tag = _performance_tag(speaker, turn_index[speaker])
-        pause = "[short pause] " if lines else ""
-        lines.append(f"{speaker_name}: {pause}{tag} {text}")
-        turn_index[speaker] += 1
+        lines.append(f"{speaker_name}: {text}")
     return "\n".join(lines)
 
 
@@ -70,7 +58,7 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     if not transcript:
         return False, None
 
-    log_ekle(f"🎙️ DUO TTS tek çağrı: Autonoe + Charon | {len(valid)} segment | expressive tags + kısa duraklar")
+    log_ekle(f"🎙️ DUO TTS tek çağrı: Autonoe + Charon | {len(valid)} segment | doğal sahne yönetimi + etiketsiz akış")
     ok, info = router.coklu_ses_uret(
         transcript,
         speakers_present,

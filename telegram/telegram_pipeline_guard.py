@@ -130,11 +130,17 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
         if not segments:
             log("⚠️ LLM tabanlı diyalog üretilemedi, kural tabanlı split_for_speakers fallback olarak devreye alınıyor...")
             segments = _split_for_speakers(reels_state.get("seslendirme_metni", ""), conversation_map)
+            fallback_contract = duo_script.get("contract") or {**duo_plan, "mode": mode}
+            fallback_generated = {"segments": segments}
             duo_script = {
-                "contract": {"mode": mode},
+                "contract": fallback_contract,
+                "conversation_design": {},
                 "segments": segments,
                 "model": "local-fallback-split",
                 "status": "ready" if segments else "fallback",
+                "conversation_quality_issues": _pipeline.duo_conversation_quality_issues(
+                    fallback_contract, fallback_generated
+                ) if segments else ["empty_fallback"],
             }
 
     ses_path = gecici_ses_yolu()

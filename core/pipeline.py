@@ -24,7 +24,12 @@ from core.media import (
     video_suresini_al,
 )
 from duo.duo_strategy import normalize_duo_strategy
-from duo.duo_script_engine import build_duo_generation_contract, build_generation_prompt, validate_generated_duo
+from duo.duo_script_engine import (
+    build_duo_generation_contract,
+    build_generation_prompt,
+    duo_conversation_quality_issues,
+    validate_generated_duo,
+)
 from duo.duo_audio import duo_ses_uret
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
@@ -438,19 +443,67 @@ def _duo_script_calistir(router, duo_plan, editorial_state, fact_state, video_st
     editorial = durumu_metne_donustur('EDITORIAL', editorial_state)
     facts = durumu_metne_donustur('FACT LOCK', fact_state)
     video = durumu_metne_donustur('VIDEO', video_state)
-    prompt = build_generation_prompt(contract, editorial_context=girdi_birlestir(editorial, video), fact_lock=facts, regeneration_instruction=regeneration_instruction)
-    try:
-        generated, model = _run_timed(
-            log, "DUO diyalog senaryosu (Gemini)",
-            lambda: router.metin_uret(girdi_birlestir(editorial, video, facts), prompt, DUO_SCRIPT_SCHEMA, log, arama_kullan=False),
+    context = girdi_birlestir(editorial, video, facts)
+    instruction = regeneration_instruction or ""
+    max_attempts = 2 if contract.get("mode") == "DUO" else 1
+    valid_candidates = []
+    last_error = ""
+
+    for attempt in range(max_attempts):
+        prompt = build_generation_prompt(
+            contract,
+            editorial_context=girdi_birlestir(editorial, video),
+            fact_lock=facts,
+            regeneration_instruction=instruction,
         )
-        segments = validate_generated_duo(contract, generated)
-        if not segments:
-            raise ValueError('Duo script doğrulama sonrası boş kaldı.')
-        return {"contract": contract, "segments": segments, "model": model, "status": "ready"}
-    except Exception as exc:
-        log(f'⚠️ Konuşma scripti üretimi başarısız; mod sözleşmesine uygun yeniden üretim gerekecek: {str(exc)[:180]}')
-        return {"contract": contract, "segments": [], "model": "hata", "status": "fallback", "error": str(exc)[:180]}
+        label = "DUO diyalog senaryosu (Gemini)" if attempt == 0 else "DUO doğal muhabbet kalite yenilemesi (Gemini)"
+        try:
+            generated, model = _run_timed(
+                log, label,
+                lambda: router.metin_uret(context, prompt, DUO_SCRIPT_SCHEMA, log, arama_kullan=False),
+            )
+            segments = validate_generated_duo(contract, generated)
+            if not segments:
+                raise ValueError('Duo script doğrulama sonrası boş kaldı.')
+            issues = duo_conversation_quality_issues(contract, generated)
+            design = generated.get("conversation_design", {}) if isinstance(generated, dict) else {}
+            candidate = {
+                "contract": contract,
+                "conversation_design": design,
+                "segments": segments,
+                "model": model,
+                "status": "ready",
+                "conversation_quality_issues": issues,
+            }
+            valid_candidates.append(candidate)
+            if not issues:
+                log("✅ DUO doğal muhabbet denetimi geçti: karşılık, ritim, dönüş ve payoff hazır.")
+                return candidate
+            if attempt + 1 < max_attempts:
+                log(f"⚠️ DUO muhabbet yapısı zayıf ({', '.join(issues)}); yalnız script için tek kalite yenilemesi başlatılıyor.")
+                instruction = (
+                    "Önceki script yapısal olarak geçerliydi fakat doğal kısa-video sohbeti denetiminde şu sorunları verdi: "
+                    + ", ".join(issues)
+                    + ". Gerçek lexical uptake, asimetrik replik uzunluğu, ilk iki turda doğrudan karşılık, "
+                      "anlamlı fikir dönüşü ve hook'a payoff üret; olguları değiştirme."
+                )
+        except Exception as exc:
+            last_error = str(exc)[:180]
+            if attempt + 1 < max_attempts:
+                log(f"⚠️ DUO script denemesi doğrulanamadı; tek kontrollü yenileme yapılacak: {last_error}")
+                instruction = "Önceki çıktı doğrulanamadı. Şemaya tam uy, iki speakerı da gerçek karşılıklı muhabbet içinde kullan."
+                continue
+
+    if valid_candidates:
+        best = min(valid_candidates, key=lambda item: len(item.get("conversation_quality_issues") or []))
+        log(
+            "⚠️ DUO kalite yenilemesi tüm işaretleri temizleyemedi; mekanik split fallback yerine en iyi geçerli doğal script korunuyor: "
+            + ", ".join(best.get("conversation_quality_issues") or [])
+        )
+        return best
+
+    log(f'⚠️ Konuşma scripti üretimi başarısız; mod sözleşmesine uygun yeniden üretim gerekecek: {last_error or "bilinmeyen hata"}')
+    return {"contract": contract, "segments": [], "model": "hata", "status": "fallback", "error": last_error}
 
 
 def _mod_icin_legacy_ses(mode, default_voice='Autonoe'):

@@ -10,8 +10,9 @@ from typing import Any, Dict, List
 _ALLOWED_MODES = {"SOLO_FEMALE", "SOLO_MALE", "DUO"}
 _ALLOWED_SPEAKERS = {"female", "male"}
 _ALLOWED_PURPOSES = {
-    "hook", "fact", "reaction", "challenge", "explanation", "counterpoint",
-    "transition", "punchline", "closing",
+    "hook", "fact", "reaction", "challenge", "rebuttal", "explanation",
+    "counterpoint", "concession", "backchannel", "transition", "punchline",
+    "callback", "closing",
 }
 
 
@@ -26,10 +27,12 @@ def _mode(strategy: Dict[str, Any]) -> str:
 def _duo_scaffold() -> List[Dict[str, Any]]:
     """Return a neutral two-speaker scaffold when the creative map is unusable."""
     return [
-        {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü hikâye açısı", "duygu": "curious"},
-        {"sira": 2, "speaker": "male", "amac": "fact", "detay": "en güçlü doğrulanmış detay", "duygu": "confident"},
-        {"sira": 3, "speaker": "female", "amac": "reaction", "detay": "gerçek kullanım açısından doğal tepki", "duygu": "amused"},
-        {"sira": 4, "speaker": "male", "amac": "closing", "detay": "ana çıkarım", "duygu": "serious"},
+        {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü Türkiye ilgi kancasıyla net iddia", "duygu": "natural"},
+        {"sira": 2, "speaker": "male", "amac": "rebuttal", "detay": "ilk iddianın belirli noktasına kısa karşılık", "duygu": "natural"},
+        {"sira": 3, "speaker": "male", "amac": "fact", "detay": "karşılığı destekleyen en güçlü doğrulanmış kanıt", "duygu": "natural"},
+        {"sira": 4, "speaker": "female", "amac": "counterpoint", "detay": "kanıtın Türkiye'deki gerçek kullanım karşılığı", "duygu": "natural"},
+        {"sira": 5, "speaker": "male", "amac": "concession", "detay": "hak verme ve asıl sürprize dönüş", "duygu": "natural"},
+        {"sira": 6, "speaker": "female", "amac": "callback", "detay": "açılışa dönen net payoff", "duygu": "natural"},
     ]
 
 
@@ -109,5 +112,12 @@ def validate_script_segments(segments: Any, mode: str = "DUO") -> List[Dict[str,
         text = str(item.get("text", "")).strip()
         if speaker not in allowed or not text:
             continue
-        result.append({"speaker": speaker, "text": text})
+        normalized = {"speaker": speaker, "text": text}
+        purpose = str(item.get("purpose") or "").strip().lower()
+        reply_anchor = str(item.get("reply_anchor") or "").strip()
+        if purpose:
+            normalized["purpose"] = purpose
+        if reply_anchor:
+            normalized["reply_anchor"] = reply_anchor
+        result.append(normalized)
     return result

@@ -8,8 +8,9 @@ korunur; geçersiz karar güvenli biçimde DUO'ya düşer.
 VALID_MODES = {"SOLO_FEMALE", "SOLO_MALE", "DUO"}
 VALID_SPEAKERS = {"female", "male", "none"}
 VALID_PURPOSES = {
-    "hook", "fact", "reaction", "challenge", "explanation",
-    "counterpoint", "transition", "punchline", "closing",
+    "hook", "fact", "reaction", "challenge", "rebuttal", "explanation",
+    "counterpoint", "concession", "backchannel", "transition", "punchline",
+    "callback", "closing",
 }
 
 
@@ -22,10 +23,12 @@ def _clamp(value, default=0.0):
 
 def _duo_scaffold():
     return [
-        {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü hikâye açısı", "duygu": "curious"},
-        {"sira": 2, "speaker": "male", "amac": "fact", "detay": "en güçlü doğrulanmış detay", "duygu": "confident"},
-        {"sira": 3, "speaker": "female", "amac": "reaction", "detay": "gerçek kullanım açısından doğal tepki", "duygu": "amused"},
-        {"sira": 4, "speaker": "male", "amac": "closing", "detay": "ana çıkarım", "duygu": "serious"},
+        {"sira": 1, "speaker": "female", "amac": "hook", "detay": "en güçlü Türkiye ilgi kancasıyla net iddia", "duygu": "natural"},
+        {"sira": 2, "speaker": "male", "amac": "rebuttal", "detay": "ilk iddianın belirli noktasına kısa karşılık", "duygu": "natural"},
+        {"sira": 3, "speaker": "male", "amac": "fact", "detay": "karşılığı destekleyen en güçlü doğrulanmış kanıt", "duygu": "natural"},
+        {"sira": 4, "speaker": "female", "amac": "counterpoint", "detay": "kanıtın Türkiye'deki gerçek kullanım karşılığı", "duygu": "natural"},
+        {"sira": 5, "speaker": "male", "amac": "concession", "detay": "hak verme ve asıl sürprize dönüş", "duygu": "natural"},
+        {"sira": 6, "speaker": "female", "amac": "callback", "detay": "açılışa dönen net payoff", "duygu": "natural"},
     ]
 
 

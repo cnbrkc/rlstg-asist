@@ -20,7 +20,7 @@ Aşağıdaki her kontrolü ayrı ayrı yap ve her biri için "PASS: ..." veya "F
 - brand_check: otoXtra'nın samimi/halk ağzı tonu korunuyor mu?
 - tone_check: Editorial Brief, seslendirme, caption ve Threads runtime'da verilen SEÇİLEN İÇERİK TÜRÜNÜ gerçekten yansıtıyor mu? Özellikle eğlence/bilgi/teknik yoğunluğu seçimi varsayılan dengeli tona yuvarlanmışsa FAIL.
 - viral_priority_check: Fact Lock'taki `turkiye_ilgi_sinyalleri` ve Editorial `story_options` puanlarına göre Türkiye kitlesi için en güçlü doğrulanmış açı final hook + seslendirmede gerçekten merkezde mi? Güçlü fiyat/değer, erişilebilirlik, kullanım maliyeti veya sıra dışı teknik fark varken içerik gerekçesiz biçimde kapı/far/ekran gibi zayıf mikro detaya sapmışsa FAIL. En güçlü aday seçilmediyse `selection_rationale` somut ve ikna edici olmalı. Türkiye'de satılmayan araçta global fiyatın Türkiye fiyatı gibi sunulması da FAIL.
-- duo_check: Seçilen mod ile Duo script uyumlu mu? Speaker eşleşmeleri ve doğal konuşma korunuyor mu?
+- duo_check: Seçilen mod ile Duo script uyumlu mu? İki speaker gerçekten birbirinin belirli sözüne karşılık veriyor mu; hook→friction→proof→reversal→payoff akışı, asimetrik replik ritmi, anlamlı fikir dönüşü ve callback var mı? İki bağımsız monolog, token ikinci ses, röportaj soru-cevabı, eşit uzunlukta mekanik kadın-erkek salınımı veya şarkıcı düeti hissi varsa FAIL.
 
 SONUÇ:
 - overall: Yukarıdaki kontrollerden herhangi biri FAIL ise "FAIL", hepsi PASS ise "PASS".
