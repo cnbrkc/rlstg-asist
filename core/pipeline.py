@@ -235,12 +235,62 @@ def _research_calistir(router, video_state, log):
     )
 
 
+def _editorial_oncelik_denetimi(editorial_state, log):
+    """Modelin puanladığı adaylarla seçimi karşılaştırıp sonraki katmanları uyarır.
+
+    Yaratıcı kararı yerelde körlemesine değiştirmez; olası öncelik sapmasını
+    görünür ve Reels/QA tarafından okunabilir hale getirir.
+    """
+    state = _object_state_or_empty(editorial_state)
+    options = state.get("story_options") if isinstance(state.get("story_options"), list) else []
+    scored = []
+    for index, option in enumerate(options):
+        if not isinstance(option, dict):
+            continue
+        try:
+            score = float(option.get("toplam_oncelik"))
+        except (TypeError, ValueError):
+            continue
+        scored.append((score, index, option))
+    if not scored:
+        state["_runtime_priority_audit"] = {"status": "no_scored_options"}
+        log("⚠️ Editorial öncelik denetimi: puanlanmış hikâye adayı bulunamadı.")
+        return state
+
+    top_score, top_index, top_option = max(scored, key=lambda item: item[0])
+    try:
+        selected_index = int(state.get("selected_story_index"))
+    except (TypeError, ValueError):
+        selected_index = -1
+    selected_score = next((score for score, index, _ in scored if index == selected_index), None)
+    gap = top_score - selected_score if selected_score is not None else top_score
+    mismatch = selected_index != top_index
+    state["_runtime_priority_audit"] = {
+        "status": "review" if mismatch else "aligned",
+        "top_index": top_index,
+        "top_name": str(top_option.get("isim") or ""),
+        "top_category": str(top_option.get("kategori") or ""),
+        "top_score": top_score,
+        "selected_index": selected_index,
+        "score_gap": round(gap, 2),
+    }
+    if mismatch:
+        log(
+            f"⚠️ Editorial öncelik sapması: seçilen index={selected_index}, en yüksek index={top_index} "
+            f"({top_option.get('kategori') or 'kategori yok'}, fark={gap:.2f}). Reels ve QA ikinci denetimi uygulayacak."
+        )
+    else:
+        log(f"✅ Editorial Türkiye ilgi önceliği doğrulandı: {top_option.get('kategori') or 'kategori yok'} | {top_score:.1f}/10")
+    return state
+
+
 def _editorial_calistir(router, video_state, fact_state, notes, log, ton=None):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE',video_state),durumu_metne_donustur('FACT LOCK',fact_state),notes or '')
-    return _run_timed(
+    result, model = _run_timed(
         log, "Editorial Brain (Gemini)",
         lambda: router.metin_uret(content,editorial_promptunu_olustur(ton),EDITORIAL_SCHEMA,log,arama_kullan=False),
     )
+    return _editorial_oncelik_denetimi(result, log), model
 
 
 def _reels_creative_calistir(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, log, kelime_hizi_orani=None, ek_talimat=""):

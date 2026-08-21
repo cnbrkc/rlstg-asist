@@ -1,4 +1,7 @@
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 _PROMPT_DIR=os.path.join(os.path.dirname(__file__),"prompts")
 
 # Kullanıcının video analiz notu pipeline boyunca AUTHORITATIVE FACT olarak korunur.
@@ -34,7 +37,10 @@ def forensic_analiz_promptunu_olustur(ek_notlar="",sure_saniye=0):
     return template.replace("{ek_notlar_bolumu}", _otorite_talimati()).replace("{sure_saniye}", str(sure_saniye))
 
 
-def research_promptunu_olustur(): return _oku("research_prompt.txt")+"\n"+_oku("guncellik_talimati.txt")+_otorite_talimati()
+def research_promptunu_olustur():
+    bugun = datetime.now(ZoneInfo("Europe/Istanbul")).date().isoformat()
+    guncellik = _oku("guncellik_talimati.txt").replace("{bugunun_tarihi}", bugun)
+    return _oku("research_prompt.txt") + "\n" + guncellik + _otorite_talimati()
 
 
 _TON_PROFILLERI = {

@@ -131,9 +131,15 @@ def _final_report(step_status, warnings, errors, result, tone_key):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/9 {name}")
     input_media = result.get("input_media") or {}
     output_media = result.get("output_media") or {}
+    editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
+    reels = (result.get("pipeline_state") or {}).get("reels_state", {}) if isinstance(result.get("pipeline_state"), dict) else {}
+    priority_audit = editorial.get("_runtime_priority_audit") if isinstance(editorial.get("_runtime_priority_audit"), dict) else {}
     lines += [
         "",
         f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}",
+        f"🔥 Ana hikâye kategorisi: {editorial.get('selected_story_category') or 'Bilinmiyor'}",
+        f"🧭 İlgi önceliği: {priority_audit.get('status') or 'Bilinmiyor'}",
+        f"🇹🇷 Türkiye ilgi kancası: {str(reels.get('turkiye_ilgi_kancasi') or 'Bilinmiyor')[:180]}",
         f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
         f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
         "⚡ TTS hız: 1.20x",
@@ -348,7 +354,7 @@ def process(path):
     _timed_action(log, "Telegram başlık seçenekleri", lambda: send_message(_format_title_options(result.get("kapak_basliklari") or [])))
     if threads:
         _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
-    Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "selected_story_category": (result.get("editorial_brief") or {}).get("selected_story_category"), "priority_audit": (result.get("editorial_brief") or {}).get("_runtime_priority_audit"), "turkiye_ilgi_kancasi": ((result.get("pipeline_state") or {}).get("reels_state") or {}).get("turkiye_ilgi_kancasi"), "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
     log.finish_timing("SUCCESS")
 
 
@@ -376,7 +382,7 @@ def process_text(text):
     _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
     if threads:
         _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
-    Path("pipeline_result.json").write_text(json.dumps({"source": "text", "content_tone": tone_key, "caption": caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path("pipeline_result.json").write_text(json.dumps({"source": "text", "content_tone": tone_key, "selected_story_category": (result.get("editorial_brief") or {}).get("selected_story_category"), "priority_audit": (result.get("editorial_brief") or {}).get("_runtime_priority_audit"), "turkiye_ilgi_kancasi": ((result.get("pipeline_state") or {}).get("reels_state") or {}).get("turkiye_ilgi_kancasi"), "caption": caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
     log.finish_timing("SUCCESS")
 
 

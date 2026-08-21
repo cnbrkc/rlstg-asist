@@ -64,11 +64,15 @@ Tek üretim yolu `telegram-video-optimized.yml` dosyasıdır. Böylece farklı g
 
 2. Research / Fact Lock
    video_state → Search destekli model
+   model biliniyorsa Türkiye satış durumu + global fiyat/değer + ekonomik/pratik/teknik ilgi taraması
+   doğrulanmış adaylar → turkiye_ilgi_sinyalleri (0-10 önem puanı + güvenli anlatım)
    Search başarısızsa structured-output denemesi
    tüm model rotaları başarısızsa yalnızca OBSERVED verilerle güvenli fallback
 
 3. Editorial Brain
    video_state + fact_lock + kullanıcı notu + runtime içerik türü kilidi → EDITORIAL_SCHEMA
+   en az 3 hikâye adayı; kanıt, Türkiye ilgisi, ekonomik/pratik etki, şaşırtıcılık ve görsel destek puanlanır
+   runtime seçilen index'i en yüksek puanlı adayla ayrıca karşılaştırır
 
 4. Reels Creative
    editorial + fact_lock + video + runtime süre/içerik türü kilidi → REELS_CREATIVE_SCHEMA
@@ -149,15 +153,17 @@ DUO üretiminde:
 | Şema | Ana zorunlu alanlar |
 |---|---|
 | `VIDEO_ANALYSIS_SCHEMA` | `video_identity`, `kapak_ani_saniye`, `timeline`, `observed_facts`, `unknowns`, `possible_inference`, `visual_opportunities` |
-| `FACT_LOCK_SCHEMA` | `facts`, `turkiye_satis_durumu` |
-| `EDITORIAL_SCHEMA` | `core_story`, `why_it_matters`, `primary_facts`, `audience_trigger`, `tone` |
-| `REELS_CREATIVE_SCHEMA` | `hook_families`, `secilen_aile_index`, `kapak_basliklari`, `seslendirme_metni`, `anlatim_modu`, `duo_stratejisi`, `konusma_haritasi` |
+| `FACT_LOCK_SCHEMA` | `facts`, `turkiye_satis_durumu`, `turkiye_ilgi_sinyalleri` |
+| `EDITORIAL_SCHEMA` | `story_options`, `selected_story_index`, `core_story`, `selected_story_category`, `selection_rationale`, `primary_facts`, `audience_trigger`, `tone` |
+| `REELS_CREATIVE_SCHEMA` | `turkiye_ilgi_kancasi`, `ana_hikaye_sadakat_kontrolu`, `hook_families`, `secilen_aile_index`, `kapak_basliklari`, `seslendirme_metni`, `anlatim_modu`, `duo_stratejisi`, `konusma_haritasi` |
 | `DUO_SCRIPT_SCHEMA` | `segments[].speaker`, `segments[].text` |
 | `CAPTION_SCHEMA` | `reels_aciklamasi`, `reels_hashtagleri` |
 | `THREADS_SCHEMA` | `threads_aciklamasi` |
-| `QA_SCHEMA` | `tone_check`, `overall`, `regeneration_targets` |
+| `QA_SCHEMA` | `tone_check`, `viral_priority_check`, `overall`, `regeneration_targets` |
 
 Seçilen içerik türü (`eglence`, `dengeli`, `bilgi`, `teknik`) Telegram'dan pipeline'a taşınır ve yalnız Reels metninde değil Editorial Brain, Reels Creative, Caption, Threads ve Final QA katmanlarının tamamında aynı runtime sözleşmesi olarak kilitlenir. Pipeline sonucu ve logu uygulanan türü ayrıca kaydeder.
+
+Türkiye ilgi önceliği “her zaman fiyat” şeklinde kör bir kural değildir. Doğrulanmış fiyat/değer ve erişilebilirlik sıra dışıysa güçlü biçimde öne çıkar; değilse kullanım maliyeti/vergi, ürün kalitesi, teknoloji, performans, pratiklik ve son olarak mikro tasarım detayları kanıt + Türkiye ilgisi + şaşırtıcılık üzerinden karşılaştırılır. Türkiye'de satılmayan modelin global fiyatı kullanılabilir, fakat pazar/para birimi ve Türkiye satışının bulunmadığı açıkça korunur; kesin Türkiye fiyatı türetilmez.
 
 `anlatim_modu` ve `duo_stratejisi.uygunluk` değerleri `DUO`, `SOLO_FEMALE`, `SOLO_MALE` enum'larıyla sınırlandırılmıştır. Runtime kullanıcı override'ı model kararından üstündür; override yoksa doğrulanmış model kararı korunur.
 

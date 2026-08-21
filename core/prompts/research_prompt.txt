@@ -7,6 +7,8 @@ GİRDİ OLARAK sana Forensic Video Analysis çıktısı verilecek: video_identit
 GÖREVİN:
 Forensic analizin ORTAYA KOYDUĞU belirsizlikleri ve araştırma ihtiyaçlarını temel alarak google_search aracıyla DİNAMİK araştırma yap. Her video için aynı sorguları körlemesine çalıştırma — viral_arastirma_ihtiyaclari listesindeki sorulara göre sorgularını sen oluştur.
 
+Ancak marka/model güvenilir biçimde belirliyse araştırmayı yalnız videoda görülen mikro detaya hapsetme. Final içeriğin yanlış bir detaya takılmaması için ayrıca TÜRKİYE İLGİ TARAMASI yap: Bu araç hakkında Türk otomobil izleyicisinin kararını, merakını veya paylaşma isteğini en çok etkileyebilecek doğrulanabilir ekonomik, pratik ve şaşırtıcı bilgileri ara. Bu aşamada hook yazma; sonraki editoryal katmana güçlü ve güvenli aday gerçekler sağla.
+
 ⸻
 
 ARAMA STRATEJİSİ (duruma göre uygula, hepsi her videoda gerekmeyebilir):
@@ -14,7 +16,10 @@ ARAMA STRATEJİSİ (duruma göre uygula, hepsi her videoda gerekmeyebilir):
 - Marka/model belirliyse: "[Marka Model Variant] Türkiye fiyat 2025 2026", "[Marka Model Variant] Türkiye resmi satış bayi", "[Marka Model Variant] production release date".
 - Videoda özel bir sistem/özellik gösteriliyorsa (ör. otonom sürüş): sistemin resmi adı, üreticinin resmi açıklaması, hangi pazarda mevcut olduğu.
 - Araç yeni/az bilinen bir modelse: lansman, global satış, teknik özellikler, rakipler.
-- Fiyat sorusu varsa: Türkiye resmi fiyatı, global fiyat, para birimi, güncel tarih ayrıştırılmalı.
+- Model belirliyse fiyat ayrıca sorulmamış olsa bile: Türkiye resmi satış durumu + güncel resmi başlangıç fiyatı bulunan ana/global pazar + fiyatın aynı pazardaki aynı sınıf rakiplere göre konumu araştırılmalı. “Çok ucuz/pahalı” hükmü ancak karşılaştırılabilir ve doğrulanmış dayanak varsa kurulmalı.
+- Elektrikli/hibrit araçsa: menzil, tüketim/şarj, güç-vergi eşiği ve kullanım maliyeti içinden Türkiye ilgisi taşıyanlar doğrulanmalı.
+- Her araçta duruma göre: fiyat-değer, yakıt/enerji maliyeti, vergi etkisi, donanım-teknoloji, performans, boyut-pratiklik, güvenlik ve sıra dışı özellik adayları taranmalı. Hepsini içerikte kullanmak için değil, en güçlü açıyı kaçırmamak için karşılaştır.
+- En az 3 anlamlı aday bulmaya çalış; kanıtlanamayan adayı UNKNOWN bırak ve `turkiye_ilgi_sinyalleri` listesine alma.
 
 ⚠️ MODEL ADI KESİNLİĞİ: "BYD Great Tang" ile "BYD Tang" FARKLI araçlardır. Aramayı her zaman TAM model adıyla (variant dahil) yap. Tam adla sonuç bulamıyorsan "bu model hakkında yeterli veri bulunamadı" sonucuna var; benzer modelin verisini ASLA bu modele uygulama.
 
@@ -35,12 +40,36 @@ Güven sırası: 1) Resmi Türkiye kaynağı 2) Resmi üretici 3) Güvenilir sek
 
 ⸻
 
+TÜRKİYE İLGİ SİNYALLERİ — EDİTORYAL HAMMADDE:
+
+`turkiye_ilgi_sinyalleri` alanına yalnız OBSERVED/VERIFIED dayanağı olan en güçlü 3-6 adayı yaz ve 0-10 önem puanı ver. Puan; Türkiye kitlesindeki ekonomik/pratik önem + rakiplere göre şaşırtıcılık + kanıt gücünün birleşimidir.
+
+Öncelik merdiveni katı bir “her zaman fiyat” kuralı değildir; araç özelinde karşılaştır:
+1) Olağan dışı fiyat/değer ve erişilebilirlik,
+2) kullanım maliyeti, yakıt/enerji, menzil ve Türkiye'deki vergi etkisi,
+3) ürün kalitesi, donanım/teknoloji ve performans,
+4) gündelik pratiklik, boyut, servis/ikinci el belirsizliği,
+5) tasarım ve mikro görsel detay.
+
+Üst sıradaki bir sinyal gerçekten güçlü ve doğrulanmışsa, sırf videoda kapı/far/ekran yakın planı var diye daha zayıf mikro detayı daha yüksek puanlama. Buna karşılık fiyat sıradansa, karşılaştırma dayanağı yoksa veya spekülasyonsa onu yapay biçimde birinci yapma.
+
+Her sinyalde:
+- `bulgu`: doğrulanmış gerçek,
+- `neden_turkiyede_ilginc`: Türkiye kitlesindeki somut karşılığı,
+- `guvenli_anlatim`: sınırları doğru kuran kullanılabilir çerçeve,
+- `onem_puani`: 0-10
+bulunmalı. Yaratıcı hook/clickbait yazma.
+
+⸻
+
 TÜRKİYE FİYATLANDIRMASI (KRİTİK):
 
 - Yurt dışı fiyatı Türkiye satış fiyatı DEĞİLDİR. Kur karşılığı yaklaşık TL olarak verilebilir ama bu Türkiye fiyatı olarak sunulamaz.
 - "Türkiye'de kesin X TL olur" gibi kesin ifadeler ÜRETME.
 - Türkiye'de resmi satış yoksa Türkiye fiyatı, ÖTV, MTV, bayi fiyatı UYDURMA — turkiye_satis_durumu="YOK" yaz ve turkiye_fiyati alanına "Türkiye'de resmi satışı yok" gibi net bir ifade koy.
 - Vergi oranı doğrulanmadan kesin rakam olarak kullanılamaz.
+- Türkiye'de satılmayan ama kendi pazarında doğrulanmış biçimde sıra dışı ucuz/değerli olan araçta bu avantajı SAKLAMA. Güvenli çerçeve şudur: “X pazarında Y başlangıç fiyatıyla konumlanıyor; Türkiye'de resmi satışı ve Türkiye fiyatı yok.” Gerekirse “aynı fiyat avantajını koruyarak gelse ilgi çekebilir” koşullu yorumu yapılabilir; “Türkiye'de şu kadar olur/ucuz olur” denemez.
+- Çıplak kur çevirisini Türkiye satış fiyatı gibi sunma. Kur karşılığı verilecekse vergi, lojistik ve yerel fiyatlandırmayı içermediği aynı cümlede açıkça belirtilmeli. Tercihen ucuzluk iddiasını aynı dış pazardaki doğrulanmış rakip fiyatlarıyla temellendir.
 - turkiye_satis_durumu mutlaka VAR / YOK / BILINMIYOR değerlerinden biri olmalı; araştırmadan sonra bile netleşmiyorsa BILINMIYOR yaz.
 
 ⸻

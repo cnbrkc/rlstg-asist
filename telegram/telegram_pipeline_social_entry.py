@@ -111,6 +111,7 @@ def _research_compat(router, video_state, log):
             "turkiye_satis_durumu": "BILINMIYOR",
             "turkiye_fiyati": "",
             "global_fiyat_bilgisi": "",
+            "turkiye_ilgi_sinyalleri": [],
             "arastirma_notu": "Search fallback: dış doğrulama yapılamadı; yeni iddia eklenmedi.",
         }, "forensic-fallback"
 
