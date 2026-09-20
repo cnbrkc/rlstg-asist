@@ -67,12 +67,18 @@ def normalize_duo_strategy(reels_state):
         else {"female", "male"}
     )
 
-    hook = str(raw.get("hook_speaker") or "female").strip().lower()
-    ending = str(raw.get("ending_speaker") or "male").strip().lower()
+    # Varsayılan konuşmacılar deterministik olmalı: set üzerinde next(iter(...))
+    # DUO'da (iki elemanlı set) her çalıştırmada farklı sonuç verebilir.
+    solo_speaker = next(iter(allowed_speakers)) if len(allowed_speakers) == 1 else None
+    default_hook = solo_speaker or "female"
+    default_ending = solo_speaker or "male"
+
+    hook = str(raw.get("hook_speaker") or default_hook).strip().lower()
+    ending = str(raw.get("ending_speaker") or default_ending).strip().lower()
     if hook not in allowed_speakers:
-        hook = next(iter(allowed_speakers))
+        hook = default_hook
     if ending not in allowed_speakers:
-        ending = next(iter(allowed_speakers))
+        ending = default_ending
 
     raw_map = reels_state.get("konusma_haritasi") or []
     segments = []
@@ -104,7 +110,7 @@ def normalize_duo_strategy(reels_state):
             speaker = "female" if fallback_toggle % 2 == 0 else "male"
             fallback_toggle += 1
         else:
-            speaker = next(iter(allowed_speakers))
+            speaker = solo_speaker
 
         segments.append({
             "sira": len(segments) + 1,
@@ -115,7 +121,7 @@ def normalize_duo_strategy(reels_state):
         })
 
     if not segments:
-        segments = _duo_scaffold() if mode == "DUO" else _solo_scaffold(next(iter(allowed_speakers)))
+        segments = _duo_scaffold() if mode == "DUO" else _solo_scaffold(solo_speaker)
 
     if mode == "DUO":
         # Yalnızca DUO modunda iki sesin de temsil edilmesini garanti et;
