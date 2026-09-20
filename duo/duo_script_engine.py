@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Any, Dict, List
+# GEREKSİZ IMPORT KALDIRILDI: Sadece validate_script_segments gerekli.
 from duo.duo_script import validate_script_segments
 
 CHARACTER_ROLES = {
@@ -13,7 +14,6 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
     mode = str(plan.get("mode") or plan.get("uygunluk") or plan.get("anlatim_modu") or "DUO").upper().strip()
     if mode not in {"SOLO_FEMALE", "SOLO_MALE", "DUO"}: mode = "DUO"
 
-    # ÇİFT NORMALİZASYON HATASI DÜZELTİLDİ: Plan zaten normalize edilmiş olarak geliyor.
     conversation_map = plan.get("conversation_map", [])
     allowed = {"female"} if mode == "SOLO_FEMALE" else {"male"} if mode == "SOLO_MALE" else {"female", "male"}
     conversation_map = [x for x in conversation_map if x.get("speaker") in allowed]
@@ -74,7 +74,6 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
     if regeneration_instruction and regeneration_instruction.strip():
         length_rule += f"\n🚨 YENİDEN ÜRETİM TALİMATI:\n{regeneration_instruction.strip()}\n"
 
-    # DICT STRINGIFY HATASI DÜZELTİLDİ: AI'a Python sözlüğü değil, temiz JSON gönderiliyor.
     contract_json = json.dumps(contract, ensure_ascii=False, indent=2)
 
     return (
