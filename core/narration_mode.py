@@ -1,15 +1,4 @@
-"""Anlatım modu (tek ses / çift ses) karar katmanı.
-
-Editorial Brain'den SONRA, Reels Creative'den ÖNCE çalışır ve tek bir iş yapar:
-bu içerik için SOLO_FEMALE, SOLO_MALE veya DUO seçmek.
-
-Karar editorial_state içine 'anlatim_modu_karari' olarak yazılır. Reels Creative,
-Duo script ve TTS bu karara uyar. Karar alınamazsa boş sözlük döner; bu durumda
-pipeline eskisi gibi davranır (Reels Creative'in kendi seçimi kullanılır).
-
-Acil durum düğmesi: ANLATIM_MODU_ZORLA ortam değişkeni DUO / SOLO_FEMALE /
-SOLO_MALE olarak ayarlanırsa AI sorgusu atlanır ve o mod kullanılır.
-"""
+"""Anlatım modu (tek ses / çift ses) karar katmanı."""
 import json
 import os
 
@@ -17,72 +6,62 @@ from core.prompts import durumu_metne_donustur, girdi_birlestir
 
 GECERLI_MODLAR = ("SOLO_FEMALE", "SOLO_MALE", "DUO")
 
+# DÜZELTİLDİ: JSON standardına uygun küçük harfli tip tanımları.
 ANLATIM_MODU_SCHEMA = {
-    "type": "OBJECT",
+    "type": "object",
     "properties": {
         "anlatim_modu": {
-            "type": "STRING",
+            "type": "string",
             "enum": ["SOLO_FEMALE", "SOLO_MALE", "DUO"],
-            "description": "SOLO_FEMALE / SOLO_MALE / DUO. Varsayılan yoktur; yalnızca bu içeriğin ihtiyacına göre seç.",
+            "description": "SOLO_FEMALE / SOLO_MALE / DUO. Yalnızca bu içeriğin ihtiyacına göre seç.",
         },
         "duo_katma_degeri": {
-            "type": "STRING",
-            "description": "İkinci sesin bu videoya katacağı SOMUT değer (ne söyler, neye karşı çıkar, hangi tepkiyi verir). Somut değer söyleyemiyorsan 'yok' yaz.",
+            "type": "string",
+            "description": "İkinci sesin bu videoya katacağı SOMUT değer. Somut değer yoksa 'yok' yaz.",
         },
         "solo_katma_degeri": {
-            "type": "STRING",
-            "description": "Tek sesin bu içerikte sağlayacağı somut avantaj (tempo, netlik, akıcılık vb.).",
+            "type": "string",
+            "description": "Tek sesin bu içerikte sağlayacağı somut avantaj.",
         },
-        "guven": {"type": "NUMBER", "description": "0-1 arası karar güveni."},
+        "guven": {"type": "number", "description": "0-1 arası karar güveni."},
         "gerekce": {
-            "type": "STRING",
-            "description": "Kararın 1-2 cümlelik Türkçe gerekçesi (izleyici tutma, ilk 3 saniye, tempo, tartışma potansiyeli açısından).",
+            "type": "string",
+            "description": "Kararın 1-2 cümlelik Türkçe gerekçesi.",
         },
     },
     "required": ["anlatim_modu", "duo_katma_degeri", "solo_katma_degeri", "guven", "gerekce"],
 }
 
-# ---------------------------------------------------------------------------
-# PROMPT — buradaki metni istediğin gibi değiştirebilirsin.
-# {sure_saniye} ve {ton} çalışma anında otomatik doldurulur.
-# ---------------------------------------------------------------------------
-ANLATIM_MODU_PROMPT = """Sen otoXtra için çalışan kısa video (Instagram Reels / Threads / Facebook) anlatım stratejistisin.
-
+# TEMİZLENDİ: Gereksiz uyarılar (metin yazma, algoritma vb.) çıkarıldı. Sadece karar mantığı bırakıldı.
+ANLATIM_MODU_PROMPT = """Sen otoXtra için kısa video anlatım stratejistisin.
 GÖREV: Aşağıdaki içerik için seslendirmenin TEK SES mi yoksa ÇİFT SES mi olması gerektiğine karar ver.
-Tek işin mod seçmek ve gerekçelendirmek. Metin yazma, gerçekleri değiştirme, yeni bilgi uydurma.
-
 SEÇENEKLER:
-- SOLO_FEMALE: Tek anlatıcı, kadın sesi (Autonoe). Doğal, zeki, merak uyandıran, akıcı anlatım.
-- SOLO_MALE: Tek anlatıcı, erkek sesi (Charon). Otomobil meraklısı, sakin, net, güven veren anlatım.
+- SOLO_FEMALE: Tek anlatıcı, kadın sesi (Autonoe). Doğal, zeki, merak uyandıran.
+- SOLO_MALE: Tek anlatıcı, erkek sesi (Charon). Otomobil meraklısı, sakin, net.
 - DUO: İki karakter (Autonoe + Charon), kısa ve doğal bir sohbet.
 
 BAĞLAM:
 - Video süresi: yaklaşık {sure_saniye} saniye
 - İçerik türü: {ton}
 
-KARARI NASIL VERECEKSİN:
-Ölçüt izleyicinin ilk 3 saniyede kalması, videoyu sonuna kadar izlemesi, tekrar izlemesi, yorum yapması ve paylaşmasıdır.
-Sosyal medya platformlarının tek ya da çift sesi doğrudan ödüllendirdiğine dair kesin bir kural yoktur; bu yüzden algoritma hakkında kesin iddia kurma, kararı izleyiciyi tutma mantığıyla gerekçelendir.
-
+KARAR MANTIĞI:
 DUO uygun olur, eğer:
-- içerikte gerçek bir zıtlık, soru-cevap veya doğal bir tartışma potansiyeli varsa,
-- şaşırtıcı bir bilgiye verilen tepki videoyu güçlendiriyorsa,
-- iki bakış açısı (ör. heyecan ve şüphe, tasarım ve mühendislik) içerikte zaten mevcutsa,
-- video yeterince uzunsa (kabaca 20 saniye ve üstü) ve söz sırası değişimi izleyiciyi yormuyorsa.
+- İçerikte gerçek bir zıtlık, soru-cevap veya doğal bir tartışma potansiyeli varsa,
+- Şaşırtıcı bir bilgiye verilen tepki videoyu güçlendiriyorsa,
+- İki bakış açısı (ör. heyecan ve şüphe) içerikte zaten mevcutsa,
+- Video yeterince uzunsa (20 saniye ve üstü).
 
 TEK SES uygun olur, eğer:
-- tek net bir hikâye, bilgi veya duygu akıcı biçimde anlatılacaksa,
-- içerik teknik veya sayısal bilgi yoğunsa ve bölünmeden anlatılması daha anlaşılırsa,
-- görüntü kendini anlatıyorsa ve ses yalnızca yönlendiriyorsa,
-- video kısaysa (kabaca 15 saniye ve altı) ve söz sırası değişimi süre yiyorsa,
-- diyalog zorlama ya da yapay skeç gibi duracaksa.
+- Tek net bir hikâye, bilgi veya duygu akıcı biçimde anlatılacaksa,
+- İçerik teknik veya sayısal bilgi yoğunsa,
+- Görüntü kendini anlatıyorsa,
+- Video kısaysa (15 saniye ve altı),
+- Diyalog zorlama ya da yapay skeç gibi duracaksa.
 
-TEK SES seçtiysen kadın mı erkek mi: içeriğin tonuna göre seç. Mühendislik, performans ve sakin otorite ağırlıklıysa SOLO_MALE; merak, tasarım, yaşam tarzı, sürpriz ve hikâye ağırlıklıysa SOLO_FEMALE. Bu kesin kural değil, ton rehberidir.
+TEK SES seçtiysen kadın mı erkek mi: Mühendislik, performans ve sakin otorite ağırlıklıysa SOLO_MALE; merak, tasarım, yaşam tarzı ve hikâye ağırlıklıysa SOLO_FEMALE.
 
 ÖNEMLİ:
-- Varsayılan mod YOKTUR. Üç seçenek de eşit derecede geçerlidir.
-- Sırf iki ses "daha canlı" görünüyor diye DUO seçme. DUO'yu yalnızca ikinci sesin bu içeriğe somut katkısını (ne söyleyecek, neye karşı çıkacak, hangi tepkiyi verecek) adlandırabiliyorsan seç. Adlandıramıyorsan tek ses seç.
-- Sırf güvenli diye tek ses de seçme; içerik gerçekten iki sesle daha iyi tutuyorsa DUO seç.
+- Sırf iki ses "daha canlı" görünüyor diye DUO seçme. DUO'yu yalnızca ikinci sesin bu içeriğe somut katkısını adlandırabiliyorsan seç.
 - Kullanıcı notu ve Fact Lock içindeki bilgiler değişmez; karar yalnızca sunum biçimine dairdir.
 
 ÇIKTI: Yalnızca şemaya uygun JSON."""
@@ -122,11 +101,6 @@ def _guven(deger):
 
 
 def anlatim_modu_karar_ver(router, video_state, fact_state, editorial_state, sure_saniye, ton, log):
-    """Ayrı ve basit bir AI sorgusuyla tek/çift ses kararını verir.
-
-    Dönüş: {"mode", "reason", "confidence", "duo_value", "solo_value", "source"}
-    Karar alınamazsa boş sözlük {} döner (pipeline eski davranışına düşer).
-    """
     zorla = _mod_temizle(os.environ.get("ANLATIM_MODU_ZORLA", ""))
     if zorla:
         log(f"🎚️ Anlatım modu ortam değişkeniyle zorlandı: {zorla}")
@@ -179,28 +153,18 @@ def _konusmaci(mod):
 
 
 def mod_kilit_talimati(karar):
-    """Reels Creative'e giden 'bu mod kesinleşti' talimatı. Karar yoksa boş metin."""
+    # TEMİZLENDİ: AI'a JSON alan isimlerini dikte etmek gereksizdi çünkü mod_kilidini_uygula zaten zorla düzeltiyor.
+    # Sadece "bu mod kilitlendi" bilgisi veriliyor.
     mod = _mod_temizle((karar or {}).get("mode"))
     if not mod:
         return ""
     if mod == "DUO":
-        return (
-            "ANLATIM MODU KİLİDİ (bu üretim için kesin karar): DUO. "
-            "anlatim_modu ve duo_stratejisi.uygunluk alanlarına DUO yaz. "
-            "Konuşma haritasında female ve male birlikte, doğal karşılıklı konuşsun. "
-        )
+        return "ANLATIM MODU KİLİDİ: DUO. İki karakter (Autonoe + Charon) doğal bir sohbet etsin."
     ses = _konusmaci(mod)
-    return (
-        f"ANLATIM MODU KİLİDİ (bu üretim için kesin karar): {mod}. "
-        f"anlatim_modu ve duo_stratejisi.uygunluk alanlarına {mod} yaz. "
-        f"Tek anlatıcı vardır ve yalnızca {ses} konuşur; diyalog, soru-cevap veya ikinci karaktere hitap kurma. "
-        f"seslendirme_metni tek kişinin akıcı anlatımı olsun. konusma_haritasi içindeki tüm segmentlerin speaker değeri "
-        f"{ses} olsun; hook_speaker ve ending_speaker da {ses} olsun. "
-    )
+    return f"ANLATIM MODU KİLİDİ: {mod}. Tek anlatıcı ({ses}) akıcı bir anlatım yapsın. Diyalog veya ikinci karakter kesinlikle olmasın."
 
 
 def mod_kilidini_uygula(reels_state, karar):
-    """Modelin Reels Creative çıktısını karara uydurur (model sapsa bile mod sabit kalır)."""
     mod = _mod_temizle((karar or {}).get("mode"))
     if not mod or not isinstance(reels_state, dict):
         return reels_state
