@@ -23,6 +23,7 @@ from core.media import (
     medya_raporu,
     video_suresini_al,
 )
+from core.narration_mode import anlatim_modu_karar_ver, mod_kilit_talimati, mod_kilidini_uygula
 from duo.duo_strategy import normalize_duo_strategy
 from duo.duo_script_engine import (
     build_duo_generation_contract,
@@ -410,6 +411,34 @@ def _explicit_voice_mode_from_notes(notes):
     return max(candidates, default=(-1, ""))[1]
 
 
+def _mod_karari_al(editorial_state):
+    """Editorial state içine kilitlenmiş anlatım modu kararını döndürür (yoksa boş sözlük)."""
+    karar = _object_state_or_empty(editorial_state).get('anlatim_modu_karari')
+    return karar if isinstance(karar, dict) else {}
+
+
+def _anlatim_modu_karari_ekle(router, video_state, fact_state, editorial_state, sure_saniye, ton, notes, log):
+    """Tek/çift ses kararını ayrı bir AI sorgusuyla bir kez verir ve editorial_state içine kilitler.
+
+    Kullanıcı notunda açık bir ses modu talebi varsa (örn. "tek ses") AI sorgusu atlanır;
+    o durumda mevcut not tabanlı akış aynen çalışır.
+    """
+    editorial = dict(_object_state_or_empty(editorial_state))
+    if not editorial:
+        log('⚠️ Editorial state okunamadı; anlatım modu kararı atlandı.')
+        return editorial_state
+    if _explicit_voice_mode_from_notes(notes):
+        log('🎚️ Kullanıcı notunda açık ses modu talebi var; AI mod kararı atlandı.')
+        return editorial
+    karar = _run_timed(
+        log, "Anlatım modu kararı (Gemini)",
+        lambda: anlatim_modu_karar_ver(router, video_state, fact_state, editorial, sure_saniye, ton, log),
+    )
+    if karar:
+        editorial['anlatim_modu_karari'] = karar
+    return editorial
+
+
 def _duo_plan_hazirla(reels_state, sure_saniye, ton, notes=""):
     reels_state = _object_state_or_empty(reels_state)
     mode_request = _explicit_voice_mode_from_notes(notes)
@@ -555,9 +584,11 @@ def _ses_sure_uyumlu_mu(ses_dosyasi, video_suresi):
 def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, legacy_voice, log, baslangic_talimati=""):
     ek_talimat = baslangic_talimati or ""
     son_reels={}; son_model='hata'; son_duo_plan={}; son_duo_script={}; son_ses=''; son_info=None; son_mod='LEGACY'
+    mod_karari = _mod_karari_al(editorial_state)
 
     for deneme in range(VOICE_REGEN_MAX+1):
-        reels_state,model_reels=_reels_creative_calistir(router,editorial_state,fact_state,video_state,notes,sure_saniye,ton,log,KELIME_HIZI_ORANI,ek_talimat=ek_talimat)
+        reels_state,model_reels=_reels_creative_calistir(router,editorial_state,fact_state,video_state,notes,sure_saniye,ton,log,KELIME_HIZI_ORANI,ek_talimat=mod_kilit_talimati(mod_karari)+ek_talimat)
+        reels_state=mod_kilidini_uygula(reels_state,mod_karari)
         son_reels,son_model=reels_state,model_reels
         adet,hedef,minimum,maksimum=_reels_kelime_kontrolu(reels_state,sure_saniye,KELIME_HIZI_ORANI)
         log(f'📝 Seslendirme uzunluk kontrolü: {adet} kelime | hedef {hedef} | izin verilen {minimum}-{maksimum}')
@@ -760,7 +791,10 @@ def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz
     _ilerleme(ilerlemeyi_guncelle,2); log_ekle('🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...')
     fact_state,_=_research_calistir(router,video_state,log_ekle); state['fact_state']=fact_state
     _ilerleme(ilerlemeyi_guncelle,3); log_ekle('🧠 Hikâye seçiliyor (Editorial Brain)...')
-    editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin_uretim_notlari,log_ekle,icerik_tonu); state['editorial_state']=editorial_state
+    editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin_uretim_notlari,log_ekle,icerik_tonu)
+    log_ekle('🎚️ Anlatım modu belirleniyor (tek ses / çift ses)...')
+    editorial_state=_anlatim_modu_karari_ekle(router,video_state,fact_state,editorial_state,sure_saniye,icerik_tonu,metin_uretim_notlari,log_ekle)
+    state['editorial_state']=editorial_state; state['anlatim_modu_karari']=_mod_karari_al(editorial_state)
     _ilerleme(ilerlemeyi_guncelle,4); log_ekle('🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover + Duo)...')
     legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
@@ -855,7 +889,10 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     state['video_state']=video_state
     _ilerleme(ilerlemeyi_guncelle,1,'📝 Metin girdisi'); log_ekle('📝 Metin girdisi işleniyor (video analizi atlanıyor)...')
     _ilerleme(ilerlemeyi_guncelle,2,'🔎 Research / Fact Lock'); fact_state,_=_research_calistir(router,video_state,log_ekle); state['fact_state']=fact_state
-    _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain'); editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle,icerik_tonu); state['editorial_state']=editorial_state
+    _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain'); editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle,icerik_tonu)
+    log_ekle('🎚️ Anlatım modu belirleniyor (tek ses / çift ses)...')
+    editorial_state=_anlatim_modu_karari_ekle(router,video_state,fact_state,editorial_state,sure_saniye,icerik_tonu,metin,log_ekle)
+    state['editorial_state']=editorial_state; state['anlatim_modu_karari']=_mod_karari_al(editorial_state)
     _ilerleme(ilerlemeyi_guncelle,4,'🎙️ Reels Creative'); legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
         router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle, production_notes=metin
