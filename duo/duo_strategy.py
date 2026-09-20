@@ -1,10 +1,3 @@
-"""otoXtra DUO/SOLO anlatım stratejisi için güvenli normalizasyon katmanı.
-
-Kullanıcının açık mod talebi runtime işaretiyle mutlak öncelik taşır. Kullanıcı
-mod belirtmediyse Reels Creative modelinin video ve içeriğe göre verdiği karar
-korunur; geçersiz karar güvenli biçimde DUO'ya düşer.
-"""
-
 VALID_MODES = {"SOLO_FEMALE", "SOLO_MALE", "DUO"}
 VALID_SPEAKERS = {"female", "male", "none"}
 VALID_PURPOSES = {
@@ -13,13 +6,9 @@ VALID_PURPOSES = {
     "callback", "closing",
 }
 
-
 def _clamp(value, default=0.0):
-    try:
-        return max(0.0, min(1.0, float(value)))
-    except (TypeError, ValueError):
-        return default
-
+    try: return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError): return default
 
 def _duo_scaffold():
     return [
@@ -31,7 +20,6 @@ def _duo_scaffold():
         {"sira": 6, "speaker": "female", "amac": "callback", "detay": "açılışa dönen net payoff", "duygu": "natural"},
     ]
 
-
 def _solo_scaffold(speaker):
     return [
         {"sira": 1, "speaker": speaker, "amac": "hook", "detay": "en güçlü hikâye açısı", "duygu": "curious"},
@@ -39,116 +27,65 @@ def _solo_scaffold(speaker):
         {"sira": 3, "speaker": speaker, "amac": "closing", "detay": "ana çıkarım", "duygu": "serious"},
     ]
 
-
 def _resolve_mode(reels_state, raw):
-    """Kullanıcı override'ını, yoksa modelin editoryal mod kararını uygula."""
     explicit = str(reels_state.get("_explicit_voice_mode") or "").strip().upper()
-    if explicit in VALID_MODES:
-        return explicit
-    candidate = str(
-        reels_state.get("anlatim_modu")
-        or raw.get("uygunluk")
-        or raw.get("anlatim_modu")
-        or raw.get("mode")
-        or "DUO"
-    ).strip().upper()
+    if explicit in VALID_MODES: return explicit
+    candidate = str(reels_state.get("anlatim_modu") or raw.get("uygunluk") or raw.get("anlatim_modu") or raw.get("mode") or "DUO").strip().upper()
     return candidate if candidate in VALID_MODES else "DUO"
 
-
 def normalize_duo_strategy(reels_state):
-    """Kullanıcı öncelikli model kararını doğrulanmış üretim planına dönüştürür."""
     reels_state = reels_state or {}
     raw = reels_state.get("duo_stratejisi") or {}
-
     mode = _resolve_mode(reels_state, raw)
-    allowed_speakers = (
-        {"female"} if mode == "SOLO_FEMALE"
-        else {"male"} if mode == "SOLO_MALE"
-        else {"female", "male"}
-    )
-
-    # Varsayılan konuşmacılar deterministik olmalı: set üzerinde next(iter(...))
-    # DUO'da (iki elemanlı set) her çalıştırmada farklı sonuç verebilir.
+    allowed_speakers = {"female"} if mode == "SOLO_FEMALE" else {"male"} if mode == "SOLO_MALE" else {"female", "male"}
     solo_speaker = next(iter(allowed_speakers)) if len(allowed_speakers) == 1 else None
     default_hook = solo_speaker or "female"
     default_ending = solo_speaker or "male"
 
     hook = str(raw.get("hook_speaker") or default_hook).strip().lower()
     ending = str(raw.get("ending_speaker") or default_ending).strip().lower()
-    if hook not in allowed_speakers:
-        hook = default_hook
-    if ending not in allowed_speakers:
-        ending = default_ending
+    if hook not in allowed_speakers: hook = default_hook
+    if ending not in allowed_speakers: ending = default_ending
 
     raw_map = reels_state.get("konusma_haritasi") or []
     segments = []
-    fallback_toggle = 0
+    last_speaker = solo_speaker or "female" # Asimetrik ritim için takipçi
+    
     for item in raw_map:
-        if not isinstance(item, dict):
-            continue
+        if not isinstance(item, dict): continue
         purpose = str(item.get("amac") or "transition").strip().lower()
-        if purpose not in VALID_PURPOSES:
-            purpose = "transition"
+        if purpose not in VALID_PURPOSES: purpose = "transition"
         detail = str(item.get("detay") or "").strip()
-        if not detail:
-            # Empty map rows cannot produce a meaningful dialogue turn. Do not
-            # let them survive into the contract and later disappear silently.
-            continue
-
+        if not detail: continue
         emotion = str(item.get("duygu") or "").strip()
         requested_speaker = str(item.get("speaker") or "").strip().lower()
-        if requested_speaker not in allowed_speakers:
-            requested_speaker = ""
-
-        if requested_speaker:
-            # Modelin bilinçli speaker seçimine güven; art arda aynı karakter
-            # konuşuyorsa bu doğal bir editoryal tercih olabilir (biri anlatır,
-            # diğeri tek satırla tepki verir) — burada zorla alternatif
-            # karaktere çevrilmez. Doğal doku bu sayede korunur.
+        
+        if requested_speaker in allowed_speakers:
             speaker = requested_speaker
-        elif mode == "DUO":
-            speaker = "female" if fallback_toggle % 2 == 0 else "male"
-            fallback_toggle += 1
+            last_speaker = speaker
         else:
-            speaker = solo_speaker
+            # PİNG-PONG (MOD 2) MANTIĞI KALDIRILDI.
+            # Model speaker'ı boş bıraktıysa, bir önceki speaker'ın devam etmesine izin ver.
+            speaker = last_speaker if last_speaker in allowed_speakers else (next(iter(allowed_speakers)) if allowed_speakers else "female")
+            last_speaker = speaker
 
-        segments.append({
-            "sira": len(segments) + 1,
-            "speaker": speaker,
-            "amac": purpose,
-            "detay": detail,
-            "duygu": emotion,
-        })
+        segments.append({"sira": len(segments) + 1, "speaker": speaker, "amac": purpose, "detay": detail, "duygu": emotion})
 
-    if not segments:
-        segments = _duo_scaffold() if mode == "DUO" else _solo_scaffold(solo_speaker)
+    if not segments: segments = _duo_scaffold() if mode == "DUO" else _solo_scaffold(solo_speaker)
 
     if mode == "DUO":
-        # Yalnızca DUO modunda iki sesin de temsil edilmesini garanti et;
-        # tek satırlı planı diğer sesi ezerek değil güvenli bir dönüş ekleyerek
-        # tamamla. Tek tek her segmentin alternatif olması zorunlu değildir.
         if len(segments) == 1:
             missing = "male" if segments[0]["speaker"] == "female" else "female"
-            segments.append({
-                "sira": 2,
-                "speaker": missing,
-                "amac": "closing",
-                "detay": "ana çıkarım",
-                "duygu": "natural",
-            })
-        elif not any(x["speaker"] == "female" for x in segments):
-            segments[0]["speaker"] = "female"
-        elif not any(x["speaker"] == "male" for x in segments):
-            segments[1]["speaker"] = "male"
+            segments.append({"sira": 2, "speaker": missing, "amac": "closing", "detay": "ana çıkarım", "duygu": "natural"})
+        elif not any(x["speaker"] == "female" for x in segments): segments[0]["speaker"] = "female"
+        elif not any(x["speaker"] == "male" for x in segments): segments[1]["speaker"] = "male"
 
     female_count = sum(1 for x in segments if x["speaker"] == "female")
     male_count = sum(1 for x in segments if x["speaker"] == "male")
     total = max(1, female_count + male_count)
 
     return {
-        "mode": mode,
-        "hook_speaker": hook,
-        "ending_speaker": ending,
+        "mode": mode, "hook_speaker": hook, "ending_speaker": ending,
         "female_weight": _clamp(raw.get("female_agirligi"), female_count / total),
         "male_weight": _clamp(raw.get("male_agirligi"), male_count / total),
         "interaction_level": max(0.35, _clamp(raw.get("interaction_level"), 0.55)) if mode == "DUO" else _clamp(raw.get("interaction_level"), 0.0),
