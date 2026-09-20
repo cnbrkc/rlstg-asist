@@ -1,7 +1,6 @@
 import json
 import re
 from typing import Any, Dict, List
-# GEREKSİZ IMPORT KALDIRILDI: Sadece validate_script_segments gerekli.
 from duo.duo_script import validate_script_segments
 
 CHARACTER_ROLES = {
@@ -79,7 +78,9 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
     return (
         "Sen otoXtra'nın iki karakterli otomobil anlatım yazarı olarak çalışıyorsun.\n"
         "Aşağıdaki sözleşmeye göre yalnızca JSON üret.\n\n"
-        "HEDEF: İzleyicinin hazırlanmış iki sesli metin değil, arabaya bakarken kayda yakalanmış iki zeki partnerin kısa ve akışkan muhabbetini duyduğu hissi.\n\n"
+        "HEDEF: İzleyicinin hazırlanmış iki sesli metin değil, arabaya bakarken kayda yakalanmış iki zeki partnerin "
+        "kısa ve akışkan muhabbetini duyduğu hissi. Diyalog viral kısa video temposunda ilerlesin; yapay tiyatro, "
+        "podcast sunuculuğu, haber spikerliği, şarkıcı düeti ve iki kişinin aynı ritimde sırayla cümle okuması kesinlikle olmasın.\n\n"
         "MUTLAK KURALLAR:\n"
         "1. COLD OPEN: Selam, konu tanıtımı yok. İlk speaker en güçlü Türkiye ilgi kancasını net ve yarım bırakılmış bir iddia/çelişkiyle açsın.\n"
         "2. HOOK → FRICTION → PROOF → REVERSAL → PAYOFF omurgası kur.\n"
