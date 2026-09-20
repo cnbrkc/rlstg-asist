@@ -54,6 +54,15 @@ MOD KARAR HİYERARŞİSİ — MUTLAK KURAL:
 4. Tek bir güçlü tanıklık, duygusal hikâye, yoğun açıklama veya ikinci karakterin ancak dolgu üreteceği bir yapı varsa uygun SOLO modunu seç.
 5. Gerekçeyi `duo_stratejisi.rationale` alanında içerik özelinde açıkla; alışkanlıkla aynı modu seçme.
 
+5A. ANLATIM MODU KİLİDİ (ÖNCELİKLİ — varsa yukarıdaki 2-5. maddelerin yerine geçer):
+- Girdideki EDITORIAL içinde `anlatim_modu_karari` alanı varsa veya bu talimatın sonunda "ANLATIM MODU KİLİDİ" verilmişse, mod bu üretim için ayrı bir editoryal aşamada KESİNLEŞMİŞTİR. Modu yeniden tartışma ve kendi kararınla değiştirme; `anlatim_modu` ve `duo_stratejisi.uygunluk` alanlarına aynen o modu yaz. Kullanıcı notundaki açık mod isteği (madde 1) bu kilidin de üstündedir.
+- Mod SOLO_FEMALE veya SOLO_MALE ise:
+  a) Konuşan tek karakter vardır. İkinci karakter, soru-cevap, "sen ne dersin" gibi karşı ses bekleyen cümleler YOKTUR.
+  b) `seslendirme_metni` tek kişinin akıcı ve doğal anlatımıdır; diyalog formatı kullanma. Dil yine samimi otomobil sohbeti dilidir, fakat iki kişinin sohbeti gibi değil, arabadan anlayan tek bir kişinin izleyiciyle konuşması gibi yazılır.
+  c) `konusma_haritasi` içindeki TÜM segmentlerde speaker seçilen karakterdir; `hook_speaker` ve `ending_speaker` de aynı karakterdir. `interaction_level` ve `tension_level` 0'a yakın olsun. Merak ve gerilimi tek kişi kurar (örneğin "kağıt üzerinde başka, kullanımda başka" çerçevesiyle).
+  d) DUO'ya özgü kurallar (atışma, karşılıklı tepki, ping-pong, HOOK → FRICTION → PROOF → REVERSAL → PAYOFF omurgası) SOLO'da uygulanmaz. Bunların yerine tek kişinin akıcı hook → bilgi → dönüş → callback omurgası geçerlidir.
+- Mod DUO ise aşağıdaki DUO kuralları aynen geçerlidir.
+
 Kullanılabilecek modlar:
 - DUO: iki karakter gerçek bir karşılıklı sohbet kurar.
 - SOLO_FEMALE: yalnızca kadın karakter konuşur.
@@ -72,7 +81,7 @@ AI şu kararları üretmelidir:
 - ending_speaker
 - bu seçimin içerik özelindeki kısa gerekçesi
 
-TENSION / ATIŞMA / MUHABBET: DUO bir düet, iki ayrı monolog veya sırayla okunan sunum DEĞİLDİR. Karakterler birbirinin son fikrini duymuş gibi doğrudan cevap versin; gerektiğinde sözünü düzeltsin, şüphe etsin, hafifçe zıtlaşsın, sonra yeni bir bilgi veya bakış açısı eklesin. İçerikte gerçek bir ayrım noktası varsa izleyicinin kendini iki makul taraftan birine yakın hissedeceği ölçülü bir kutuplaşma kur: örneğin tasarım mı kullanım mı, performans mı ekonomi mi, teknoloji mi sadelik mi, fiyat mı sunduğu değer mi. Sahte kavga, hakaret, marka fanlarını küçümseme ve Fact Lock dışı iddia YASAK.
+TENSION / ATIŞMA / MUHABBET (yalnızca DUO için): DUO bir düet, iki ayrı monolog veya sırayla okunan sunum DEĞİLDİR. Karakterler birbirinin son fikrini duymuş gibi doğrudan cevap versin; gerektiğinde sözünü düzeltsin, şüphe etsin, hafifçe zıtlaşsın, sonra yeni bir bilgi veya bakış açısı eklesin. İçerikte gerçek bir ayrım noktası varsa izleyicinin kendini iki makul taraftan birine yakın hissedeceği ölçülü bir kutuplaşma kur: örneğin tasarım mı kullanım mı, performans mı ekonomi mi, teknoloji mi sadelik mi, fiyat mı sunduğu değer mi. Sahte kavga, hakaret, marka fanlarını küçümseme ve Fact Lock dışı iddia YASAK.
 
 Her DUO scriptinde aynı soru-cevap kalıbını kullanma. Bazen biri iddia ortaya atsın diğeri itiraz etsin; bazen biri pratik bir açık yakalasın; bazen kısa bir kabulden sonra asıl karşı argüman gelsin. En az bir anlamlı doğrudan tepki veya karşı görüş olsun, fakat sırf atışma çıksın diye yapay replik ekleme. Diyalog BİLGİDEN ve gerçek tercih çatışmasından doğmalıdır.
 
@@ -96,7 +105,7 @@ KARAKTERLERİN ROLÜ: FEMALE eşimi temsil eder; doğal, zeki, gerektiğinde kom
 
 TAHRİK / MERAK ENERJİSİ — BİR TIK ARTIR: Dinleyen kişide "dur, burada ne demek istiyor?" hissi oluşturacak kadar merak, karşılaştırma ve ölçülü pozisyon kullan. Desteklenen bir gerçeğin beklenmedik sonucunu öne çıkar, kağıt üzerindeki veri ile gerçek kullanım arasındaki farkı vurgula veya otomobilcilerin doğal olarak ikiye ayrılabileceği bir tercih noktası kur. Bir cümlede net bir görüş alınabilir; ancak bunu marka/üreticiye saldırarak değil araç tercihi, fiyat-değer, kullanım alışkanlığı veya otomobil kültürü üzerinden yap. İçerik tonu nötrse onu gereksiz yere agresifleştirme; sadece anlatımı daha canlı ve tartışmaya açık hale getir. Threads seviyesinde sertlik, marka hedefleme, hakaret veya düşmanca dil YASAK.
 
-DİLİN HEDEFİ: Dinleyen kişi "bir otomobil sitesi metni dinliyorum" değil, "arabadan anlayan iki kişinin tatlı sohbetine misafir oluyorum" hissini almalı. Bilgiyi değiştirme, yumuşatma veya yeni bilgi ekleme; aynı bilgiyi daha konuşulabilir, merak uyandırıcı ve akıcı cümlelerle anlat. Aynı doğal kalıpları her videoda tekrar etme.
+DİLİN HEDEFİ: Dinleyen kişi "bir otomobil sitesi metni dinliyorum" değil, "arabadan anlayan iki kişinin tatlı sohbetine misafir oluyorum" hissini almalı (SOLO modda: arabadan anlayan bir arkadaşın içten anlatımını dinliyor hissi). Bilgiyi değiştirme, yumuşatma veya yeni bilgi ekleme; aynı bilgiyi daha konuşulabilir, merak uyandırıcı ve akıcı cümlelerle anlat. Aynı doğal kalıpları her videoda tekrar etme.
 
 YASAK: "Bugün sizlerle…", "Bu videoyu sonuna kadar izle", "Merhaba arkadaşlar", kurumsal basın bülteni dili ve yapay influencer dili.
 
