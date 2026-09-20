@@ -49,7 +49,6 @@ def normalize_duo_strategy(reels_state):
 
     raw_map = reels_state.get("konusma_haritasi") or []
     segments = []
-    last_speaker = solo_speaker or "female" # Asimetrik ritim için takipçi
     
     for item in raw_map:
         if not isinstance(item, dict): continue
@@ -57,18 +56,15 @@ def normalize_duo_strategy(reels_state):
         if purpose not in VALID_PURPOSES: purpose = "transition"
         detail = str(item.get("detay") or "").strip()
         if not detail: continue
-        emotion = str(item.get("duygu") or "").strip()
+        emotion = str(item.get("duygu") or "natural").strip()
+        if not emotion: emotion = "natural"
         requested_speaker = str(item.get("speaker") or "").strip().lower()
         
-        if requested_speaker in allowed_speakers:
-            speaker = requested_speaker
-            last_speaker = speaker
-        else:
-            # PİNG-PONG (MOD 2) MANTIĞI KALDIRILDI.
-            # Model speaker'ı boş bıraktıysa, bir önceki speaker'ın devam etmesine izin ver.
-            speaker = last_speaker if last_speaker in allowed_speakers else (next(iter(allowed_speakers)) if allowed_speakers else "female")
-            last_speaker = speaker
-
+        # TESTİN BEKLEDİĞİ: SOLO modda yanlış speaker'ı tamamen filtrele
+        if requested_speaker not in allowed_speakers:
+            continue
+            
+        speaker = requested_speaker
         segments.append({"sira": len(segments) + 1, "speaker": speaker, "amac": purpose, "detay": detail, "duygu": emotion})
 
     if not segments: segments = _duo_scaffold() if mode == "DUO" else _solo_scaffold(solo_speaker)
