@@ -71,8 +71,11 @@ class DuoLayerTests(unittest.TestCase):
                 {"speaker": "male", "amac": "fact", "detay": "Doğru"},
             ],
         }
+        # DÜZELTİLDİ: SOLO modda yanlış speaker'ı silmek yerine izin verilen speaker'a çevirir.
+        # Bu sayede detaylar korunur ve AI'ın kurgusu kaybolmaz.
         self.assertEqual(normalize_conversation_map(strategy), [
-            {"sira": 1, "speaker": "male", "amac": "fact", "detay": "Doğru", "duygu": "natural"}
+            {"sira": 1, "speaker": "male", "amac": "hook", "detay": "Yanlış", "duygu": "natural"},
+            {"sira": 2, "speaker": "male", "amac": "fact", "detay": "Doğru", "duygu": "natural"},
         ])
 
 
