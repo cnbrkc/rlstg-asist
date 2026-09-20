@@ -70,3 +70,9 @@ def test_no_decision_means_no_lock():
     assert mod_kilidini_uygula(reels, {}) == reels
     assert mod_kilit_talimati({}) == ""
     assert "SOLO_MALE" in mod_kilit_talimati({"mode": "SOLO_MALE"})
+
+
+def test_lock_replaces_stale_model_rationale_with_decision_reason():
+    reels = {"anlatim_modu": "DUO", "duo_stratejisi": {"rationale": "iki ses daha canlı"}}
+    out = mod_kilidini_uygula(reels, {"mode": "SOLO_MALE", "reason": "teknik yoğun içerik"})
+    assert out["duo_stratejisi"]["rationale"] == "[SOLO_MALE] teknik yoğun içerik"
