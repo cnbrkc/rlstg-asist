@@ -22,6 +22,7 @@ ANLATIM_MODU_SCHEMA = {
     "properties": {
         "anlatim_modu": {
             "type": "STRING",
+            "enum": ["SOLO_FEMALE", "SOLO_MALE", "DUO"],
             "description": "SOLO_FEMALE / SOLO_MALE / DUO. Varsayılan yoktur; yalnızca bu içeriğin ihtiyacına göre seç.",
         },
         "duo_katma_degeri": {
