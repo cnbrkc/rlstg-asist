@@ -1,5 +1,5 @@
 """Ses ve video işleme fonksiyonları (ffmpeg, hızlandırma, birleştirme)."""
-import os, re, wave, shutil, subprocess, tempfile, uuid, json
+import os, re, wave, shutil, subprocess, tempfile, uuid, json, math
 from core.config import VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
 
 MAKS_VIDEO_HIZLANDIRMA = 1.5
@@ -46,11 +46,6 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
     else:
         atempo_filtreleri=[hiz_carpani]
 
-    # Bazı FFmpeg 7.x build'lerinde WAV -> WAV işlemini aynı filter graph
-    # içinde atempo + aresample ile yapmak "Assertion best_input >= 0"
-    # hatasına yol açabiliyor. Filtreleme ve resampling'i iki ayrı, basit
-    # FFmpeg çağrısına ayırıyoruz. Böylece TTS hızlandırma mantığı değişmeden
-    # WAV çıktısı güvenilir biçimde üretiliyor.
     filtreler=[f"atempo={c}" for c in atempo_filtreleri]
     atempo_filter=",".join(filtreler)
     ara_dosya=gecici_dosya_yolu("atempo", "wav")
@@ -75,13 +70,6 @@ def sesi_hizlandir(giris_dosyasi: str, cikti_dosyasi: str, hiz_carpani: float, l
         temp_dosya_temizle(ara_dosya)
 
 def _ffprobe_yolu() -> str:
-    """ffprobe binary yolunu döndürür; yoksa boş string.
-
-    imageio_ffmpeg yalnızca ffmpeg'i paketler, ffprobe'yi değil. Eskiden
-    FFMPEG_BIN.replace("ffmpeg","ffprobe") var olmayan bir yola işaret edip
-    sessizce FileNotFoundError fırlatıyordu; bu yüzden tüm çözünürlük/FPS/kodek
-    bilgisi kayboluyordu. Artık yol gerçekten var mı diye kontrol ediyoruz.
-    """
     candidate = shutil.which("ffprobe")
     if candidate:
         return candidate
@@ -90,16 +78,7 @@ def _ffprobe_yolu() -> str:
         return candidate
     return ""
 
-
 def _parse_ffmpeg_stderr(stderr: str) -> dict:
-    """``ffmpeg -i`` stderr metninden akış bilgisini ayrıştırır (ffprobe yedeği).
-
-    ffprobe kullanılamadığında tek güvenilir kaynak ffmpeg'in açılış banner
-    çıktısıdır. Aşağıdaki gibi satırları işler:
-      Duration: 00:01:31.83, start: 0.000000, bitrate: 4908 kb/s
-      Stream #0:0(...): Video: h264 (...), yuv420p, 1080x1920 [...], 4908 kb/s, 30 fps, 30 tbr, 90k tbn
-      Stream #0:1(...): Audio: aac (LC), 48000 Hz, stereo, fltp, 127 kb/s
-    """
     out = {"duration": 0.0, "width": 0, "height": 0, "fps": 0.0, "video_codec": "",
            "video_bitrate": 0, "audio_sample_rate": 0, "audio_channels": 0,
            "audio_bitrate": 0, "audio_codec": ""}
@@ -107,59 +86,42 @@ def _parse_ffmpeg_stderr(stderr: str) -> dict:
 
     dm = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr)
     if dm:
-        try:
-            out["duration"] = int(dm.group(1)) * 3600 + int(dm.group(2)) * 60 + float(dm.group(3))
-        except Exception:
-            pass
+        try: out["duration"] = int(dm.group(1)) * 3600 + int(dm.group(2)) * 60 + float(dm.group(3))
+        except Exception: pass
 
     vline = next((l for l in stderr.splitlines() if " Video:" in l), "")
     if vline:
         cm = re.search(r"Video:\s*([A-Za-z0-9_]+)", vline)
-        if cm:
-            out["video_codec"] = cm.group(1)
-        # "Video: h264 ..., 1080x1920 ..." — satırdaki ilk WxH.
+        if cm: out["video_codec"] = cm.group(1)
         dm = re.search(r"(\d{2,5})x(\d{2,5})", vline)
-        if dm:
-            out["width"], out["height"] = int(dm.group(1)), int(dm.group(2))
+        if dm: out["width"], out["height"] = int(dm.group(1)), int(dm.group(2))
         fm = re.search(r"(\d+(?:\.\d+)?)\s*fps", vline)
-        if not fm:
-            fm = re.search(r"(\d+(?:\.\d+)?)\s*tbr", vline)
+        if not fm: fm = re.search(r"(\d+(?:\.\d+)?)\s*tbr", vline)
         if fm:
-            try:
-                out["fps"] = float(fm.group(1))
-            except Exception:
-                pass
+            try: out["fps"] = float(fm.group(1))
+            except Exception: pass
         bm = re.search(r"(\d+)\s*kb/s", vline)
         if bm:
-            try:
-                out["video_bitrate"] = int(bm.group(1)) * 1000
-            except Exception:
-                pass
+            try: out["video_bitrate"] = int(bm.group(1)) * 1000
+            except Exception: pass
 
     aline = next((l for l in stderr.splitlines() if " Audio:" in l), "")
     if aline:
         cm = re.search(r"Audio:\s*([A-Za-z0-9_]+)", aline)
-        if cm:
-            out["audio_codec"] = cm.group(1)
+        if cm: out["audio_codec"] = cm.group(1)
         hz = re.search(r"(\d+)\s*Hz", aline)
         if hz:
-            try:
-                out["audio_sample_rate"] = int(hz.group(1))
-            except Exception:
-                pass
+            try: out["audio_sample_rate"] = int(hz.group(1))
+            except Exception: pass
         chm = re.search(r"Hz,\s*(mono|stereo|\d+(?:\.\d+)?)", aline)
         if chm:
-            chmap = {"mono": 1, "stereo": 2, "2.1": 3, "3.0": 3, "4.0": 4,
-                     "5.0": 5, "5.1": 6, "6.1": 7, "7.1": 8}
+            chmap = {"mono": 1, "stereo": 2, "2.1": 3, "3.0": 3, "4.0": 4, "5.0": 5, "5.1": 6, "6.1": 7, "7.1": 8}
             out["audio_channels"] = chmap.get(chm.group(1), 0)
         bm = re.search(r"(\d+)\s*kb/s", aline)
         if bm:
-            try:
-                out["audio_bitrate"] = int(bm.group(1)) * 1000
-            except Exception:
-                pass
+            try: out["audio_bitrate"] = int(bm.group(1)) * 1000
+            except Exception: pass
     return out
-
 
 def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
     sonuc={"width":0,"height":0,"fps":0.0,"fps_rational":"","duration":0.0,"video_bitrate":0,"audio_sample_rate":0,"audio_channels":0,"audio_bitrate":0,"audio_codec":"","video_codec":""}
@@ -201,19 +163,13 @@ def _ffprobe_bilgi_al(dosya_yolu: str) -> dict:
         except Exception:
             pass
 
-    # ffprobe yoksa veya çözünürlük/FPS/kodek/süre bilgisi eksik kaldıysa,
-    # ffmpeg -i stderr'ini tek seferde ayrıştırıp eksik alanları tamamla. Bu,
-    # imageio_ffmpeg (yalnızca ffmpeg) kullanan ortamlarda medya_raporu'nun
-    # "? | ? FPS | ses yok" gibi yanlış/eksik bilgi göstermesini engeller.
     if not sonuc["width"] or not sonuc["height"] or not sonuc["fps"] \
             or sonuc["duration"] <= 0 or not sonuc["audio_sample_rate"]:
         try:
-            r = subprocess.run([FFMPEG_BIN, "-hide_banner", "-i", dosya_yolu],
-                               capture_output=True, text=True, timeout=30)
+            r = subprocess.run([FFMPEG_BIN, "-hide_banner", "-i", dosya_yolu], capture_output=True, text=True, timeout=30)
             parsed = _parse_ffmpeg_stderr(r.stderr or "")
             for k, v in parsed.items():
-                if not sonuc.get(k) and v:
-                    sonuc[k] = v
+                if not sonuc.get(k) and v: sonuc[k] = v
         except Exception:
             pass
     return sonuc
@@ -231,45 +187,27 @@ def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:
 def video_suresini_al(video_yolu: str) -> float:
     return float(_ffprobe_bilgi_al(video_yolu).get("duration",0.0))
 
-def _kalite_filtresi_olustur(input_bilgi: dict, log_ekle) -> tuple[str | None, int | None]:
-    """Kaynak çözünürlüğünü küçültmeden, hafif bir perceptual kalite geçişi hazırlar.
-
-    AI super-resolution (Real-ESRGAN) araştırıldı; ancak GitHub-hosted runner'da
-    GPU garantisi olmadığı için her videoda CPU tabanlı frame-by-frame inference
-    çalıştırmak pipeline süresini gereksiz yere uzatabilir. Bunun yerine final
-    render'da hafif Lanczos ölçekleme + kontrollü unsharp kullanıyoruz.
-    Bu gerçek detay üretmez; kaynak zaten düşükse sadece algılanan netliği artırır.
-    """
-    width=int(input_bilgi.get("width") or 0); height=int(input_bilgi.get("height") or 0)
-    if width<=0 or height<=0:
-        return None, None
-    # Telegram sıkıştırması nedeniyle beklenenden düşük bir kaynak gelirse
-    # 576x1024'e kontrollü Lanczos upscale yapılır; gerçek detay geri getirilemez.
-    target_w, target_h = 576, 1024
-    if width < target_w and height < target_h:
-        filtre=f"scale={target_w}:{target_h}:flags=lanczos,unsharp=5:5:0.30:5:5:0.0"
-        log_ekle(f"✨ Hafif kalite geçişi: {width}x{height} → {target_w}x{target_h} (Lanczos + kontrollü netlik)")
-        return filtre, target_w
-    # Normal kaynaklarda çözünürlüğü değiştirmeden sadece hafif netlik.
-    return "unsharp=5:5:0.30:5:5:0.0", width
+def _kalite_filtresi_olustur(input_bilgi: dict, log_ekle) -> tuple:
+    # unsharp mask ve lanczos upscale GitHub Actions CPU'sunu yorar ve render süresini uzatır.
+    # Instagram/Telegram zaten yükleme sırasında kendi keskinleştirmesini uygular.
+    # Python tarafında ikinci kez netlik eklemek hem zaman israfıdır hem de halo/artifact yaratır.
+    return None, None
 
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
-    """TTS'yi 1.20x sonrası gerçek süresiyle videoya tam senkronlar.
-
-    TTS hızı değişmez: SES_HIZ_CARPANI = 1.20x. Video, TTS'nin gerçek süresine
-    (yukarı yuvarlanmış saniye) göre hızlandırılır veya yavaşlatılır.
-    """
-    if not ses_yolu or not os.path.exists(ses_yolu):
-        return False
+    if not ses_yolu or not os.path.exists(ses_yolu): return False
     input_bilgi = medya_raporu(video_yolu, "INPUT", log_ekle)
     medya_raporu(ses_yolu, "TTS 1.20x SONRASI", log_ekle)
+
     video_sure = video_suresini_al(video_yolu)
     ses_sure = _ses_suresini_al(ses_yolu)
     if video_sure <= 0 or ses_sure <= 0:
         log_ekle("❌ Senkron için geçerli video/TTS süresi alınamadı.")
         return False
-    import math
+
+    # math.ceil korunuyor: Sesin doğal bitişini (decay/reverb tail) kesmemek için
+    # hedef süre yukarı yuvarlanır. Tam saniyede kesilirse ses ortadan kesilmiş gibi duyulur.
     hedef_sure = float(max(1, math.ceil(ses_sure)))
+
     video_hiz = video_sure / hedef_sure
     if video_hiz > MAKS_VIDEO_HIZLANDIRMA:
         video_hiz = MAKS_VIDEO_HIZLANDIRMA
@@ -279,13 +217,15 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
         video_hiz = MIN_VIDEO_YAVASLATMA
         hedef_sure = video_sure / video_hiz
         log_ekle(f"⚠️ TTS çok uzun; video yavaşlatma sınırı {MIN_VIDEO_YAVASLATMA:.2f}x uygulandı.")
+
     speed_filter = f"setpts=PTS/{video_hiz:.8f}"
     hareket = 'hızlandırma' if video_hiz > 1.001 else 'yavaşlatma' if video_hiz < 0.999 else '1:1'
     log_ekle(f"🎚️ VIDEO-TTS SENKRONU: video {video_sure:.2f}s + TTS {ses_sure:.2f}s → hedef {hedef_sure:.2f}s | video hızı {video_hiz:.3f}x ({hareket}).")
+
     kalite_filtresi, _ = _kalite_filtresi_olustur(input_bilgi, log_ekle)
     video_filtresi = speed_filter
-    if kalite_filtresi:
-        video_filtresi = f"{video_filtresi},{kalite_filtresi}"
+    if kalite_filtresi: video_filtresi = f"{video_filtresi},{kalite_filtresi}"
+
     output_fps = input_bilgi.get("fps") or 30.0
     komut = [FFMPEG_BIN, "-y", "-i", video_yolu, "-i", ses_yolu, "-filter:v", video_filtresi, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", str(VIDEO_CRF), "-pix_fmt", "yuv420p", "-r", f"{output_fps:.6f}", "-af", "apad", "-c:a", "aac", "-ar", str(FINAL_AUDIO_SAMPLE_RATE), "-ac", str(SES_KANAL), "-b:a", FINAL_AUDIO_BITRATE, "-t", f"{hedef_sure:.6f}", cikti_yolu]
     try:
@@ -300,9 +240,4 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
         return False
 
 def _ses_suresini_al(dosya_yolu: str) -> float:
-    try:
-        r=subprocess.run([FFMPEG_BIN,"-i",dosya_yolu],capture_output=True,text=True,timeout=30)
-        m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr or "")
-        if m: return int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3))
-    except Exception: pass
-    return 0.0
+    return float(_ffprobe_bilgi_al(dosya_yolu).get("duration", 0.0))
