@@ -387,7 +387,7 @@ def _explicit_voice_mode_from_notes(notes):
     if re.search(r"\b(sen\s+seç|ai.{0,20}karar\s+ver|içeriğe\s+göre\s+seç|videoya\s+göre\s+seç)\b", text):
         return ""
 
-    duo_pattern = r"\b(duo|dual|iki\s+ses(?:li)?|çift\s+ses(?:li)?)\b"
+    duo_pattern = r"\b(duo|iki\s+ses(?:li)?|çift\s+ses(?:li)?)\b"
     solo_pattern = r"\b(solo|tek\s+ses(?:li)?)\b"
     duo_negated = bool(re.search(duo_pattern + r".{0,18}\b(olmasın|istemiyorum|isteme)\b", text))
     solo_negated = bool(re.search(solo_pattern + r".{0,18}\b(olmasın|istemiyorum|isteme)\b", text))
@@ -581,7 +581,7 @@ def _ses_sure_uyumlu_mu(ses_dosyasi, video_suresi):
     return VOICE_DURATION_MIN_RATIO <= oran <= VOICE_DURATION_MAX_RATIO, ses_suresi, oran
 
 
-def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, legacy_voice, log, baslangic_talimati=""):
+def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, legacy_voice, log, baslangic_talimati="", ses_modu_notlari=None):
     ek_talimat = baslangic_talimati or ""
     son_reels={}; son_model='hata'; son_duo_plan={}; son_duo_script={}; son_ses=''; son_info=None; son_mod='LEGACY'
     mod_karari = _mod_karari_al(editorial_state)
@@ -593,7 +593,7 @@ def _reels_ve_ses_uyumlu_uret(router, editorial_state, fact_state, video_state, 
         adet,hedef,minimum,maksimum=_reels_kelime_kontrolu(reels_state,sure_saniye,KELIME_HIZI_ORANI)
         log(f'📝 Seslendirme uzunluk kontrolü: {adet} kelime | hedef {hedef} | izin verilen {minimum}-{maksimum}')
 
-        duo_plan=_duo_plan_hazirla(reels_state,sure_saniye,ton,notes=notes)
+        duo_plan=_duo_plan_hazirla(reels_state,sure_saniye,ton,notes=notes if ses_modu_notlari is None else ses_modu_notlari)
         log('🗣️ Konuşma metni hazırlanıyor...' if deneme==0 else f'🗣️ Konuşma metni yenileniyor ({deneme}/{VOICE_REGEN_MAX})...')
         duo_script=_duo_script_calistir(router,duo_plan,editorial_state,fact_state,video_state,log)
         son_duo_plan,son_duo_script=duo_plan,duo_script
@@ -694,10 +694,10 @@ def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,capti
     return result, model
 
 
-def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction='',production_notes=''):
+def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction='',production_notes='',ses_modu_notlari=None):
     qa_state={}; qa_rounds=0; ses_basarili=False; kullanilan_ses_modeli=None; ses_modu='LEGACY'; ses_dosyasi=''
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi=_reels_ve_ses_uyumlu_uret(
-        router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=voice_initial_instruction
+        router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=voice_initial_instruction,ses_modu_notlari=ses_modu_notlari
     )
     caption_state,model_caption,threads_state,model_threads=_sosyal_ciktilari_paralel_uret(
         router,reels_state,fact_state,editorial_state,video_state,log,ton
@@ -747,7 +747,7 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
 
         if creative_needed:
             reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi=_reels_ve_ses_uyumlu_uret(
-                router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=instruction
+                router,editorial_state,fact_state,video_state,production_notes,sure_saniye,ton,legacy_voice,log,baslangic_talimati=instruction,ses_modu_notlari=ses_modu_notlari
             )
         elif duo_needed:
             duo_script,ses_basarili,duo_info,ses_modu=_duo_ve_ses_yenile(router,reels_state,duo_plan,editorial_state,fact_state,video_state,sure_saniye,legacy_voice,log,instruction)
@@ -891,11 +891,11 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     _ilerleme(ilerlemeyi_guncelle,2,'🔎 Research / Fact Lock'); fact_state,_=_research_calistir(router,video_state,log_ekle); state['fact_state']=fact_state
     _ilerleme(ilerlemeyi_guncelle,3,'🧠 Editorial Brain'); editorial_state,_=_editorial_calistir(router,video_state,fact_state,metin,log_ekle,icerik_tonu)
     log_ekle('🎚️ Anlatım modu belirleniyor (tek ses / çift ses)...')
-    editorial_state=_anlatim_modu_karari_ekle(router,video_state,fact_state,editorial_state,sure_saniye,icerik_tonu,metin,log_ekle)
+    editorial_state=_anlatim_modu_karari_ekle(router,video_state,fact_state,editorial_state,sure_saniye,icerik_tonu,'',log_ekle)
     state['editorial_state']=editorial_state; state['anlatim_modu_karari']=_mod_karari_al(editorial_state)
     _ilerleme(ilerlemeyi_guncelle,4,'🎙️ Reels Creative'); legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce,str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,threads_state,qa_state,qa_rounds,model_caption,model_threads,qa_pass=_qa_regeneration_loop(
-        router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle, production_notes=metin
+        router,video_state,fact_state,editorial_state,{}, {},{}, {},{},sure_saniye,icerik_tonu,legacy_voice,log_ekle, production_notes=metin, ses_modu_notlari=''
     )
     state['reels_state']=reels_state; state['duo_plan']=duo_plan; state['duo_script']=duo_script; state['ses_modu']=ses_modu; state['qa_regeneration_rounds']=qa_rounds; state['qa_pass']=qa_pass
     state['caption_state']=_caption_state_normalize(caption_state); state['threads_state']=_threads_state_normalize(threads_state); state['qa_state_final']=qa_state
