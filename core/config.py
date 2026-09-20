@@ -5,13 +5,14 @@ API_KEYS = {}
 _single_key = os.environ.get("GEMINI_API_KEY", "").strip()
 if _single_key:
     API_KEYS["GEMINI_API_KEY"] = _single_key
-
-# Gereksiz split işlemi temizlendi. Sadece 1'den 20'ye kadar olan env'leri oku.
+for _i, _key in enumerate(os.environ.get("GEMINI_API_KEYS", "").split(","), 1):
+    _key = _key.strip()
+    if _key:
+        API_KEYS.setdefault(f"GEMINI_API_KEY_{_i}", _key)
 for _i in range(1, 21):
     _key = os.environ.get(f"GEMINI_API_KEY_{_i}", "").strip()
     if _key:
-        API_KEYS[f"GEMINI_API_KEY_{_i}"] = _key
-
+        API_KEYS.setdefault(f"GEMINI_API_KEY_{_i}", _key)
 if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
