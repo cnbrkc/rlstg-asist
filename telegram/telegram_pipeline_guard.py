@@ -96,14 +96,21 @@ def _split_for_speakers(text, conversation_map):
     ]
 
 
-def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, legacy_voice, log, baslangic_talimati=""):
-    """Exactly one Reels text call + one TTS call in the normal path."""
+def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state, notes, sure_saniye, ton, legacy_voice, log, baslangic_talimati="", ses_modu_notlari=None):
+    """Exactly one Reels text call + one TTS call in the normal path.
+
+    ses_modu_notlari: core/pipeline.py._reels_ve_ses_uyumlu_uret ile ayni
+    sozlesmeyi takip eder. AI'nin ayri sorguda verdigi tek/cift ses
+    karari bu parametreyle tasinir; verilmemisse (None) genel `notes`
+    kullanilir (geriye donuk uyumluluk).
+    """
     reels_state, model_reels = _original_reels_creative(
         router, editorial_state, fact_state, video_state, notes, sure_saniye,
         ton, log, KELIME_HIZI_ORANI, ek_talimat=baslangic_talimati or ""
     )
     reels_state = _pipeline._object_state_or_empty(reels_state)
-    duo_plan = _pipeline._duo_plan_hazirla(reels_state, sure_saniye, ton, notes=notes)
+    duo_plan_notes = notes if ses_modu_notlari is None else ses_modu_notlari
+    duo_plan = _pipeline._duo_plan_hazirla(reels_state, sure_saniye, ton, notes=duo_plan_notes)
     mode = str(duo_plan.get("mode") or duo_plan.get("uygunluk") or reels_state.get("anlatim_modu") or "DUO").upper()
     conversation_map = duo_plan.get("conversation_map") or []
 
@@ -124,7 +131,7 @@ def _single_pass_reels_and_tts(router, editorial_state, fact_state, video_state,
             regeneration_instruction=""
         )
         segments = duo_script.get("segments") or []
-        
+
         # Eğer diyalog üretimi başarısız olmuşsa, kural tabanlı eski bölme mekanizmasını
         # yedek (fallback) olarak devreye alıp sistemi çökmeden kurtarıyoruz!
         if not segments:
