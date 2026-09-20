@@ -2,9 +2,14 @@ from typing import Any, Dict, List
 from duo.duo_strategy import normalize_duo_strategy
 
 # TEST VE ESKİ BAĞIMLILIKLAR İÇİN KÖPRÜ (WRAPPER)
-# Test dosyaları bu fonksiyonu aradığı için silmedik, sadece yeni mimariye bağladık.
 def normalize_conversation_map(strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
-    fake_reels_state = {"duo_stratejisi": strategy, "konusma_haritasi": strategy.get("conversation_map", []), "_explicit_voice_mode": strategy.get("mode", "")}
+    # Testler strategy'yi doğrudan veriyor, onu reels_state formatına çeviriyoruz
+    fake_reels_state = {
+        "duo_stratejisi": strategy,
+        "konusma_haritasi": strategy.get("conversation_map") or strategy.get("konusma_haritasi", []),
+        "_explicit_voice_mode": strategy.get("mode") or strategy.get("anlatim_modu", ""),
+        "anlatim_modu": strategy.get("anlatim_modu", "")
+    }
     normalized = normalize_duo_strategy(fake_reels_state)
     return normalized.get("conversation_map", [])
 
