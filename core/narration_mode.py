@@ -211,6 +211,9 @@ def mod_kilidini_uygula(reels_state, karar):
     strateji = reels.get("duo_stratejisi")
     strateji = dict(strateji) if isinstance(strateji, dict) else {}
     strateji["uygunluk"] = mod
+    gerekce = str((karar or {}).get("reason") or "").strip()
+    if gerekce:
+        strateji["rationale"] = f"[{mod}] {gerekce}"
 
     if mod != "DUO":
         ses = _konusmaci(mod)
