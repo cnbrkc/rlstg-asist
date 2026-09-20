@@ -17,53 +17,47 @@ if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
 
-# GÜNCEL MODELLER (Ağustos 2026) - 404 veren eski lite sürümleri kaldırıldı.
-# 3.x serisi güncel, stabil ve hızlı olduğu için önceliklendirildi.
+# GÜNCEL MODELLER (Eylül 2026) - Ücretli olan Pro modelleri ve limiti düşük olanlar çıkarıldı.
+# Sadece ücretsiz (Free Tier) API'de yüksek limitli çalışan Flash serisi bırakıldı.
+
 VIDEO_ANALIZ_MODELLERI = [
     "gemini-3.8-flash",
-    "gemini-3.1-pro",
-    "gemini-3.5-flash-lite",
     "gemini-3.7-flash", 
     "gemini-3.6-flash", 
-    "gemini-3.5-flash", 
-    "gemini-3.1-pro-preview", 
-    "gemini-2.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", 
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash"
 ]
 
 METIN_MODELLERI = [
     "gemini-3.8-flash",
-    "gemini-3.1-pro",
-    "gemini-3.5-flash-lite",
     "gemini-3.7-flash", 
     "gemini-3.6-flash", 
-    "gemini-3.5-flash", 
-    "gemini-3.1-pro-preview", 
-    "gemini-2.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", 
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash"
 ]
 
 ARAMA_MODELLERI = [
     "gemini-3.8-flash",
-    "gemini-3.1-pro",
-    "gemini-3.5-flash-lite",
     "gemini-3.7-flash", 
     "gemini-3.6-flash", 
-    "gemini-3.5-flash", 
-    "gemini-3.1-pro-preview", 
-    "gemini-2.5-pro",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", 
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash"
 ]
 
 SES_MODELLERI = [
     # gemini-3.1-flash-tts-preview bu kodun gönderdiği multi-speaker/prebuilt
     # voice config'iyle sürekli 400 (model_config) hatası veriyor; bu yüzden
-    # çalışan gemini-2.5-flash-preview-tts önceliklendirildi. (Kalıcı ban
-    # mekanizması zaten 3.1-flash-tts-preview'i ilk hatadan sonra atlar, ancak
-    # her çalışmanın ilk TTS çağrısındaki boş denemeyi de böyle önlemiş oluyoruz.)
+    # çalışan gemini-2.5-flash-preview-tts önceliklendirildi.
     "gemini-2.5-flash-preview-tts",
     "gemini-3.1-flash-tts-preview",
 ]
+
 
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
 COOLDOWN_DIGER = 5 * 60
