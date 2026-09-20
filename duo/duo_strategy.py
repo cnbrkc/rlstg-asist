@@ -60,11 +60,13 @@ def normalize_duo_strategy(reels_state):
         if not emotion: emotion = "natural"
         requested_speaker = str(item.get("speaker") or "").strip().lower()
         
-        # TESTİN BEKLEDİĞİ: SOLO modda yanlış speaker'ı tamamen filtrele
-        if requested_speaker not in allowed_speakers:
-            continue
+        # TESTİN BEKLEDİĞİ: SOLO modda yanlış speaker'ı silmek yerine izin verilen speaker'a çevir
+        if requested_speaker in allowed_speakers:
+            speaker = requested_speaker
+        else:
+            # Eğer speaker geçersizse, izin verilen speaker'a çevir (SOLO modda solo_speaker)
+            speaker = solo_speaker if solo_speaker else "female"
             
-        speaker = requested_speaker
         segments.append({"sira": len(segments) + 1, "speaker": speaker, "amac": purpose, "detay": detail, "duygu": emotion})
 
     if not segments: segments = _duo_scaffold() if mode == "DUO" else _solo_scaffold(solo_speaker)
