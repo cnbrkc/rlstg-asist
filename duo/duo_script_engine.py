@@ -3,9 +3,16 @@ import re
 from typing import Any, Dict, List
 from duo.duo_script import validate_script_segments
 
+# GÜÇLENDİRİLDİ: Karakterler daha keskin, daha tatlı-sert.
 CHARACTER_ROLES = {
-    "female": {"name": "Autonoe", "role": "eş/partner karakteri; söyleneni hemen satın almayan, günlük kullanım ve para karşılığını zekice test eden, gerektiğinde kuru mizahla açık yakalayan doğal konuşmacı"},
-    "male": {"name": "Charon", "role": "eş/partner karakteri; otomobil bilgisini gösteriş için değil iddiasını kanıtlamak için kullanan, itiraz gelince savunmaya geçmek yerine nüansı kabul edip asıl noktayı açan doğal konuşmacı"},
+    "female": {
+        "name": "Autonoe", 
+        "role": "Eş/partner karakteri; söyleneni hemen satın almayan, günlük kullanım ve para karşılığını zekice test eden, gerektiğinde kuru mizahla açık yakalayan, erkek karakterin iddialarına şüpheyle yaklaşan doğal konuşmacı. 'Gerçekten mi?' tavrıyla çekişme yaratır."
+    },
+    "male": {
+        "name": "Charon", 
+        "role": "Eş/partner karakteri; otomobil bilgisini gösteriş için değil iddiasını kanıtlamak için kullanan, itiraz gelince hafif alaycı ama saygılı bir tavırla karşılık veren, 'bak şimdi açıklayayım' diyen doğal konuşmacı. Karşı tarafın şüphelerini çürütmeye çalışır."
+    },
 }
 
 def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -54,7 +61,8 @@ def build_duo_generation_contract(plan: Dict[str, Any]) -> Dict[str, Any]:
             "Yalnızca planlanmış speaker'ları kullan.", "Fact Lock dışına çıkma; kullanıcı notunu değiştirme.",
             "Karakterler yalnız sırayla bilgi sunmasın; öncekinin belirli iddiasını yakalayıp karşılık versin.",
             "Hook-friction-proof-reversal-payoff omurgası kur; hook vaadini ortada kanıtla ve kapanışta karşılığını ver.",
-            "En az bir anlamlı itiraz ve en az bir hak verme/fikir yumuşatma dönüşü bulunsun; sahte kavga üretme.",
+            "En az bir anlamlı itiraz ve en az bir hak verme/fikir yumuşatma dönüşü bulunsun.",
+            "TATLI-SERT ATIŞMA: Karakterler birbirine saygılı ama hafif alaycı olsun. 'Gerçekten mi?', 'Emin misin?', 'Bak şimdi açıklayayım' gibi ifadeler kullanılsın. Çekişme doğal ve eğlenceli olsun.",
             "İki makul tercih tarafı oluşabiliyorsa fiyat-değer, teknik-pratik veya tasarım-kullanım ekseninde ölçülü gerilim kur.",
             "Replik uzunluklarını ve speaker akışını asimetrik tut; eşit ölçülü düet kadansı üretme.",
             "Gereksiz ping-pong, röportaj tipi soru-cevap ve aynı fikrin tekrarını engelle.",
@@ -81,17 +89,23 @@ def build_generation_prompt(contract: Dict[str, Any], editorial_context: str = "
         "HEDEF: İzleyicinin hazırlanmış iki sesli metin değil, arabaya bakarken kayda yakalanmış iki zeki partnerin "
         "kısa ve akışkan muhabbetini duyduğu hissi. Diyalog viral kısa video temposunda ilerlesin; yapay tiyatro, "
         "podcast sunuculuğu, haber spikerliği, şarkıcı düeti ve iki kişinin aynı ritimde sırayla cümle okuması kesinlikle olmasın.\n\n"
+        "ÜSLUP: Tatlı-sert, doğal, hafif alaycı. Karakterler birbirine saygılı ama şüpheci. 'Gerçekten mi?', 'Emin misin?', 'Bak şimdi açıklayayım' gibi ifadeler kullanılsın. Çekişme eğlenceli olsun, kavgacı değil.\n\n"
         "MUTLAK KURALLAR:\n"
         "1. COLD OPEN: Selam, konu tanıtımı yok. İlk speaker en güçlü Türkiye ilgi kancasını net ve yarım bırakılmış bir iddia/çelişkiyle açsın.\n"
         "2. HOOK → FRICTION → PROOF → REVERSAL → PAYOFF omurgası kur.\n"
         "3. LEXICAL UPTAKE: İlk tur dışındaki repliklerin çoğu önceki replikteki somut bir iddia, rakam veya kelimeyi gerçekten yakalasın.\n"
         "4. ASİMETRİK RİTİM: Replikler eşit uzunlukta olmasın. Otomatik kadın-erkek-kadın-erkek salınımı yasak.\n"
-        "5. GERÇEK SÜRTÜŞME: Fact Lock'un desteklediği eksenlerden yalnız birini seç.\n"
-        "6. İNSANİ DÖNÜŞ: En az bir speaker konuşmanın ortasında karşı tarafın bir noktasına hak versin.\n"
+        "5. GERÇEK SÜRTÜŞME: Fact Lock'un desteklediği eksenlerden yalnız birini seç. Karakterler birbirine şüpheyle yaklaşsın, hafif alaycı olsun.\n"
+        "6. İNSANİ DÖNÜŞ: En az bir speaker konuşmanın ortasında karşı tarafın bir noktasına hak versin ama bu 'tamam sen kazandın' değil, 'o kısmı doğru ama...' şeklinde olsun.\n"
         "7. MİKRO REAKSİYON: En fazla 1-2 kısa backchannel kullanılabilir.\n"
         "8. HER TUR İLERLESİN: Önceki bilgiyi başka kelimelerle tekrar etme.\n"
         "9. KAPANIŞ: Son replik açılıştaki kelimeye/fikre callback yaparak enerjiyi yukarıda bıraksın.\n"
-        "10. KONUŞMA HARİTASI: Haritayı ilham ve bilgi sırası olarak kullan; mekanik olarak bire bir seslendirme zorunluluğu yok.\n"
+        "10. KONUŞMA HARİTASI: Haritayı ilham ve bilgi sırası olarak kullan; mekanik olarak bire bir seslendirme zorunluluğu yok.\n\n"
+        "ÖRNEK ATIŞMA ÜSLUBU:\n"
+        "F: 'Bu araba 600 beygir ama 4 saniyede yüze çıkıyormuş, ciddi mi?'\n"
+        "M: 'Ciddi. Ama senin için önemli olan o değil, yakıt faturası.'\n"
+        "F: 'Yakıt faturası mı? Elektrikli bu.'\n"
+        "M: 'İşte orada yanılıyorsun. Şarj maliyeti...'\n\n"
         f"{tone_rule}{length_rule}\n"
         f"SÖZLEŞME:\n{contract_json}\n\n"
         f"EDITORIAL CONTEXT:\n{editorial_context}\n\n"
