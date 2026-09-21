@@ -34,6 +34,8 @@ class _FakeModels:
             raise Exception("503 Service Unavailable")
         if behavior == "quota":
             raise Exception("429 RESOURCE_EXHAUSTED quota exceeded")
+        if behavior == "quota_day":
+            raise Exception("429 RESOURCE_EXHAUSTED GenerateRequestsPerDayPerProjectPerModel-FreeTier")
         if behavior == "404":
             raise Exception("404 not_found model not found")
         if behavior == "model_config":
@@ -277,3 +279,54 @@ class FreeTierPerKeyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlowAndDailyQuotaTests(unittest.TestCase):
+    """Timeout/yavaş model sona atılır (silinmez); günlük kota çalışma boyunca atlanır."""
+
+    def test_slow_model_moved_to_end_not_removed(self):
+        import core.router as r
+        old = r.SLOW_ATTEMPT_SECONDS
+        r.SLOW_ATTEMPT_SECONDS = 0  # her geçici hata "yavaş" sayılsın
+        try:
+            router = _router_with_keys(["k0", "k1", "k2"])
+            behavior = {"m-slow": "503", "m-ok": "ok"}
+            router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1", "k2")}
+            router._make_request(["m-slow", "m-ok"], "x", None, lambda *a: None, require_text=True)
+            # 2 yavaş denemeden sonra 3. key atlanır.
+            self.assertEqual(router.clients["k2"].models.calls.count("m-slow"), 0)
+
+            # Sonraki istekte m-ok önce denenir; m-slow hiç denenmez (m-ok başarılı).
+            router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1", "k2")}
+            _, info = router._make_request(["m-slow", "m-ok"], "x", None, lambda *a: None, require_text=True)
+            self.assertTrue(info.endswith("m-ok"))
+            self.assertEqual(router.clients["k0"].models.calls.count("m-slow"), 0)
+
+            # m-ok da düşerse m-slow yine son çare olarak denenir (silinmedi).
+            behavior2 = {"m-slow": "ok", "m-ok": "503"}
+            router.clients = {m: _FakeClient(behavior2) for m in ("k0", "k1", "k2")}
+            _, info = router._make_request(["m-slow", "m-ok"], "x", None, lambda *a: None, require_text=True)
+            self.assertTrue(info.endswith("m-slow"))
+        finally:
+            r.SLOW_ATTEMPT_SECONDS = old
+
+    def test_daily_quota_skipped_on_next_request(self):
+        router = _router_with_keys(["k0", "k1"])
+        behavior = {"m-day": "quota_day", "m-ok": "ok"}
+        router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1")}
+        router._make_request(["m-day", "m-ok"], "x", None, lambda *a: None, require_text=True)
+        self.assertEqual(router.clients["k0"].models.calls.count("m-day"), 1)
+
+        router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1")}
+        _, info = router._make_request(["m-day", "m-ok"], "x", None, lambda *a: None, require_text=True)
+        self.assertTrue(info.endswith("m-ok"))
+        self.assertEqual(router.clients["k0"].models.calls.count("m-day"), 0)
+        self.assertEqual(router.clients["k1"].models.calls.count("m-day"), 0)
+
+    def test_minute_quota_still_retried_every_request(self):
+        router = _router_with_keys(["k0"])
+        behavior = {"m-q": "quota", "m-ok": "ok"}
+        for _ in range(2):
+            router.clients = {"k0": _FakeClient(behavior)}
+            router._make_request(["m-q", "m-ok"], "x", None, lambda *a: None, require_text=True)
+            self.assertEqual(router.clients["k0"].models.calls.count("m-q"), 1)
