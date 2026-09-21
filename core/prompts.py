@@ -61,7 +61,7 @@ def editorial_promptunu_olustur(icerik_tonu=None):
     return _oku("editorial_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Editorial Brain")
 
 def _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani=None):
-    oran = float(kelime_hizi_orani or 2.4)
+    oran = float(kelime_hizi_orani or 2.9)
     yuvarlama = 5
     hedef = max(5, int(round((float(sure_saniye or 30) * oran) / yuvarlama) * yuvarlama))
     minimum = max(5, int(round(hedef * 0.90)))
