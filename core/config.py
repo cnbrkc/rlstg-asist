@@ -21,29 +21,29 @@ if not API_KEYS:
 # Sadece ücretsiz (Free Tier) API'de yüksek limitli çalışan Flash serisi bırakıldı.
 
 VIDEO_ANALIZ_MODELLERI = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash", 
-    "gemini-3.6-flash", 
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite", 
+    "gemini-3.8-flash",
+    "gemini-3.6-flash", 
+    "gemini-3.7-flash", 
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ]
 
 METIN_MODELLERI = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash", 
-    "gemini-3.6-flash", 
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite", 
+    "gemini-3.8-flash",
+    "gemini-3.6-flash", 
+    "gemini-3.7-flash", 
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ]
 
 ARAMA_MODELLERI = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash", 
-    "gemini-3.6-flash", 
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite", 
+    "gemini-3.8-flash",
+    "gemini-3.6-flash", 
+    "gemini-3.7-flash", 
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ]
 
