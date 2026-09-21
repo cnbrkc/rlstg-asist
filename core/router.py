@@ -22,6 +22,14 @@ from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya
 
 REQUEST_TIMEOUT_MS = 60_000
 
+# Bir deneme bu süreden uzun sürüp hata verirse (timeout/yavaş 503) model "yavaş"
+# sayılır: SİLİNMEZ, yalnızca 3 dk boyunca listenin sonuna atılır.
+SLOW_ATTEMPT_SECONDS = 30
+SLOW_MODEL_COOLDOWN = 180
+SLOW_HITS_BEFORE_NEXT_MODEL = 2
+# Günlük kota (PerDay) o gün geri gelmez; bu çalışma boyunca atlanır.
+DAILY_QUOTA_COOLDOWN = 6 * 60 * 60
+
 # ---
 # Yönlendirme felsefesi (kullanıcı talebi):
 # Geçici (503 / kota / zaman aşımı) hatalarda BEKLEME veya dakikalarca yasaklama
@@ -44,6 +52,7 @@ class SmartRouter:
         #   "*+{model}"        -> model düzeyi (404 / bozuk config)
         #   "{mail}+{model}"   -> key düzeyi (free-tier)
         self.blacklist = {}
+        self._slow_models = {}
         self.clients = {}
         self.request_counter = 0
         self._request_counter_lock = threading.Lock()
@@ -79,6 +88,18 @@ class SmartRouter:
             bl.pop(key, None)
         return False
 
+    def _mark_slow(self, model: str) -> None:
+        self._slow_models[model] = time.time() + SLOW_MODEL_COOLDOWN
+
+    def _is_slow(self, model: str) -> bool:
+        until = self._slow_models.get(model)
+        if until is None:
+            return False
+        if time.time() < until:
+            return True
+        self._slow_models.pop(model, None)
+        return False
+
     def _is_key_banned(self, mail: str, model: str) -> bool:
         """Yalnızca bu key'e özel yasağı kontrol eder (ör. free-tier)."""
         now = time.time()
@@ -97,6 +118,8 @@ class SmartRouter:
         if "limit: 0" in m or 'limit\\": 0' in m:
             return "free_tier_yok", COOLDOWN_FREE_TIER_YOK
         if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
+            if "perday" in m.replace(" ", "").replace("_", ""):
+                return "quota_day", DAILY_QUOTA_COOLDOWN
             return "quota", 0
         if "400" in m or "invalid_argument" in m or "unsupported" in m:
             return "model_config", COOLDOWN_BULUNAMADI
@@ -124,6 +147,10 @@ class SmartRouter:
     ):
         son_hata = None
         modeller = list(model_listesi or [])
+        # Yakın zamanda yavaş/timeout veren modeller silinmez, yalnızca sona atılır.
+        modeller = [m for m in modeller if not self._is_slow(m)] + [m for m in modeller if self._is_slow(m)]
+        # Search araçlı isteklerde gelen kota hatası aracın kotası olabilir; günlük yasağı bunlara uygulama.
+        has_tools = bool(getattr(config, "tools", None))
         request_started = time.perf_counter()
         # Caption ve Threads bağımsız kolları eşzamanlı çalışabilir. Log request
         # kimlikleri yarışıp aynı numarayı almasın diye yalnız bu küçük sayaç
@@ -143,6 +170,7 @@ class SmartRouter:
             if self._is_model_banned(model_adi):
                 continue
             log_ekle(f"🧠 Model deneniyor: {model_adi}")
+            slow_hits = 0
 
             for mail, _api_key in self._ordered_api_items():
                 # Bu key'e özel kalıcı yasak (free-tier) → bu key'i atla, diğer
@@ -166,10 +194,14 @@ class SmartRouter:
                     attempt_elapsed = time.perf_counter() - attempt_started
                     scope, cooldown = self._parse_hata(str(e))
 
-                    if scope == "quota":
+                    if scope in ("quota", "quota_day"):
                         # Kota key'e özeldir ve dolar; beklemeden diğer key.
                         if stop_on_quota:
                             raise
+                        if scope == "quota_day" and not has_tools:
+                            self._ban(mail, model_adi, cooldown, "combo")
+                            log_ekle(f"🚫 {mail}+{model_adi}: günlük kota bitti; bu çalışma boyunca atlanacak. | {attempt_elapsed:.2f}s")
+                            continue
                         log_ekle(f"⚠️ {mail}+{model_adi}: kota dolu; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
                         continue
                     if scope == "free_tier_yok":
@@ -188,6 +220,12 @@ class SmartRouter:
                     # (tüm key'ler) tamamlanmadan diğer modele geçilmez; bir
                     # sonraki pipeline adımında bu model yeniden fresh denenir.
                     log_ekle(f"⚠️ {mail}+{model_adi}: {self._reason_for(scope)}; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
+                    if attempt_elapsed >= SLOW_ATTEMPT_SECONDS:
+                        self._mark_slow(model_adi)
+                        slow_hits += 1
+                        if slow_hits >= SLOW_HITS_BEFORE_NEXT_MODEL:
+                            log_ekle(f"⏱️ {model_adi}: {slow_hits} yavaş deneme; kalan key'ler atlanıp sıradaki modele geçiliyor.")
+                            break
                     continue
 
                 attempt_elapsed = time.perf_counter() - attempt_started
