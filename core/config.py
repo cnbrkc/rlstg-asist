@@ -27,7 +27,6 @@ VIDEO_ANALIZ_MODELLERI = [
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite", 
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash"
 ]
 
 METIN_MODELLERI = [
@@ -37,7 +36,6 @@ METIN_MODELLERI = [
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite", 
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash"
 ]
 
 ARAMA_MODELLERI = [
@@ -47,7 +45,6 @@ ARAMA_MODELLERI = [
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite", 
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash"
 ]
 
 SES_MODELLERI = [
