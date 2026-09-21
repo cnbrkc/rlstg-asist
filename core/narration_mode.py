@@ -58,7 +58,8 @@ TEK SES uygun olur, eğer:
 - Video kısaysa (15 saniye ve altı),
 - Diyalog zorlama ya da yapay skeç gibi duracaksa.
 
-TEK SES seçtiysen kadın mı erkek mi: Mühendislik, performans ve sakin otorite ağırlıklıysa SOLO_MALE; merak, tasarım, yaşam tarzı ve hikâye ağırlıklıysa SOLO_FEMALE.
+TEK SES seçtiysen kadın mı erkek mi: VARSAYILAN SEÇİM SOLO_FEMALE'dir. Yalnızca içerik çok ağır teknik, mühendislik veya performans odaklıysa VE kadın sesinin bu tonla uyumsuz olacağı kesinse SOLO_MALE seç. Aksi halde her zaman SOLO_FEMALE kullan. Otomobil içeriği olması tek başına SOLO_MALE gerekçesi değildir.
+
 
 ÖNEMLİ:
 - Sırf iki ses "daha canlı" görünüyor diye DUO seçme. DUO'yu yalnızca ikinci sesin bu içeriğe somut katkısını adlandırabiliyorsan seç.
