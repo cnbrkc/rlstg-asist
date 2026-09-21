@@ -1,6 +1,6 @@
 # otoXtra Reels & Telegram Asistanı — Güncel Mimari Şema
 
-> Son güncelleme: 21 Ağustos 2026
+> Son güncelleme: 21 Eylül 2026
 >
 > Bu belge üretimdeki gerçek kod akışını, veri sözleşmelerini ve güvenlik kurallarını açıklar.
 
@@ -181,6 +181,8 @@ Türkiye ilgi önceliği “her zaman fiyat” şeklinde kör bir kural değildi
 3. 404 veya desteklenmeyen model/config hatasında modeli geçici blacklist'e alır.
 4. Free-tier desteği olmayan key/model kombinasyonunu key bazında atlar.
 5. Search rotası başarısız olduğunda Search'siz structured-output fallback'i dener.
+6. Günlük kota (`PerDay`) biten key+model çifti o çalışma boyunca atlanır (Search araçlı isteklerde uygulanmaz); dakikalık kota her istekte yeniden denenir.
+7. 30 sn'den uzun süren hatalı deneme (timeout) modeli 3 dk boyunca listenin sonuna atar (silmez); aynı modelde 2 yavaş denemeden sonra kalan key'ler atlanıp sıradaki modele geçilir.
 
 API key değerleri loglanmaz; yalnızca `GEMINI_API_KEY_1` gibi alias'lar görünür.
 
