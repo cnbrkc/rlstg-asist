@@ -44,25 +44,26 @@ BAĞLAM:
 - Video süresi: yaklaşık {sure_saniye} saniye
 - İçerik türü: {ton}
 
-KARAR MANTIĞI:
+KARARI NASIL VERECEKSİN:
+Ölçüt izleyicinin ilk 3 saniyede kalması, videoyu sonuna kadar izlemesi, tekrar izlemesi, yorum yapması ve paylaşmasıdır.
+
 DUO uygun olur, eğer:
-- İçerikte gerçek bir zıtlık, soru-cevap veya doğal bir tartışma potansiyeli varsa,
-- Şaşırtıcı bir bilgiye verilen tepki videoyu güçlendiriyorsa,
-- İki bakış açısı (ör. heyecan ve şüphe) içerikte zaten mevcutsa,
-- Video yeterince uzunsa (20 saniye ve üstü).
+- Video 30 saniye ve üstüyse (öncelikli tercih),
+- İçerikte şaşırtıcı bir bilgi, ilginç bir detay veya tartışma potansiyeli varsa,
+- Bir bilgiye verilen tepki, karşı görüş veya merak sorusu videoyu güçlendiriyorsa,
+- İzleyicinin "ben de böyle düşünüyorum" veya "katılmıyorum" diyeceği bir açı varsa.
+NOT: Otomobil videoları genelde iki kişinin sohbetiyle daha doğal ve izlenesi olur. İkinci sesin "ne söyleyeceğini" bulmak için çok özel bir zıtlık aramana gerek yok; merak, şaşkınlık veya pratik kullanım sorusu bile DUO için yeterli gerekçedir.
 
 TEK SES uygun olur, eğer:
-- Tek net bir hikâye, bilgi veya duygu akıcı biçimde anlatılacaksa,
-- İçerik teknik veya sayısal bilgi yoğunsa,
-- Görüntü kendini anlatıyorsa,
-- Video kısaysa (15 saniye ve altı),
-- Diyalog zorlama ya da yapay skeç gibi duracaksa.
-
-TEK SES seçtiysen kadın mı erkek mi: VARSAYILAN SEÇİM SOLO_FEMALE'dir. Yalnızca içerik çok ağır teknik, mühendislik veya performans odaklıysa VE kadın sesinin bu tonla uyumsuz olacağı kesinse SOLO_MALE seç. Aksi halde her zaman SOLO_FEMALE kullan. Otomobil içeriği olması tek başına SOLO_MALE gerekçesi değildir.
-
+- Video 15 saniye ve altındaysa,
+- İçerik çok yoğun teknik veri içeriyorsa ve bölününce anlaşılmaz hale gelecekse,
+- Görüntü tamamen kendini anlatıyorsa ve ses sadece arka plan yönlendirmesiyse,
+- İçerik tek bir duygusal hikâye anlatıyorsa ve ikinci ses bu duyguyu bozacaksa.
 
 ÖNEMLİ:
-- Sırf iki ses "daha canlı" görünüyor diye DUO seçme. DUO'yu yalnızca ikinci sesin bu içeriğe somut katkısını adlandırabiliyorsan seç.
+- Karar verirken DUO'yu öncelikli düşün. Tek ses ancak yukarıdaki TEK SES koşullarından biri NET olarak karşılanıyorsa seçilsin.
+- "Teknik bilgi var" tek başına tek ses gerekçesi DEĞİLDİR. Teknik bilgi iki kişinin sohbetiyle çok daha anlaşılır olur.
+- TEK SES seçtiysen kadın mı erkek mi: VARSAYILAN SEÇİM SOLO_FEMALE'dir. Yalnızca içerik çok ağır mühendislik odaklıysa ve kadın sesi kesinlikle uyumsuz olacaksa SOLO_MALE seç. Otomobil içeriği olması tek başına SOLO_MALE gerekçesi değildir.
 - Kullanıcı notu ve Fact Lock içindeki bilgiler değişmez; karar yalnızca sunum biçimine dairdir.
 
 ÇIKTI: Yalnızca şemaya uygun JSON."""
