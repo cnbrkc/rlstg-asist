@@ -7,6 +7,7 @@ import json
 import os, re
 import shutil
 import time
+from core.web_search import web_arastirma_yap
 from concurrent.futures import ThreadPoolExecutor
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI, PIPELINE_ADIMLARI
 from core.schemas import VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA, REELS_CREATIVE_SCHEMA, CAPTION_SCHEMA, THREADS_SCHEMA, QA_SCHEMA, DUO_SCRIPT_SCHEMA
@@ -228,17 +229,24 @@ def _forensic_analiz_calistir(router, video_bytes, mime_type, analiz_notlari, su
 
 def _research_calistir(router, video_state, log):
     video_state = _object_state_or_empty(video_state)
+    
+    # ADIM 1: Agentic Web Arama (DuckDuckGo)
+    web_sonuclari = web_arastirma_yap(video_state, log)
+    
+    # ADIM 2: LLM Analizi (Gemini search tool'u KULLANMADAN)
     content = girdi_birlestir(
         durumu_metne_donustur('VIDEO IDENTITY',video_state.get('video_identity',{})),
         durumu_metne_donustur('OBSERVED FACTS',video_state.get('observed_facts',[])),
         durumu_metne_donustur('UNKNOWNS',video_state.get('unknowns',[])),
         durumu_metne_donustur('POSSIBLE INFERENCE',video_state.get('possible_inference',[])),
-        durumu_metne_donustur('ARAŞTIRMA İHTİYAÇLARI',video_state.get('viral_arastirma_ihtiyaclari',[]))
+        durumu_metne_donustur('ARAŞTIRMA İHTİYAÇLARI',video_state.get('viral_arastirma_ihtiyaclari',[])),
+        durumu_metne_donustur('WEB ARAŞTIRMA SONUÇLARI', web_sonuclari or "Web araştırması yapılamadı.")
     )
     return _run_timed(
-        log, "Research / Fact Lock (Gemini + Search/fallback)",
-        lambda: router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=True),
+        log, "Research / Fact Lock (Agentic Web + Gemini Analiz)",
+        lambda: router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=False),
     )
+
 
 
 def _editorial_oncelik_denetimi(editorial_state, log):
