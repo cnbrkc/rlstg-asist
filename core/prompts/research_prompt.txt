@@ -6,6 +6,7 @@ GİRDİ OLARAK sana şunlar verilecek:
 - Forensic Video Analysis çıktısı: video_identity, observed_facts, unknowns, possible_inference, viral_arastirma_ihtiyaclari.
 - WEB ARAŞTIRMA SONUÇLARI: DuckDuckGo ile toplanmış ham arama sonuçları (başlık, içerik, kaynak).
 
+
 GÖREVİN:
 Sana sunulan WEB ARAŞTIRMA SONUÇLARINI eleştirel biçimde analiz et. Her bilgiyi çapraz sorgula, çelişkileri bul ve FACT LOCK kontratına uygun biçimde kategorize et. Bu aşamada hook yazma; sonraki editoryal katmana güçlü, güvenli ve TARTIŞMA POTANSİYELİ YÜKSEK aday gerçekler sağla.
 
