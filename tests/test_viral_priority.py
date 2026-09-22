@@ -18,7 +18,7 @@ class ViralResearchContractTests(unittest.TestCase):
         self.assertIn("TÜRKİYE İLGİ SİNYALLERİ", prompt)
         self.assertIn("en güçlü 3-6 adayı", prompt)
         self.assertIn("aynı fiyat avantajını koruyarak gelse", prompt)
-        self.assertIn("Türkiye'de şu kadar olur/ucuz olur", prompt)
+        self.assertIn("Türkiye'de kesin X TL olur", prompt)
         self.assertNotIn("{bugunun_tarihi}", prompt)
 
     def test_fact_lock_requires_structured_turkey_interest_signals(self):
