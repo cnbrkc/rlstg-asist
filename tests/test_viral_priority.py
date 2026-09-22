@@ -17,7 +17,7 @@ class ViralResearchContractTests(unittest.TestCase):
         self.assertIn("fiyat ayrıca sorulmamış olsa bile", prompt)
         self.assertIn("TÜRKİYE İLGİ SİNYALLERİ", prompt)
         self.assertIn("en güçlü 3-6 adayı", prompt)
-        self.assertIn("aynı fiyat avantajını koruyarak gelse", prompt)
+        self.assertIn("Aynı fiyat avantajını koruyarak Türkiye'ye gelse", prompt)
         self.assertIn("Türkiye'de kesin X TL olur", prompt)
         self.assertNotIn("{bugunun_tarihi}", prompt)
 
