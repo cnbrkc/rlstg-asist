@@ -12,7 +12,20 @@ VIDEO_ANALYSIS_SCHEMA = {
 FACT_LOCK_SCHEMA = {
     "type": "object",
     "properties": {
-        "facts": {"type": "array", "items": {"type": "object", "properties": {"fact": {"type": "string"}, "status": {"type": "string", "description": "OBSERVED / VERIFIED / INFERENCE / UNKNOWN"}, "source": {"type": "string"}, "source_type": {"type": "string"}, "confidence": {"type": "string"}}, "required": ["fact", "status"]}},
+        "facts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string"},
+                    "status": {"type": "string", "description": "OBSERVED / VERIFIED / INFERENCE / UNKNOWN / CONTRADICTED"},
+                    "source": {"type": "string"},
+                    "source_type": {"type": "string", "description": "official / manufacturer / industry / news / forum / other"},
+                    "confidence": {"type": "string"}
+                },
+                "required": ["fact", "status"]
+            }
+        },
         "turkiye_satis_durumu": {"type": "string", "description": "VAR / YOK / BILINMIYOR"},
         "turkiye_fiyati": {"type": "string"},
         "global_fiyat_bilgisi": {"type": "string"},
@@ -22,11 +35,11 @@ FACT_LOCK_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "kategori": {"type": "string", "description": "fiyat_deger / kullanim_maliyeti / vergi / teknoloji / performans / pratiklik / tasarim / diger"},
-                    "bulgu": {"type": "string", "description": "OBSERVED veya VERIFIED dayanağın kısa özeti."},
-                    "neden_turkiyede_ilginc": {"type": "string"},
+                    "kategori": {"type": "string", "description": "celiski / fiyat_deger / kullanim_maliyeti / vergi / teknoloji / performans / pratiklik / tasarim / diger"},
+                    "bulgu": {"type": "string", "description": "OBSERVED, VERIFIED veya CONTRADICTED dayanağın kısa özeti. Çelişki varsa iki tarafı da yaz."},
+                    "neden_turkiyede_ilginc": {"type": "string", "description": "Türkiye kitlesindeki somut karşılığı ve tartışma potansiyeli."},
                     "guvenli_anlatim": {"type": "string", "description": "Belirsizliği koruyan, doğrudan içerikte kullanılabilecek olgusal çerçeve."},
-                    "onem_puani": {"type": "number", "description": "0-10; ekonomik/pratik önem, şaşırtıcılık ve kanıt gücü birlikte."}
+                    "onem_puani": {"type": "number", "description": "0-10; ekonomik/pratik önem, şaşırtıcılık, kanıt gücü ve tartışma potansiyeli birlikte."}
                 },
                 "required": ["kategori", "bulgu", "neden_turkiyede_ilginc", "guvenli_anlatim", "onem_puani"]
             }
@@ -35,6 +48,7 @@ FACT_LOCK_SCHEMA = {
     },
     "required": ["facts", "turkiye_satis_durumu", "turkiye_ilgi_sinyalleri"],
 }
+
 
 EDITORIAL_SCHEMA = {
     "type": "object",
