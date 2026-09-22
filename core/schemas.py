@@ -144,3 +144,68 @@ QA_SCHEMA = {
     "properties": {"fact_check": {"type": "string"}, "model_check": {"type": "string"}, "video_check": {"type": "string"}, "current_data_check": {"type": "string"}, "cover_check": {"type": "string"}, "hook_check": {"type": "string"}, "visual_match_check": {"type": "string"}, "repetition_check": {"type": "string"}, "tts_check": {"type": "string"}, "length_check": {"type": "string"}, "caption_check": {"type": "string"}, "hashtag_check": {"type": "string"}, "threads_check": {"type": "string"}, "brand_check": {"type": "string"}, "tone_check": {"type": "string"}, "viral_priority_check": {"type": "string"}, "duo_check": {"type": "string"}, "overall": {"type": "string"}, "regeneration_targets": {"type": "array", "items": {"type": "string"}}},
     "required": ["tone_check", "viral_priority_check", "overall", "regeneration_targets"],
 }
+
+# ==========================================
+# AGENTİK SİSTEM İÇİN YENİ ŞEMALAR (4 AJAN)
+# ==========================================
+
+DETECTIVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kronik_sikayetler": {"type": "array", "items": {"type": "string"}, "description": "Forumlardaki en absürt ve sinir bozucu kronik şikayetler."},
+        "turkiye_ozel_magduriyet": {"type": "string", "description": "Vergi, ÖTV veya yol şartlarına dair Türk izleyicisini tetikleyen veri."},
+        "viral_kan_mali": {"type": "string", "description": "Dedektifin bulduğu en kışkırtıcı, tek cümlelik ham bilgi."}
+    },
+    "required": ["kronik_sikayetler", "turkiye_ozel_magduriyet", "viral_kan_mali"]
+}
+
+HOOK_GEN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "secilen_sablon": {"type": "string", "enum": ["Efsane_Curutme", "Ters_Kose", "Negatif_Uyari"]},
+        "kapak_metni": {"type": "string", "description": "Videonun üstüne yazılacak maksimum 5-6 kelimelik kışkırtıcı başlık."},
+        "ilk_3_saniye_kanca": {"type": "string", "description": "Seslendirmenin ilk cümlesi. İzleyiciyi şok etmeli."}
+    },
+    "required": ["secilen_sablon", "kapak_metni", "ilk_3_saniye_kanca"]
+}
+
+SCRIPT_WRITER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "speaker": {"type": "string", "enum": ["female", "male"]},
+                    "tts_tag": {"type": "string", "description": "Örn: [gülerek], [şaşırarak], [vurgulu], ..."},
+                    "text": {"type": "string"}
+                },
+                "required": ["speaker", "tts_tag", "text"]
+            }
+        },
+        "yorum_tetikleyici_soru": {"type": "string", "description": "Senaryoyu bitiren, izleyiciyi ikiye bölen o son kışkırtıcı soru."}
+    },
+    "required": ["segments", "yorum_tetikleyici_soru"]
+}
+
+CRITIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "integer", "minimum": 1, "maximum": 10},
+        "approved": {"type": "boolean"},
+        "feedback": {"type": "string", "description": "Onaylanmadıysa yazar ajana verilecek tek ve net revize talimatı."}
+    },
+    "required": ["score", "approved", "feedback"]
+}
+
+METADATA_GEN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reels_baslik": {"type": "string"},
+        "reels_aciklama": {"type": "string"},
+        "reels_hashtag": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["reels_baslik", "reels_aciklama", "reels_hashtag"]
+}
+
