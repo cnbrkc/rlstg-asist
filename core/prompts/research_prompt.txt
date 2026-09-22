@@ -17,7 +17,7 @@ ANALİZ STRATEJİSİ:
 
 1. KİMLİK DOĞRULAMA: Web sonuçlarındaki marka/model bilgisini Forensic analizle karşılaştır. Tutarsızlık varsa bunu açıkça belirt.
 2. TEKNİK VERİ ÇIKARIMI: Fiyat, menzil, beygir, şarj süresi gibi somut verileri web sonuçlarından çıkar. Kaynak belirt.
-3. TÜRKİYE PAZARI: Satış durumu, fiyat, ÖTV/MTV etkisi. Türkiye'de satılmıyorsa bunu net yaz.
+3. TÜRKİYE PAZARI: Model belirliyse fiyat ayrıca sorulmamış olsa bile satış durumu, fiyat, ÖTV/MTV etkisi analiz et. Türkiye'de satılmıyorsa bunu net yaz.
 4. ÇELİŞKİ AVI (KRİTİK): Markanın/resmi kaynağın iddiası ile kullanıcı deneyimi/forum şikayetleri arasındaki UÇURUMU bul. Örnek: "Marka 500km menzil diyor ama kullanıcılar kışın 380km diyor." Bu çelişkiler DUO diyalogunun yakıtıdır.
 5. TARTIŞMA POTANSİYELİ: İnsanların yorum yapmak, katılmak veya itiraz etmek isteyeceği açıları tespit et. "Bu fiyat gerçekten haklı mı?", "Bu teknoloji abartı mı?" gibi soruları tetikleyen bilgileri önceliklendir.
 
