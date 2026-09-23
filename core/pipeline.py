@@ -6,8 +6,8 @@ import json
 import os, re
 import shutil
 import time
+from contextlib import contextmanager
 from core.web_search import web_arastirma_yap
-from concurrent.futures import ThreadPoolExecutor
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI, PIPELINE_ADIMLARI
 from core.schemas import (
     VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA, 
@@ -29,8 +29,7 @@ from core.media import (
     medya_raporu,
     video_suresini_al,
 )
-from core.narration_mode import anlatim_modu_karar_ver, mod_kilit_talimati, mod_kilidini_uygula
-from duo.duo_strategy import normalize_duo_strategy
+from core.narration_mode import anlatim_modu_karar_ver
 from duo.duo_audio import duo_ses_uret
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
@@ -179,9 +178,16 @@ def _payload(reels_state, caption_state, threads_state, ses_basarili, ses_dosyas
 def _caption_state_normalize(value):
     parsed = _json_object_or_none(value)
     if parsed is not None:
+        # Metadata Generator ajanı METADATA_GEN_SCHEMA ile `reels_aciklama` /
+        # `reels_hashtag` döndürür; eski Caption ajanı ise `reels_aciklamasi` /
+        # `reels_hashtagleri`. İkisi de aynı sosyal çıktıya eşlenir.
+        aciklama = parsed.get("reels_aciklamasi") or parsed.get("reels_aciklama") or ""
+        hashtags = parsed.get("reels_hashtagleri")
+        if not isinstance(hashtags, list) or not hashtags:
+            hashtags = parsed.get("reels_hashtag")
         return {
-            "reels_aciklamasi": str(parsed.get("reels_aciklamasi", "") or ""),
-            "reels_hashtagleri": parsed.get("reels_hashtagleri") if isinstance(parsed.get("reels_hashtagleri"), list) else [],
+            "reels_aciklamasi": str(aciklama or ""),
+            "reels_hashtagleri": hashtags if isinstance(hashtags, list) else [],
         }
     if isinstance(value, str) and value.strip():
         return {"reels_aciklamasi": value.strip(), "reels_hashtagleri": []}
@@ -359,10 +365,11 @@ def _anlatim_modu_karari_ekle(router, video_state, fact_state, editorial_state, 
     if _explicit_voice_mode_from_notes(notes):
         log('🎚️ Kullanıcı notunda açık ses modu talebi var; AI mod kararı atlandı.')
         return editorial
-    karar = _run_timed(
-        log, "Anlatım modu kararı (Gemini)",
-        lambda: anlatim_modu_karar_ver(router, video_state, fact_state, editorial, sure_saniye, ton, log),
-    )
+    with _hizli_basarisizlik(router):
+        karar = _run_timed(
+            log, "Anlatım modu kararı (Gemini)",
+            lambda: anlatim_modu_karar_ver(router, video_state, fact_state, editorial, sure_saniye, ton, log),
+        )
     if karar:
         editorial['anlatim_modu_karari'] = karar
     return editorial
@@ -519,31 +526,98 @@ def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log):
     )
 
 
+def _critic_skoru(critic_state):
+    try:
+        return float(critic_state.get("score", 10))
+    except (TypeError, ValueError):
+        return 10.0
+
+
+def _critic_onayladi_mi(critic_state):
+    approved = critic_state.get("approved", False)
+    if isinstance(approved, str):
+        approved = approved.strip().lower() in {"true", "evet", "yes", "1"}
+    return bool(approved) or _critic_skoru(critic_state) >= 7
+
+
+def _hook_fallback(editorial_state):
+    """Hook ajanı geçici olarak kullanılamazsa Editorial brief'ten güvenli kanca türetir."""
+    editorial = _object_state_or_empty(editorial_state)
+    territories = editorial.get("potential_hook_territories")
+    ilk = ""
+    if isinstance(territories, list):
+        ilk = next((str(x).strip() for x in territories if str(x).strip()), "")
+    elif isinstance(territories, str):
+        ilk = territories.strip()
+    core_story = str(editorial.get("core_story") or "").strip()
+    return {
+        "secilen_sablon": "Ters_Kose",
+        "kapak_metni": " ".join((ilk or core_story).split()[:6]),
+        "ilk_3_saniye_kanca": ilk or core_story,
+    }
+
+
+@contextmanager
+def _hizli_basarisizlik(router):
+    """Güvenli varsayılanı olan adımlarda router'ın aşırı-yük beklemesini kapatır;
+    bekleme bütçesi zorunlu adımlara (Script Writer, TTS, Forensic...) kalır."""
+    ctx = getattr(router, "hizli_basarisizlik", None)
+    if callable(ctx):
+        with ctx():
+            yield
+    else:
+        yield
+
+
+def _istege_bagli_ajan(log, etiket, callback, varsayilan, router=None):
+    """Zenginleştirici ajan (Detective/Hook/Critic/Metadata) API'si geçici olarak
+    tamamen düşerse tüm pipeline'ı öldürmek yerine güvenli varsayılanla devam eder."""
+    try:
+        with _hizli_basarisizlik(router):
+            state, model = callback()
+    except Exception as exc:
+        log(f"⚠️ {etiket} kullanılamadı; güvenli varsayılanla devam ediliyor: {type(exc).__name__}: {str(exc)[:160]}")
+        return varsayilan, "hata"
+    return _object_state_or_empty(state), model
+
+
 def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None):
     """4 Ajanlı Viral Üretim Döngüsü (Kelime ve TTS Süre Güvenlik Duvarlı)"""
     
-    mod = str((mod_karari or {}).get("mode") or "DUO").upper()
+    mod = str((mod_karari or {}).get("mode") or "DUO").strip().upper()
+    if mod not in {"DUO", "SOLO_FEMALE", "SOLO_MALE"}:
+        mod = "DUO"
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     hedef_kelime_bilgisi = f"Hedef {hedef} kelime. Kesin aralık {minimum}-{maksimum} kelime."
     
     # 1. Detective (Sadece ilk denemede çalışır, veri değişmez)
-    detective_state, _ = _detective_calistir(router, video_state, fact_state, editorial_state, log)
-    detective_state = _object_state_or_empty(detective_state)
+    detective_state, _ = _istege_bagli_ajan(
+        log, "🕵️ Detective Ajan",
+        lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log),
+        {},
+        router=router,
+    )
     
     # 2. Hook Gen (Sadece ilk denemede çalışır)
-    hook_state, _ = _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log)
-    hook_state = _object_state_or_empty(hook_state)
+    hook_state, _ = _istege_bagli_ajan(
+        log, "🪝 Hook Generator Ajan",
+        lambda: _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log),
+        _hook_fallback(editorial_state),
+        router=router,
+    )
+    if not str(hook_state.get("kapak_metni") or "").strip():
+        hook_state = {**_hook_fallback(editorial_state), **{k: v for k, v in hook_state.items() if v}}
     
     son_reels = {}
     son_duo_plan = {}
     son_duo_script = {}
-    son_metadata = {}
     son_model = 'hata'
     
     # TTS ve Kelime Güvenlik Döngüsü
     for deneme in range(VOICE_REGEN_MAX + 1):
         
-        # 3. Script Writer
+        # 3. Script Writer (zorunlu ajan: router'ın aşırı-yük tekrarlarına rağmen
+        # düşerse hata yukarı taşınır)
         script_state, model_script = _script_writer_calistir(
             router, hook_state, detective_state, fact_state, editorial_state, 
             video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
@@ -551,23 +625,36 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         script_state = _object_state_or_empty(script_state)
         son_model = model_script
         
-        # 4. Critic
-        critic_state, _ = _critic_calistir(router, script_state, hook_state, log)
-        critic_state = _object_state_or_empty(critic_state)
+        # 4. Critic (isteğe bağlı: düşerse senaryo onaylı sayılır)
+        critic_state, _ = _istege_bagli_ajan(
+            log, "🔥 Critic Ajan",
+            lambda: _critic_calistir(router, script_state, hook_state, log),
+            {"score": 10, "approved": True, "feedback": ""},
+            router=router,
+        )
         
         # Critic Döngüsü (MAX 1 Revize)
-        if not critic_state.get("approved", False) and critic_state.get("score", 10) < 7:
-            feedback = critic_state.get("feedback", "Daha doğal ve kışkırtıcı yap.")
+        if not _critic_onayladi_mi(critic_state):
+            feedback = critic_state.get("feedback") or "Daha doğal ve kışkırtıcı yap."
             log(f"⚠️ Critic onaylamadı (Score: {critic_state.get('score')}). Revize başlatılıyor...")
-            script_state, model_script = _script_writer_calistir(
-                router, hook_state, detective_state, fact_state, editorial_state, 
-                video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
-            )
-            script_state = _object_state_or_empty(script_state)
-            son_model = model_script
+            try:
+                revize_state, revize_model = _script_writer_calistir(
+                    router, hook_state, detective_state, fact_state, editorial_state, 
+                    video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
+                )
+                revize_state = _object_state_or_empty(revize_state)
+                if revize_state.get("segments"):
+                    script_state, son_model = revize_state, revize_model
+                else:
+                    log("⚠️ Revize senaryo boş döndü; ilk senaryo korunuyor.")
+            except Exception as exc:
+                log(f"⚠️ Critic revizesi üretilemedi; ilk senaryo korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
             
         # Reels State Emülasyonu
-        full_text = " ".join([seg.get("text", "") for seg in script_state.get("segments", [])]) + " " + script_state.get("yorum_tetikleyici_soru", "")
+        segments = [seg for seg in (script_state.get("segments") or []) if isinstance(seg, dict)]
+        soru = str(script_state.get("yorum_tetikleyici_soru") or "").strip()
+        full_text = " ".join(str(seg.get("text", "") or "").strip() for seg in segments)
+        full_text = f"{full_text} {soru}".strip()
         reels_state = {
             "seslendirme_metni": full_text,
             "kapak_basliklari": [{"ana": hook_state.get("kapak_metni", ""), "alt": ""}],
@@ -576,11 +663,12 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         }
         
         # TTS Segmentlerini Hazırlama (Duygu Etiketli)
-        segments = script_state.get("segments", [])
         tts_segments = []
         for seg in segments:
-            tag = seg.get('tts_tag', '').strip()
-            text = seg.get('text', '').strip()
+            tag = str(seg.get('tts_tag', '') or '').strip()
+            text = str(seg.get('text', '') or '').strip()
+            if not text:
+                continue
             tts_text = f"{tag} {text}".strip() if tag else text
             
             if mod == "SOLO_FEMALE":
@@ -588,10 +676,11 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             elif mod == "SOLO_MALE":
                 tts_segments.append({"speaker": "male", "text": tts_text})
             else:
-                tts_segments.append({"speaker": seg.get("speaker", "female"), "text": tts_text})
+                speaker = str(seg.get("speaker") or "female").strip().lower()
+                tts_segments.append({"speaker": speaker if speaker in {"female", "male"} else "female", "text": tts_text})
             
-        if script_state.get("yorum_tetikleyici_soru"):
-            last_speaker = segments[-1].get("speaker", "female") if segments else "female"
+        if soru:
+            last_speaker = tts_segments[-1].get("speaker", "female") if tts_segments else "female"
             final_speaker = "male" if last_speaker == "female" else "female"
             
             if mod == "SOLO_FEMALE":
@@ -599,10 +688,10 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             elif mod == "SOLO_MALE":
                 final_speaker = "male"
                 
-            tts_segments.append({"speaker": final_speaker, "text": f"[vurgulu] {script_state.get('yorum_tetikleyici_soru')}"})
+            tts_segments.append({"speaker": final_speaker, "text": f"[vurgulu] {soru}"})
 
         duo_script = {
-            "status": "ready",
+            "status": "ready" if tts_segments else "fallback",
             "segments": tts_segments,
             "contract": {"mode": mod},
             "conversation_design": {},
@@ -610,6 +699,15 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         }
         
         duo_plan = {"mode": mod, "target_words": hedef}
+        son_reels, son_duo_plan, son_duo_script = reels_state, duo_plan, duo_script
+        
+        if not tts_segments:
+            if deneme < VOICE_REGEN_MAX:
+                hedef_kelime_bilgisi = f"Önceki üretimde konuşma segmenti yoktu. Hedef {hedef}, izin verilen {minimum}-{maksimum} kelime; segments alanını mutlaka doldur."
+                log(f'⚠️ Script Writer boş senaryo döndürdü; yeniden yazılıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
+                continue
+            log('❌ Script Writer geçerli senaryo üretemedi.')
+            break
         
         # Kelime Kontrolü
         adet = _kelime_sayisi(full_text)
@@ -621,7 +719,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 log(f'⚠️ Kelime aralığı dışında; Script Writer yeniden yazıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
                 continue
             else:
-                log(f'⚠️ Kelime aralığı hala düzeltilemedi, devam ediliyor.')
+                log('⚠️ Kelime aralığı hala düzeltilemedi, devam ediliyor.')
         
         # TTS Üretimi
         ses_dosyasi = gecici_ses_yolu()
@@ -631,6 +729,8 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             temp_dosya_temizle(ses_dosyasi)
             if deneme < VOICE_REGEN_MAX:
                 hedef_kelime_bilgisi = "TTS üretimi başarısız oldu. Daha doğal ve okunabilir bir metin yaz."
+                if mod == "DUO":
+                    hedef_kelime_bilgisi += " DUO modunda hem female hem male konuşmacı mutlaka yer almalı."
                 continue
             return reels_state, "hata", duo_plan, duo_script, False, None, "LEGACY", "", {}
             
@@ -639,16 +739,19 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         
         if os.path.exists(ses_dosyasi) and ses_suresi > 0:
             if not uyumlu:
-                if deneme < VOICE_REGEN_MAX:
-                    hedef_kelime_bilgisi = f"TTS önceki metni {ses_suresi:.2f} saniye üretti; hedef video {sure_saniye:.2f} saniye. Kelime sayısını {minimum}-{maksimum} aralığına çek."
-                    temp_dosya_temizle(ses_dosyasi)
-                    continue
-                else:
-                    log(f'🎚️ TTS/video oranı {oran:.2f}x; video senkron katmanına bırakılıyor.')
+                # Geçerli WAV süre oranı yüzünden ÇÖPE ATILMAZ: her yeniden üretim
+                # Script + Critic + TTS API çağrısı demektir ve 503 yoğunluğunda
+                # üretimi durduruyordu. FFmpeg senkron katmanı (0.5x-1.5x video
+                # hızı) farkı zaten kapatıyor.
+                log(f'🎚️ TTS/video oranı {oran:.2f}x; geçerli WAV korunuyor, video senkron katmanına bırakılıyor.')
             
             # Başarılı TTS ve Süre. Metadata üretilir ve döngüden çıkılır.
-            metadata_state, _ = _metadata_gen_calistir(router, script_state, hook_state, fact_state, log)
-            metadata_state = _object_state_or_empty(metadata_state)
+            metadata_state, _ = _istege_bagli_ajan(
+                log, "🏷️ Metadata Generator Ajan",
+                lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log),
+                {},
+                router=router,
+            )
             reels_state["metadata"] = metadata_state
             
             return reels_state, "agentic", duo_plan, duo_script, True, info, mod_tts, ses_dosyasi, metadata_state
@@ -660,14 +763,40 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 
 def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None,ton=None):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}',f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}')
-    result, model = _run_timed(
-        log, "Final QA (Gemini)",
-        lambda: router.metin_uret(content,qa_promptunu_olustur(ton),QA_SCHEMA,log,arama_kullan=False),
-    )
+    try:
+        result, model = _run_timed(
+            log, "Final QA (Gemini)",
+            lambda: router.metin_uret(content,qa_promptunu_olustur(ton),QA_SCHEMA,log,arama_kullan=False),
+        )
+    except Exception as exc:
+        # QA API'si (tüm model+key + aşırı-yük tekrarları) geçici olarak
+        # erişilemezse hazır TTS/render çöpe atılmaz: yapısal kontroller
+        # (_qa_regeneration_loop içindeki DUO/TTS dosyası doğrulaması) yine
+        # uygulanır; model QA'sı atlandığı açıkça işaretlenir.
+        log(f"⚠️ Final QA modeli geçici olarak erişilemedi; yapısal kontrollerle devam ediliyor: {type(exc).__name__}: {str(exc)[:160]}")
+        return {"overall": "PASS", "regeneration_targets": [], "qa_unavailable": True, "reason": str(exc)[:200]}, "qa-unavailable"
     result = _object_state_or_empty(result)
     if not result:
         result = {"overall":"FAIL","regeneration_targets":["QA_PARSE_FAIL"]}
     return result, model
+
+
+def _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton):
+    """Metadata ajanı açıklama/hashtag vermediyse Caption ajanı ile tamamlar."""
+    caption_state = _caption_state_normalize(caption_state)
+    if caption_state.get("reels_aciklamasi") and caption_state.get("reels_hashtagleri"):
+        return caption_state, model_caption
+    log("⚠️ Metadata ajanı eksik caption/hashtag döndü; Caption ajanı ile tamamlanıyor.")
+    try:
+        yeni, model = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton)
+    except Exception as exc:
+        log(f"⚠️ Caption tamamlama başarısız; worker sosyal fallback'i devreye girecek: {str(exc)[:160]}")
+        return caption_state, model_caption
+    yeni = _caption_state_normalize(yeni)
+    return {
+        "reels_aciklamasi": caption_state.get("reels_aciklamasi") or yeni.get("reels_aciklamasi", ""),
+        "reels_hashtagleri": caption_state.get("reels_hashtagleri") or yeni.get("reels_hashtagleri", []),
+    }, model
 
 
 def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction='',production_notes='',ses_modu_notlari=None):
@@ -683,6 +812,8 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
     
     # Metadata'dan Caption'ı al
     caption_state = _caption_state_normalize(metadata_state)
+    model_caption = "agentic"
+    caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton)
     
     # Threads için eski ajanı kullan
     threads_state, model_threads = _threads_calistir(router, video_state, fact_state, editorial_state, log, ton)
@@ -715,7 +846,7 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
                 qa_state["overall"] = "FAIL"
                 qa_state["regeneration_targets"] = supported_targets
             else:
-                return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,"agentic",model_threads,True
+                return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,model_caption,model_threads,True
 
         if not supported_targets:
             break
@@ -725,14 +856,30 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
         target_set=set(supported_targets)
         creative_needed=bool(target_set & {'VOICEOVER_FAIL','COVER_FAIL', 'DUO_SCRIPT_FAIL'})
         downstream_threads='THREADS_FAIL' in target_set
+        caption_only='CAPTION_FAIL' in target_set and not creative_needed
         
-        log(f"⚠️ QA başarısız bulundu. Agentic sistem baştan başlatılıyor...")
+        log(f"⚠️ QA başarısız bulundu ({', '.join(supported_targets)}). İlgili agentic katmanlar yeniden üretiliyor...")
         
         if creative_needed:
-            reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi, metadata_state = agentic_icerik_uretimi(
-                router,video_state,fact_state,editorial_state,sure_saniye,ton,legacy_voice,log, mod_karari=mod_karari
-            )
-            caption_state = _caption_state_normalize(metadata_state)
+            onceki = (reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,model_caption)
+            try:
+                reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi, metadata_state = agentic_icerik_uretimi(
+                    router,video_state,fact_state,editorial_state,sure_saniye,ton,legacy_voice,log, mod_karari=mod_karari
+                )
+                caption_state = _caption_state_normalize(metadata_state)
+                model_caption = "agentic"
+                caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton)
+            except Exception as exc:
+                # QA yenilemesi API yoğunluğunda düşerse elde kalan geçerli
+                # üretim çöpe atılmaz; önceki sürüm korunur.
+                log(f"⚠️ QA yenilemesi üretilemedi; önceki agentic çıktı korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
+                reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,caption_state,model_caption = onceki
+        elif caption_only:
+            try:
+                caption_state, model_caption = _caption_calistir(router,reels_state,fact_state,editorial_state,video_state,log,ton)
+            except Exception:
+                pass
+            caption_state = _caption_state_normalize(caption_state)
 
         if downstream_threads:
             try:
@@ -741,7 +888,7 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
                 threads_state={"threads_aciklamasi":""}
             threads_state = _threads_state_normalize(threads_state)
 
-    return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,"agentic",model_threads,False
+    return reels_state,caption_state,threads_state,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi,qa_state,qa_rounds,model_reels,model_caption,model_threads,False
 
 
 def pipeline_calistir(router,video_bytes,mime_type,temp_input_video,video_analiz_notlari,metin_uretim_notlari,sure_saniye,icerik_tonu,secilen_ses_ingilizce,log_ekle,ilerlemeyi_guncelle=None):
