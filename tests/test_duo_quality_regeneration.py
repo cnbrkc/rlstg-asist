@@ -19,6 +19,10 @@ class _Router:
         self.calls += 1
         return response, f"fake-model-{self.calls}"
 
+    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
+        Path(output).write_bytes(b"fake-audio")
+        return True, "fake-tts"
+
 
 def _detective():
     return {
@@ -156,7 +160,7 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
         """SOLO_FEMALE modunda tüm speaker'lar female olmalı."""
         script_data = _script([
             {"speaker": "female", "tts_tag": "", "text": "Bu araç çok iyi."},
-            {"speaker": "male", "tts_tag": "", "text": "Evet."}  # Yanlış speaker, düzeltilmeli
+            {"speaker": "male", "tts_tag": "", "text": "Evet."}
         ])
         
         router = _Router([
