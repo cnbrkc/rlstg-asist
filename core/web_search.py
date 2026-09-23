@@ -10,12 +10,25 @@ def _temizle_metin(text: str, max_chars: int = 500) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text[:max_chars] if len(text) > max_chars else text
 
-def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict[str, str]]:
-    """Tek bir DuckDuckGo sorgusu çalıştırır."""
+def _ddgs_sinifi():
+    """`duckduckgo_search` paketi `ddgs` adıyla yeniden adlandırıldı; eski paket
+    artık uyarı basıp 0 sonuç döndürüyor. Önce yeni paketi, yoksa eskisini kullan."""
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS  # type: ignore
+        return DDGS
+    except ImportError:
+        import warnings
+        warnings.filterwarnings("ignore", message=".*renamed to `ddgs`.*")
+        from duckduckgo_search import DDGS  # type: ignore
+        return DDGS
+
+
+def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict[str, str]]:
+    """Tek bir web sorgusu çalıştırır (ddgs metasearch)."""
+    try:
+        DDGS = _ddgs_sinifi()
         with DDGS() as ddgs:
-            results = list(ddgs.text(sorgu, max_results=max_sonuc))
+            results = list(ddgs.text(sorgu, max_results=max_sonuc) or [])
         temiz = []
         for r in results:
             title = _temizle_metin(r.get("title", ""), 150)
@@ -24,11 +37,11 @@ def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict
             if title and body:
                 temiz.append({"baslik": title, "icerik": body, "kaynak": href})
         if log_ekle:
-            log_ekle(f"🔍 DuckDuckGo '{sorgu[:60]}...' → {len(temiz)} sonuç")
+            log_ekle(f"🔍 Web '{sorgu[:60]}...' → {len(temiz)} sonuç")
         return temiz
     except Exception as e:
         if log_ekle:
-            log_ekle(f"⚠️ DuckDuckGo sorgu hatası: {str(e)[:100]}")
+            log_ekle(f"⚠️ Web sorgu hatası ({sorgu[:40]}...): {str(e)[:100]}")
         return []
 
 def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:

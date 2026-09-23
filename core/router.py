@@ -1,4 +1,6 @@
+import os
 import time
+from contextlib import contextmanager
 import re
 import threading
 from typing import List, Tuple, Any, Optional
@@ -30,6 +32,29 @@ SLOW_HITS_BEFORE_NEXT_MODEL = 2
 # Günlük kota (PerDay) o gün geri gelmez; bu çalışma boyunca atlanır.
 DAILY_QUOTA_COOLDOWN = 6 * 60 * 60
 
+# Aşırı yük koruması: Bir isteğin TÜM model+key kombinasyonları yalnızca geçici
+# hatalarla (503 / dakikalık kota / zaman aşımı) düşerse, istek hemen exception
+# fırlatıp tüm pipeline'ı öldürmez. Kısa bir bekleme sonrası tam tur yeniden
+# yapılır. Tek tek denemeler arasında bekleme YOK (hızlı tam tur felsefesi
+# korunur); bekleme yalnızca komple başarısız bir turdan sonra devreye girer.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+OVERLOAD_RETRY_ROUNDS = _env_int("ROUTER_OVERLOAD_RETRY_ROUNDS", 3)
+OVERLOAD_RETRY_WAITS = (20, 40, 60)
+# Tüm çalışma boyunca aşırı-yük beklemelerine ayrılan toplam süre (saniye).
+# GitHub Actions job'u 30 dk ile sınırlı; bu bütçe bitince eski davranışa
+# (hemen hata) dönülür ve job zaman aşımına düşmez.
+OVERLOAD_WAIT_BUDGET_SECONDS = _env_int("ROUTER_OVERLOAD_WAIT_BUDGET", 480)
+# Router oluşturulduktan bu kadar saniye sonra yeni aşırı-yük beklemesi
+# başlatılmaz (job 30 dk; render + Telegram upload için pay bırakılır).
+OVERLOAD_RETRY_DEADLINE_SECONDS = _env_int("ROUTER_OVERLOAD_RETRY_DEADLINE", 20 * 60)
+_sleep = time.sleep
+
 # ---
 # Yönlendirme felsefesi (kullanıcı talebi):
 # Geçici (503 / kota / zaman aşımı) hatalarda BEKLEME veya dakikalarca yasaklama
@@ -38,6 +63,12 @@ DAILY_QUOTA_COOLDOWN = 6 * 60 * 60
 # key'inde hata verip 4. key'inde çalışabileceği ihtimali her zaman korunur.
 # Geçici yasağın adımlar (pipeline adımları) arası hafızası yoktur: her adım
 # turları fresh olarak yeniden yapar.
+#
+# İSTİSNA (Eylül 2026 üretim durması sonrası): Bir isteğin TAMAMI (tüm modeller
+# x tüm key'ler) geçici hatayla düşerse istek hemen exception fırlatmaz; 20/40/60
+# sn bekleyip tam turu en fazla OVERLOAD_RETRY_ROUNDS kez tekrarlar. Toplam
+# bekleme OVERLOAD_WAIT_BUDGET_SECONDS ve OVERLOAD_RETRY_DEADLINE_SECONDS ile
+# sınırlıdır; tek tek key denemeleri arasında hâlâ bekleme yoktur.
 #
 # Yalnızca iki durum "kalıcı" sayılır ve adımlar boyunca hatırlanır ( zaman
 # tasarrufu için; key'den bağımsız her key'de aynı sonucu verirler):
@@ -55,6 +86,11 @@ class SmartRouter:
         self._slow_models = {}
         self.clients = {}
         self.request_counter = 0
+        self._overload_wait_spent = 0.0
+        self._created_at = time.monotonic()
+        # >0 iken aşırı-yük beklemesi yapılmaz (güvenli varsayılanı olan
+        # isteğe bağlı adımlar bütçeyi zorunlu adımlara bırakır).
+        self._overload_retry_off = 0
         self._request_counter_lock = threading.Lock()
         for mail, api_key in self._ordered_api_items():
             if api_key and api_key.strip():
@@ -163,88 +199,130 @@ class SmartRouter:
             f"keys={len(self._ordered_api_items())} | content={type(contents).__name__}"
         )
 
-        for model_adi in modeller:
-            model_started = time.perf_counter()
-            # Kalıcı model yasağı (404 / bozuk config) → tüm key'lerde geçersiz,
-            # bu modeli tamamen atla. (Adımlar boyunca korunur.)
-            if self._is_model_banned(model_adi):
-                continue
-            log_ekle(f"🧠 Model deneniyor: {model_adi}")
-            slow_hits = 0
-
-            for mail, _api_key in self._ordered_api_items():
-                # Bu key'e özel kalıcı yasak (free-tier) → bu key'i atla, diğer
-                # key denenir (farklı key/project farklı tier'a sahip olabilir).
-                if self._is_key_banned(mail, model_adi):
+        max_rounds = 1 if getattr(self, "_overload_retry_off", 0) else OVERLOAD_RETRY_ROUNDS + 1
+        for round_no in range(1, max_rounds + 1):
+            # Bu turda en az bir GEÇİCİ hata (503 / dakikalık kota / timeout /
+            # boş yanıt) görüldüyse bekleyip tekrar denemeye değer. Tüm hatalar
+            # kalıcıysa (404 / config / free-tier / günlük kota) beklemek boşuna.
+            round_transient = 0
+            if round_no > 1:
+                modeller = [m for m in model_listesi or [] if not self._is_slow(m)] + [m for m in model_listesi or [] if self._is_slow(m)]
+            for model_adi in modeller:
+                model_started = time.perf_counter()
+                # Kalıcı model yasağı (404 / bozuk config) → tüm key'lerde geçersiz,
+                # bu modeli tamamen atla. (Adımlar boyunca korunur.)
+                if self._is_model_banned(model_adi):
                     continue
-                client = self.clients.get(mail)
-                if client is None:
-                    continue
+                log_ekle(f"🧠 Model deneniyor: {model_adi}")
+                slow_hits = 0
 
-                attempt_started = time.perf_counter()
-                log_ekle(f"↳ API #{request_id} deneme START | {mail}+{model_adi}")
-                try:
-                    response = client.models.generate_content(
-                        model=model_adi,
-                        contents=contents,
-                        config=config,
-                    )
-                except Exception as e:
-                    son_hata = e
-                    attempt_elapsed = time.perf_counter() - attempt_started
-                    scope, cooldown = self._parse_hata(str(e))
+                for mail, _api_key in self._ordered_api_items():
+                    # Bu key'e özel kalıcı yasak (free-tier) → bu key'i atla, diğer
+                    # key denenir (farklı key/project farklı tier'a sahip olabilir).
+                    if self._is_key_banned(mail, model_adi):
+                        continue
+                    client = self.clients.get(mail)
+                    if client is None:
+                        continue
 
-                    if scope in ("quota", "quota_day"):
-                        # Kota key'e özeldir ve dolar; beklemeden diğer key.
-                        if stop_on_quota:
-                            raise
-                        if scope == "quota_day" and not has_tools:
-                            self._ban(mail, model_adi, cooldown, "combo")
-                            log_ekle(f"🚫 {mail}+{model_adi}: günlük kota bitti; bu çalışma boyunca atlanacak. | {attempt_elapsed:.2f}s")
+                    attempt_started = time.perf_counter()
+                    log_ekle(f"↳ API #{request_id} deneme START | {mail}+{model_adi}")
+                    try:
+                        response = client.models.generate_content(
+                            model=model_adi,
+                            contents=contents,
+                            config=config,
+                        )
+                    except Exception as e:
+                        son_hata = e
+                        attempt_elapsed = time.perf_counter() - attempt_started
+                        scope, cooldown = self._parse_hata(str(e))
+
+                        if scope in ("quota", "quota_day"):
+                            # Kota key'e özeldir ve dolar; beklemeden diğer key.
+                            if stop_on_quota:
+                                raise
+                            if scope == "quota_day" and not has_tools:
+                                self._ban(mail, model_adi, cooldown, "combo")
+                                log_ekle(f"🚫 {mail}+{model_adi}: günlük kota bitti; bu çalışma boyunca atlanacak. | {attempt_elapsed:.2f}s")
+                                continue
+                            round_transient += 1
+                            log_ekle(f"⚠️ {mail}+{model_adi}: kota dolu; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
                             continue
-                        log_ekle(f"⚠️ {mail}+{model_adi}: kota dolu; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
+                        if scope == "free_tier_yok":
+                            # Tier key/project'e bağlı → yalnızca bu key yasakla.
+                            self._ban(mail, model_adi, cooldown, "combo")
+                            log_ekle(f"🚫 {mail}+{model_adi}: free tier'da yok; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
+                            continue
+                        if scope in ("model_key", "model_config"):
+                            # Model yok / config uyumsuz → tüm key'lerde geçersiz.
+                            self._ban(mail, model_adi, cooldown, "model")
+                            log_ekle(f"⚠️ {model_adi}: bu model/config desteklenmiyor; sonraki modele geçiliyor. | {attempt_elapsed:.2f}s")
+                            break  # bu modelin kalan key'lerini atla → sonraki model
+
+                        # unavailable (503) / combo (timeout) / bilinmeyen -> GEÇICI.
+                        # Bekleme yok, yasaklama yok: hemen diğer key. Bir tam tur
+                        # (tüm key'ler) tamamlanmadan diğer modele geçilmez; bir
+                        # sonraki pipeline adımında bu model yeniden fresh denenir.
+                        round_transient += 1
+                        log_ekle(f"⚠️ {mail}+{model_adi}: {self._reason_for(scope)}; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
+                        if attempt_elapsed >= SLOW_ATTEMPT_SECONDS:
+                            self._mark_slow(model_adi)
+                            slow_hits += 1
+                            if slow_hits >= SLOW_HITS_BEFORE_NEXT_MODEL:
+                                log_ekle(f"⏱️ {model_adi}: {slow_hits} yavaş deneme; kalan key'ler atlanıp sıradaki modele geçiliyor.")
+                                break
                         continue
-                    if scope == "free_tier_yok":
-                        # Tier key/project'e bağlı → yalnızca bu key yasakla.
-                        self._ban(mail, model_adi, cooldown, "combo")
-                        log_ekle(f"🚫 {mail}+{model_adi}: free tier'da yok; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
+
+                    attempt_elapsed = time.perf_counter() - attempt_started
+                    if require_text and not str(getattr(response, "text", "") or "").strip():
+                        log_ekle(f"⚠️ {mail}+{model_adi}: yanıt boş; sonraki key/model deneniyor. | {attempt_elapsed:.2f}s")
+                        son_hata = ValueError("Model boş yanıt verdi.")
+                        round_transient += 1
                         continue
-                    if scope in ("model_key", "model_config"):
-                        # Model yok / config uyumsuz → tüm key'lerde geçersiz.
-                        self._ban(mail, model_adi, cooldown, "model")
-                        log_ekle(f"⚠️ {model_adi}: bu model/config desteklenmiyor; sonraki modele geçiliyor. | {attempt_elapsed:.2f}s")
-                        break  # bu modelin kalan key'lerini atla → sonraki model
 
-                    # unavailable (503) / combo (timeout) / bilinmeyen -> GEÇICI.
-                    # Bekleme yok, yasaklama yok: hemen diğer key. Bir tam tur
-                    # (tüm key'ler) tamamlanmadan diğer modele geçilmez; bir
-                    # sonraki pipeline adımında bu model yeniden fresh denenir.
-                    log_ekle(f"⚠️ {mail}+{model_adi}: {self._reason_for(scope)}; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
-                    if attempt_elapsed >= SLOW_ATTEMPT_SECONDS:
-                        self._mark_slow(model_adi)
-                        slow_hits += 1
-                        if slow_hits >= SLOW_HITS_BEFORE_NEXT_MODEL:
-                            log_ekle(f"⏱️ {model_adi}: {slow_hits} yavaş deneme; kalan key'ler atlanıp sıradaki modele geçiliyor.")
-                            break
-                    continue
+                    total_elapsed = time.perf_counter() - request_started
+                    model_elapsed = time.perf_counter() - model_started
+                    log_ekle(
+                        f"✅ Başarılı → {mail} + {model_adi} | deneme {attempt_elapsed:.2f}s | "
+                        f"model turu {model_elapsed:.2f}s | API toplam {total_elapsed:.2f}s ({total_elapsed/60:.2f} dk)"
+                    )
+                    return response, f"{mail}+{model_adi}"
 
-                attempt_elapsed = time.perf_counter() - attempt_started
-                if require_text and not str(getattr(response, "text", "") or "").strip():
-                    log_ekle(f"⚠️ {mail}+{model_adi}: yanıt boş; sonraki key/model deneniyor. | {attempt_elapsed:.2f}s")
-                    son_hata = ValueError("Model boş yanıt verdi.")
-                    continue
-
-                total_elapsed = time.perf_counter() - request_started
-                model_elapsed = time.perf_counter() - model_started
-                log_ekle(
-                    f"✅ Başarılı → {mail} + {model_adi} | deneme {attempt_elapsed:.2f}s | "
-                    f"model turu {model_elapsed:.2f}s | API toplam {total_elapsed:.2f}s ({total_elapsed/60:.2f} dk)"
-                )
-                return response, f"{mail}+{model_adi}"
+            if round_transient == 0:
+                break
+            if round_no >= max_rounds:
+                break
+            wait_s = OVERLOAD_RETRY_WAITS[min(round_no - 1, len(OVERLOAD_RETRY_WAITS) - 1)]
+            spent = getattr(self, "_overload_wait_spent", 0.0)
+            remaining = OVERLOAD_WAIT_BUDGET_SECONDS - spent
+            age = time.monotonic() - getattr(self, "_created_at", time.monotonic())
+            if age + wait_s > OVERLOAD_RETRY_DEADLINE_SECONDS:
+                log_ekle(f"⏳ API #{request_id}: çalışma süresi {age/60:.1f} dk; job zaman sınırı için yeniden deneme beklemesi yapılmıyor.")
+                break
+            if remaining <= 0:
+                log_ekle(f"⏳ API #{request_id}: aşırı-yük bekleme bütçesi ({OVERLOAD_WAIT_BUDGET_SECONDS}s) tükendi; yeniden deneme yapılmıyor.")
+                break
+            wait_s = min(wait_s, remaining)
+            self._overload_wait_spent = spent + wait_s
+            log_ekle(
+                f"⏳ API #{request_id}: tüm model+key kombinasyonları geçici hata verdi (503/kota/timeout). "
+                f"{wait_s:.0f}s beklenip tam tur yeniden deneniyor ({round_no}/{OVERLOAD_RETRY_ROUNDS})."
+            )
+            _sleep(wait_s)
 
         total_elapsed = time.perf_counter() - request_started
         log_ekle(f"🌐 API REQUEST #{request_id} FAIL | toplam {total_elapsed:.2f}s ({total_elapsed/60:.2f} dk)")
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
+
+    @contextmanager
+    def hizli_basarisizlik(self):
+        """Bu blok içindeki isteklerde aşırı-yük beklemesi yapılmaz (tek tam tur)."""
+        self._overload_retry_off = getattr(self, "_overload_retry_off", 0) + 1
+        try:
+            yield self
+        finally:
+            self._overload_retry_off = max(0, getattr(self, "_overload_retry_off", 1) - 1)
 
     def _json_parse_or_none(self, text: str):
         try:

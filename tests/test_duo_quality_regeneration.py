@@ -102,7 +102,8 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
         )
 
         self.assertEqual("ready", script["status"])
-        self.assertEqual("Kapıyı bırak, şu fiyata bak.", script["segments"][0]["text"])
+        # TTS duygu etiketi segment metninin başında korunur (bkz. test_tts_tags_preserved_in_segments).
+        self.assertEqual("[şaşırarak] Kapıyı bırak, şu fiyata bak.", script["segments"][0]["text"])
         self.assertTrue(any("Revize başlatılıyor" in line for line in logs))
 
     @_ses_sure_patch
