@@ -30,6 +30,7 @@ from core.media import (
     video_suresini_al,
 )
 from core.narration_mode import anlatim_modu_karar_ver, mod_kilit_talimati, mod_kilidini_uygula
+from duo.duo_strategy import normalize_duo_strategy
 from duo.duo_audio import duo_ses_uret
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
@@ -450,10 +451,17 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
         lambda: router.metin_uret(content, prompt, HOOK_GEN_SCHEMA, log, arama_kullan=False),
     )
 
-def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi=""):
+def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO"):
+    if mod == "DUO":
+        karakter_bilgisi = "Karakterler: Autonoe (şüpheci, zeki kadın), Charon (iddialı, kanıtlayan erkek). İki kişilik doğal muhabbet."
+    elif mod == "SOLO_FEMALE":
+        karakter_bilgisi = "Karakter: Sadece Autonoe (şüpheci, zeki kadın). Tek kişilik monolog."
+    else:
+        karakter_bilgisi = "Karakter: Sadece Charon (iddialı, kanıtlayan erkek). Tek kişilik monolog."
+
     prompt = (
-        "Sen otoXtra'nın Sohbet Yazarısın. Karakterler: Autonoe (şüpheci, zeki kadın), Charon (iddialı, kanıtlayan erkek).\n"
-        "Kanca ve Dedektif verilerini kullanarak asimetrik, doğal bir muhabbet yaz.\n"
+        f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
+        "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
         "TTS ETİKETLERİ: Her repliğin başına veya içine duygu etiketi ekle. Örn: [gülerek], [şaşırarak], [vurgulu], ... (duraksama).\n"
         "FİNAL: Senaryoyu kesin bir kararla bitirme. Son cümle, izleyicileri ikiye bölecek ve yorumlarda tartışmaya itecek kışkırtıcı bir SORU olmalı.\n"
         "Hedef kelime sayısı ve süre: video süresine uygun doğal konuşma hızı."
@@ -508,9 +516,10 @@ def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log):
     )
 
 
-def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log):
+def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None):
     """4 Ajanlı Viral Üretim Döngüsü (Kelime ve TTS Süre Güvenlik Duvarlı)"""
     
+    mod = str((mod_karari or {}).get("mode") or "DUO").upper()
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     hedef_kelime_bilgisi = f"Hedef {hedef} kelime. Kesin aralık {minimum}-{maksimum} kelime."
     
@@ -534,7 +543,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         # 3. Script Writer
         script_state, model_script = _script_writer_calistir(
             router, hook_state, detective_state, fact_state, editorial_state, 
-            video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi
+            video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
         )
         script_state = _object_state_or_empty(script_state)
         son_model = model_script
@@ -549,13 +558,11 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             log(f"⚠️ Critic onaylamadı (Score: {critic_state.get('score')}). Revize başlatılıyor...")
             script_state, model_script = _script_writer_calistir(
                 router, hook_state, detective_state, fact_state, editorial_state, 
-                video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi
+                video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
             )
             script_state = _object_state_or_empty(script_state)
             son_model = model_script
             
-        # 5. Metadata (Sadece son başarılı denemede üretilir, token tasarrufu için döngü içinde kontrol edilir)
-        
         # Reels State Emülasyonu
         full_text = " ".join([seg.get("text", "") for seg in script_state.get("segments", [])]) + " " + script_state.get("yorum_tetikleyici_soru", "")
         reels_state = {
@@ -572,22 +579,34 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             tag = seg.get('tts_tag', '').strip()
             text = seg.get('text', '').strip()
             tts_text = f"{tag} {text}".strip() if tag else text
-            tts_segments.append({"speaker": seg.get("speaker", "female"), "text": tts_text})
+            
+            if mod == "SOLO_FEMALE":
+                tts_segments.append({"speaker": "female", "text": tts_text})
+            elif mod == "SOLO_MALE":
+                tts_segments.append({"speaker": "male", "text": tts_text})
+            else:
+                tts_segments.append({"speaker": seg.get("speaker", "female"), "text": tts_text})
             
         if script_state.get("yorum_tetikleyici_soru"):
             last_speaker = segments[-1].get("speaker", "female") if segments else "female"
             final_speaker = "male" if last_speaker == "female" else "female"
+            
+            if mod == "SOLO_FEMALE":
+                final_speaker = "female"
+            elif mod == "SOLO_MALE":
+                final_speaker = "male"
+                
             tts_segments.append({"speaker": final_speaker, "text": f"[vurgulu] {script_state.get('yorum_tetikleyici_soru')}"})
 
         duo_script = {
             "status": "ready",
             "segments": tts_segments,
-            "contract": {"mode": "DUO"},
+            "contract": {"mode": mod},
             "conversation_design": {},
             "model": "agentic"
         }
         
-        duo_plan = {"mode": "DUO", "target_words": hedef}
+        duo_plan = {"mode": mod, "target_words": hedef}
         
         # Kelime Kontrolü
         adet = _kelime_sayisi(full_text)
@@ -603,7 +622,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         
         # TTS Üretimi
         ses_dosyasi = gecici_ses_yolu()
-        ok, info, mod = _duo_ses_veya_legacy_uret(router, duo_script, full_text, legacy_voice, log, ses_dosyasi)
+        ok, info, mod_tts = _duo_ses_veya_legacy_uret(router, duo_script, full_text, legacy_voice, log, ses_dosyasi)
         
         if not ok:
             temp_dosya_temizle(ses_dosyasi)
@@ -629,7 +648,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             metadata_state = _object_state_or_empty(metadata_state)
             reels_state["metadata"] = metadata_state
             
-            return reels_state, "agentic", duo_plan, duo_script, True, info, mod, ses_dosyasi, metadata_state
+            return reels_state, "agentic", duo_plan, duo_script, True, info, mod_tts, ses_dosyasi, metadata_state
 
         temp_dosya_temizle(ses_dosyasi)
 
@@ -651,9 +670,12 @@ def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,capti
 def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,duo_plan,duo_script,sure_saniye,ton,legacy_voice,log,voice_initial_instruction='',production_notes='',ses_modu_notlari=None):
     qa_state={}; qa_rounds=0; ses_basarili=False; kullanilan_ses_modeli=None; ses_modu='LEGACY'; ses_dosyasi=''
     
+    # Anlatım Modu Kararını Al
+    mod_karari = _mod_karari_al(editorial_state)
+    
     # Agentic Üretim Başlatılıyor
     reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi, metadata_state = agentic_icerik_uretimi(
-        router,video_state,fact_state,editorial_state,sure_saniye,ton,legacy_voice,log
+        router,video_state,fact_state,editorial_state,sure_saniye,ton,legacy_voice,log, mod_karari=mod_karari
     )
     
     # Metadata'dan Caption'ı al
@@ -705,7 +727,7 @@ def _qa_regeneration_loop(router,video_state,fact_state,editorial_state,reels_st
         
         if creative_needed:
             reels_state,model_reels,duo_plan,duo_script,ses_basarili,kullanilan_ses_modeli,ses_modu,ses_dosyasi, metadata_state = agentic_icerik_uretimi(
-                router,video_state,fact_state,editorial_state,sure_saniye,ton,legacy_voice,log
+                router,video_state,fact_state,editorial_state,sure_saniye,ton,legacy_voice,log, mod_karari=mod_karari
             )
             caption_state = _caption_state_normalize(metadata_state)
 
