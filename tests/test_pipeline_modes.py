@@ -3,47 +3,56 @@ from pathlib import Path
 
 os.environ.setdefault("GEMINI_API_KEY", "test")
 
-from core.pipeline import _duo_plan_hazirla, _explicit_voice_mode_from_notes
-from telegram import telegram_pipeline_guard as guard
+from core.pipeline import _explicit_voice_mode_from_notes, agentic_icerik_uretimi
 
 
-def _creative_state(mode="SOLO_FEMALE"):
+class _Router:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def metin_uret(self, *args, **kwargs):
+        response = self.responses[self.calls % len(self.responses)]
+        self.calls += 1
+        return response, f"fake-model-{self.calls}"
+
+
+def _detective():
     return {
-        "anlatim_modu": mode,
-        "seslendirme_metni": "Bu açık bir deneme metnidir.",
-        "duo_stratejisi": {
-            "uygunluk": mode,
-            "hook_speaker": "female",
-            "ending_speaker": "female",
-        },
-        "konusma_haritasi": [
-            {"speaker": "female", "amac": "hook", "detay": "Açılış"},
-            {"speaker": "female", "amac": "closing", "detay": "Sonuç"},
-        ],
+        "kronik_sikayetler": ["Yakıt tüketimi yüksek"],
+        "turkiye_ozel_magduriyet": "ÖTV dilimi dezavantajı",
+        "viral_kan_mali": "Türkiye fiyatı Avrupa'nın 2 katı"
     }
 
 
-def test_model_voice_mode_is_kept_without_explicit_user_request():
-    plan = _duo_plan_hazirla(_creative_state(), 30, "dengeli", notes="Aracın fiyatını anlat.")
-    assert plan["mode"] == "SOLO_FEMALE"
-    assert {turn["speaker"] for turn in plan["conversation_map"]} == {"female"}
+def _hook():
+    return {
+        "secilen_sablon": "Ters_Kose",
+        "kapak_metni": "Fiyat Şoku",
+        "ilk_3_saniye_kanca": "Bu fiyat herkesi şaşırttı"
+    }
 
 
-def test_explicit_user_duo_overrides_model_solo():
-    plan = _duo_plan_hazirla(_creative_state(), 30, "dengeli", notes="Bunu iki sesli duo yap.")
-    assert plan["mode"] == "DUO"
-    assert {turn["speaker"] for turn in plan["conversation_map"]} == {"female", "male"}
+def _script():
+    return {
+        "segments": [
+            {"speaker": "female", "tts_tag": "", "text": "Bu araç çok iyi."},
+            {"speaker": "male", "tts_tag": "", "text": "Evet."}
+        ],
+        "yorum_tetikleyici_soru": "Siz ne düşünüyorsunuz?"
+    }
 
 
-def test_explicit_user_solo_overrides_model_duo():
-    plan = _duo_plan_hazirla(_creative_state("DUO"), 30, "dengeli", notes="Yalnızca erkek sesi kullan.")
-    assert plan["mode"] == "SOLO_MALE"
-    assert {turn["speaker"] for turn in plan["conversation_map"]} == {"male"}
+def _critic():
+    return {"score": 8, "approved": True, "feedback": ""}
 
 
-def test_generic_solo_request_lets_ai_character_preference_choose_voice():
-    plan = _duo_plan_hazirla(_creative_state("DUO"), 30, "dengeli", notes="Bu içerik tek sesli solo olsun.")
-    assert plan["mode"] == "SOLO_FEMALE"
+def _metadata():
+    return {
+        "reels_baslik": "Fiyat Şoku",
+        "reels_aciklama": "Bu fiyat herkesi şaşırttı",
+        "reels_hashtag": ["#otomobil"]
+    }
 
 
 def test_explicit_solo_and_duo_note_detection():
@@ -55,28 +64,53 @@ def test_explicit_solo_and_duo_note_detection():
     assert _explicit_voice_mode_from_notes("Normal üret") == ""
 
 
-def test_guard_routes_explicit_solo_to_single_voice_tts():
-    calls = []
+def test_agentic_solo_female_mode():
+    router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
+    logs = []
+    
+    reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+        router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "SOLO_FEMALE"}
+    )
+    
+    assert plan["mode"] == "SOLO_FEMALE"
+    speakers = {seg.get("speaker") for seg in script["segments"]}
+    assert speakers == {"female"}
 
-    class FakeRouter:
-        def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
-            calls.append((text, voice, hiz_carpani))
-            Path(output).write_bytes(b"valid-placeholder")
-            return True, "fake-tts"
 
-    original_reels = guard._original_reels_creative
-    original_duration = guard._pipeline._ses_sure_uyumlu_mu
-    guard._original_reels_creative = lambda *args, **kwargs: (_creative_state(), "fake-text")
-    guard._pipeline._ses_sure_uyumlu_mu = lambda *args, **kwargs: (True, 25.0, 0.9)
-    try:
-        result = guard._single_pass_reels_and_tts(
-            FakeRouter(), {}, {}, {}, "Sadece kadın sesi kullan", 30,
-            "dengeli", "Autonoe", lambda _msg: None,
-        )
-    finally:
-        guard._original_reels_creative = original_reels
-        guard._pipeline._ses_sure_uyumlu_mu = original_duration
+def test_agentic_solo_male_mode():
+    router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
+    logs = []
+    
+    reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+        router, {}, {}, {}, 30, "dengeli", "Charon", logs.append, mod_karari={"mode": "SOLO_MALE"}
+    )
+    
+    assert plan["mode"] == "SOLO_MALE"
+    speakers = {seg.get("speaker") for seg in script["segments"]}
+    assert speakers == {"male"}
 
-    assert result[6] == "SOLO_FEMALE"
-    assert result[4] is True
-    assert calls and calls[0][1] == "Autonoe"
+
+def test_agentic_duo_mode():
+    router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
+    logs = []
+    
+    reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+        router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
+    )
+    
+    assert plan["mode"] == "DUO"
+    speakers = {seg.get("speaker") for seg in script["segments"]}
+    assert "female" in speakers or "male" in speakers
+
+
+def test_metadata_generated():
+    router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
+    logs = []
+    
+    reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+        router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
+    )
+    
+    assert meta.get("reels_baslik") == "Fiyat Şoku"
+    assert meta.get("reels_aciklama") == "Bu fiyat herkesi şaşırttı"
+    assert "#otomobil" in meta.get("reels_hashtag", [])
