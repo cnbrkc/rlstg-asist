@@ -380,6 +380,9 @@ def _beklenen_gercek_mod(duo_plan, duo_script):
     mode = str(((duo_script or {}).get("contract", {}) or {}).get("mode") or (duo_plan or {}).get("mode") or "DUO").strip().upper()
     return mode if mode in {"DUO", "SOLO_FEMALE", "SOLO_MALE"} else "DUO"
 
+def _ses_modu_sesi(mode):
+    return {'SOLO_FEMALE':'Autonoe','SOLO_MALE':'Charon','DUO':'Autonoe + Charon'}.get(mode, mode or 'Bilinmiyor')
+
 
 def _duo_ses_veya_legacy_uret(router, duo_script, legacy_text, legacy_voice, log, output_path):
     mode = _beklenen_gercek_mod({}, duo_script)
