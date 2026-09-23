@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
-from core.pipeline import _duo_script_calistir
+from core.pipeline import agentic_icerik_uretimi
 
 
 class _Router:
@@ -15,56 +15,186 @@ class _Router:
         self.calls = 0
 
     def metin_uret(self, *args, **kwargs):
-        response = self.responses[self.calls]
+        response = self.responses[self.calls % len(self.responses)]
         self.calls += 1
         return response, f"fake-model-{self.calls}"
 
 
-def _design():
+def _detective():
     return {
-        "central_tension": "fiyat avantajı ile Türkiye fiyatı farkı",
-        "hook_open_loop": "fiyat neden şaşırtıcı",
-        "reversal": "Türkiye etiketi olmadığı kabulü",
-        "payoff_callback": "fiyat avantajına dönüş",
+        "kronik_sikayetler": ["Yakıt tüketimi yüksek"],
+        "turkiye_ozel_magduriyet": "ÖTV dilimi dezavantajı",
+        "viral_kan_mali": "Türkiye fiyatı Avrupa'nın 2 katı"
     }
 
 
-class DuoQualityRegenerationTests(unittest.TestCase):
-    def test_one_targeted_rewrite_replaces_duet_like_valid_script(self):
-        poor = {
-            "conversation_design": _design(),
-            "segments": [
-                {"speaker": "female", "purpose": "hook", "reply_anchor": "OPENING", "text": "Bu araç gerçekten çok uygun bir fiyatla dikkat çekiyor ve herkesin ilgisini kolayca çekebilir."},
-                {"speaker": "male", "purpose": "fact", "reply_anchor": "", "text": "Evet."},
-                {"speaker": "female", "purpose": "fact", "reply_anchor": "", "text": "Üstelik tasarımı da modern görünüyor ve günlük kullanıma uygun birçok özellik sunuyor."},
-                {"speaker": "female", "purpose": "closing", "reply_anchor": "", "text": "Sonuç olarak bu otomobil fiyatıyla ve tasarımıyla pazarda öne çıkabilecek bir seçenek."},
-            ],
-        }
-        good = {
-            "conversation_design": _design(),
-            "segments": [
-                {"speaker": "female", "purpose": "hook", "reply_anchor": "OPENING", "text": "Kapıyı bırak, şu fiyata bak."},
-                {"speaker": "male", "purpose": "rebuttal", "reply_anchor": "şu fiyat", "text": "Bakıyorum da o Türkiye fiyatı değil."},
-                {"speaker": "male", "purpose": "fact", "reply_anchor": "Türkiye fiyatı değil", "text": "Kendi pazarında doğrulanmış başlangıç etiketi ve rakiplerinden belirgin biçimde aşağıda."},
-                {"speaker": "female", "purpose": "counterpoint", "reply_anchor": "rakiplerinden aşağıda", "text": "Tamam, işte bu kapı kolundan daha büyük mesele."},
-                {"speaker": "male", "purpose": "concession", "reply_anchor": "daha büyük mesele", "text": "Orada haklısın; aynı avantajla gelse burada asıl onu konuşurduk."},
-            ],
-        }
-        router = _Router([poor, good])
+def _hook():
+    return {
+        "secilen_sablon": "Ters_Kose",
+        "kapak_metni": "Fiyat Şoku",
+        "ilk_3_saniye_kanca": "Bu fiyat herkesi şaşırttı"
+    }
+
+
+def _script(segments, question="Siz ne düşünüyorsunuz?"):
+    return {
+        "segments": segments,
+        "yorum_tetikleyici_soru": question
+    }
+
+
+def _critic(score, approved, feedback=""):
+    return {
+        "score": score,
+        "approved": approved,
+        "feedback": feedback
+    }
+
+
+def _metadata():
+    return {
+        "reels_baslik": "Fiyat Şoku",
+        "reels_aciklama": "Bu fiyat herkesi şaşırttı",
+        "reels_hashtag": ["#otomobil", "#fiyat"]
+    }
+
+
+class AgenticQualityRegenerationTests(unittest.TestCase):
+    
+    def test_critic_reject_triggers_single_rewrite(self):
+        """Critic red verirse Script Writer 1 kez yeniden yazmalı."""
+        poor_script = _script([
+            {"speaker": "female", "tts_tag": "[vurgulu]", "text": "Bu araç çok iyi."},
+            {"speaker": "male", "tts_tag": "", "text": "Evet."}
+        ])
+        good_script = _script([
+            {"speaker": "female", "tts_tag": "[şaşırarak]", "text": "Kapıyı bırak, şu fiyata bak."},
+            {"speaker": "male", "tts_tag": "[gülerek]", "text": "Bakıyorum da o Türkiye fiyatı değil."}
+        ])
+        
+        router = _Router([
+            _detective(), _hook(), poor_script, 
+            _critic(4, False, "Daha doğal yap."), 
+            good_script, 
+            _metadata()
+        ])
         logs = []
-        result = _duo_script_calistir(
-            router,
-            {"mode": "DUO", "target_words": 70, "min_words": 55, "max_words": 85},
-            {"core_story": "fiyat"},
-            {"facts": []},
-            {},
-            logs.append,
+        
+        reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
         )
-        self.assertEqual(2, router.calls)
-        self.assertEqual("ready", result["status"])
-        self.assertEqual([], result["conversation_quality_issues"])
-        self.assertEqual("Kapıyı bırak, şu fiyata bak.", result["segments"][0]["text"])
-        self.assertTrue(any("tek kalite yenilemesi" in line for line in logs))
+        
+        self.assertEqual("ready", script["status"])
+        self.assertEqual("Kapıyı bırak, şu fiyata bak.", script["segments"][0]["text"])
+        self.assertTrue(any("Revize başlatılıyor" in line for line in logs))
+    
+    def test_critic_approve_no_rewrite(self):
+        """Critic onay verirse yeniden yazım olmamalı."""
+        good_script = _script([
+            {"speaker": "female", "tts_tag": "[şaşırarak]", "text": "Kapıyı bırak, şu fiyata bak."},
+            {"speaker": "male", "tts_tag": "[gülerek]", "text": "Bakıyorum da o Türkiye fiyatı değil."}
+        ])
+        
+        router = _Router([
+            _detective(), _hook(), good_script, 
+            _critic(8, True), 
+            _metadata()
+        ])
+        logs = []
+        
+        reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
+        )
+        
+        self.assertEqual("ready", script["status"])
+        self.assertFalse(any("Revize başlatılıyor" in line for line in logs))
+    
+    def test_tts_tags_preserved_in_segments(self):
+        """TTS etiketleri segmentlerde korunmalı."""
+        script_data = _script([
+            {"speaker": "female", "tts_tag": "[şaşırarak]", "text": "Bu fiyat gerçek mi?"},
+            {"speaker": "male", "tts_tag": "[gülerek]", "text": "Maalesef gerçek."}
+        ])
+        
+        router = _Router([
+            _detective(), _hook(), script_data, 
+            _critic(8, True), 
+            _metadata()
+        ])
+        logs = []
+        
+        reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
+        )
+        
+        self.assertEqual("ready", script["status"])
+        self.assertTrue(any("[şaşırarak]" in seg.get("text", "") for seg in script["segments"]))
+    
+    def test_comment_trigger_added_as_final_segment(self):
+        """Yorum tetikleyici soru final segment olarak eklenmeli."""
+        script_data = _script([
+            {"speaker": "female", "tts_tag": "", "text": "Bu araç çok iyi."}
+        ], question="Bu fiyat normal mi sizce?")
+        
+        router = _Router([
+            _detective(), _hook(), script_data, 
+            _critic(8, True), 
+            _metadata()
+        ])
+        logs = []
+        
+        reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
+        )
+        
+        self.assertEqual("ready", script["status"])
+        last_segment = script["segments"][-1]
+        self.assertIn("Bu fiyat normal mi sizce?", last_segment.get("text", ""))
+        self.assertIn("[vurgulu]", last_segment.get("text", ""))
+    
+    def test_solo_female_locks_speaker(self):
+        """SOLO_FEMALE modunda tüm speaker'lar female olmalı."""
+        script_data = _script([
+            {"speaker": "female", "tts_tag": "", "text": "Bu araç çok iyi."},
+            {"speaker": "male", "tts_tag": "", "text": "Evet."}  # Yanlış speaker, düzeltilmeli
+        ])
+        
+        router = _Router([
+            _detective(), _hook(), script_data, 
+            _critic(8, True), 
+            _metadata()
+        ])
+        logs = []
+        
+        reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "SOLO_FEMALE"}
+        )
+        
+        self.assertEqual("ready", script["status"])
+        speakers = {seg.get("speaker") for seg in script["segments"]}
+        self.assertEqual({"female"}, speakers)
+    
+    def test_solo_male_locks_speaker(self):
+        """SOLO_MALE modunda tüm speaker'lar male olmalı."""
+        script_data = _script([
+            {"speaker": "female", "tts_tag": "", "text": "Bu araç çok iyi."},
+            {"speaker": "male", "tts_tag": "", "text": "Evet."}
+        ])
+        
+        router = _Router([
+            _detective(), _hook(), script_data, 
+            _critic(8, True), 
+            _metadata()
+        ])
+        logs = []
+        
+        reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Charon", logs.append, mod_karari={"mode": "SOLO_MALE"}
+        )
+        
+        self.assertEqual("ready", script["status"])
+        speakers = {seg.get("speaker") for seg in script["segments"]}
+        self.assertEqual({"male"}, speakers)
 
 
 if __name__ == "__main__":
