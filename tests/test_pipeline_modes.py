@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("GEMINI_API_KEY", "test")
 
@@ -17,8 +18,8 @@ class _Router:
         return response, f"fake-model-{self.calls}"
 
     def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
-        Path(output).write_bytes(b"fake-audio")
-        return True, "fake-tts"
+        Path(output).write_bytes(b"fake-audio-data")
+        return True, "fake-tts-model"
 
 
 def _detective():
@@ -59,6 +60,15 @@ def _metadata():
     }
 
 
+def _mock_duo_ses(router, segments, output_path, log, hiz_carpani=1.0):
+    Path(output_path).write_bytes(b"fake-duo-audio")
+    return True, "fake-duo-tts"
+
+
+_kelime_patch = patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
+_ses_sure_patch = patch("core.pipeline._ses_suresini_al", return_value=25.0)
+
+
 def test_explicit_solo_and_duo_note_detection():
     assert _explicit_voice_mode_from_notes("Yalnızca kadın sesi kullan") == "SOLO_FEMALE"
     assert _explicit_voice_mode_from_notes("Sadece erkek anlatsın") == "SOLO_MALE"
@@ -68,53 +78,63 @@ def test_explicit_solo_and_duo_note_detection():
     assert _explicit_voice_mode_from_notes("Normal üret") == ""
 
 
-def test_agentic_solo_female_mode():
+@_ses_sure_patch
+@_kelime_patch
+def test_agentic_solo_female_mode(mock_kelime, mock_ses):
     router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
     logs = []
-    
+
     reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
         router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "SOLO_FEMALE"}
     )
-    
+
     assert plan["mode"] == "SOLO_FEMALE"
     speakers = {seg.get("speaker") for seg in script["segments"]}
     assert speakers == {"female"}
 
 
-def test_agentic_solo_male_mode():
+@_ses_sure_patch
+@_kelime_patch
+def test_agentic_solo_male_mode(mock_kelime, mock_ses):
     router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
     logs = []
-    
+
     reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
         router, {}, {}, {}, 30, "dengeli", "Charon", logs.append, mod_karari={"mode": "SOLO_MALE"}
     )
-    
+
     assert plan["mode"] == "SOLO_MALE"
     speakers = {seg.get("speaker") for seg in script["segments"]}
     assert speakers == {"male"}
 
 
-def test_agentic_duo_mode():
+@_ses_sure_patch
+@_kelime_patch
+@patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+def test_agentic_duo_mode(mock_tts, mock_kelime, mock_ses):
     router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
     logs = []
-    
+
     reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
         router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
     )
-    
+
     assert plan["mode"] == "DUO"
     speakers = {seg.get("speaker") for seg in script["segments"]}
     assert "female" in speakers or "male" in speakers
 
 
-def test_metadata_generated():
+@_ses_sure_patch
+@_kelime_patch
+@patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+def test_metadata_generated(mock_tts, mock_kelime, mock_ses):
     router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
     logs = []
-    
+
     reels, model, plan, script, ses_ok, ses_model, ses_modu, ses_dosyasi, meta = agentic_icerik_uretimi(
         router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
     )
-    
+
     assert meta.get("reels_baslik") == "Fiyat Şoku"
     assert meta.get("reels_aciklama") == "Bu fiyat herkesi şaşırttı"
     assert "#otomobil" in meta.get("reels_hashtag", [])
