@@ -172,6 +172,22 @@ Türkiye ilgi önceliği “her zaman fiyat” şeklinde kör bir kural değildi
 
 `anlatim_modu` ve `duo_stratejisi.uygunluk` değerleri `DUO`, `SOLO_FEMALE`, `SOLO_MALE` enum'larıyla sınırlandırılmıştır. Runtime kullanıcı override'ı model kararından üstündür; override yoksa doğrulanmış model kararı korunur.
 
+### 5.1 Reels kapak yazısı formatı
+
+`[Kural: Reels Kapak Yazısı Formatı]` istisnasız uygulanır:
+
+- Kapak için asla tek başlık üretilmez; her üretimde TAM **5 farklı** alternatif sunulur.
+- Her alternatif iki katmandır:
+  - **Üst Başlık** (dikkat çekici kanca): TAMAMI BÜYÜK HARF, 2-4 kelime.
+  - **Alt Başlık** (tamamlayıcı detay): cümle düzeni (yalnızca ilk harf büyük), 4-7 kelime.
+- Hook Generator ajanı `HOOK_GEN_SCHEMA.kapak_basliklari` (5× `ust`/`alt`) alanını doldurur.
+- Çıktı `core.cover_titles.kapak_basliklarini_normalize_et` ile deterministik olarak
+  doğrulanır/düzeltilir: Türkçe büyük-küçük harf, kelime sınırları, tekrar tespiti ve
+  üst/alt aynılığı denetlenir; ajan eksik dönerse Editorial/Detective verisinden yerel
+  alternatiflerle 5'e tamamlanır (API yoğunluğunda bile asla tek başlık gitmez).
+- Payload'daki `kapak_basliklari[]` öğesi `{"ust", "alt", "ana"}` taşır; `ana == ust`
+  (Telegram worker ve seçili hook ile geriye dönük uyumluluk).
+
 ## 6. Model ve API key rotasyonu
 
 `SmartRouter`:
@@ -182,9 +198,29 @@ Türkiye ilgi önceliği “her zaman fiyat” şeklinde kör bir kural değildi
 4. Free-tier desteği olmayan key/model kombinasyonunu key bazında atlar.
 5. Search rotası başarısız olduğunda Search'siz structured-output fallback'i dener.
 6. Günlük kota (`PerDay`) biten key+model çifti o çalışma boyunca atlanır (Search araçlı isteklerde uygulanmaz); dakikalık kota her istekte yeniden denenir.
-7. 30 sn'den uzun süren hatalı deneme (timeout) modeli 3 dk boyunca listenin sonuna atar (silmez); aynı modelde 2 yavaş denemeden sonra kalan key'ler atlanıp sıradaki modele geçilir.
+7. 20 sn'den uzun süren hatalı deneme (timeout) modeli 3 dk boyunca listenin sonuna atar (silmez); aynı modelde 2 yavaş denemeden sonra kalan key'ler atlanıp sıradaki modele geçilir.
 
 API key değerleri loglanmaz; yalnızca `GEMINI_API_KEY_1` gibi alias'lar görünür.
+
+### 6.1 Aşırı yük (503) hız koruması
+
+Eylül 2026 üretim logları, tek bir run'da 26+ dakikaya çıkan beklemelerin çoğunun
+zorunlu iş değil, "her modele her key'de bir tur daha" ödünleri olduğunu gösterdi.
+Bu yüzden:
+
+- İstekler profil bazlı zaman aşımı/bütçe taşır (`ISTEK_PROFILLERI`): kısa metin
+  ajanları için 45 sn, uzun JSON adımları (Editorial/QA/Fact Lock) için 60 sn,
+  isteğe bağlı ajanlar için 30 sn zaman aşımı + 60 sn toplam bütçe, video için
+  120 sn, TTS için 60 sn. Bütçe dolan isteğe bağlı istek kalan denemeleri atlayıp
+  güvenli varsayılana düşer.
+- Tam tur aşırı yük (tüm model+key geçici hata) sonrasında, router `ASIRI_YUK_ATLAMA_PENCERESI`
+  (90 sn) boyunca atlanabilir ajanları (Detective, Critic, anlatım modu, Metadata)
+  hiç denemeden geçer — bekleme bütçesi zorunlu adımlara (Script Writer, TTS, Forensic) kalır.
+- Tam tur beklemeleri 15/30/45 sn'ye indi, tekrar sayısı 2, toplam bekleme bütçesi 180 sn,
+  son bekleme sınırı 12 dk. Kanıtlanmış modeller (gemini-3.5-flash-lite, gemini-3.6-flash)
+  model listelerinin başına alındı.
+- Kelime sayısı kontrolü toleranslı: hedeften %20'den az sapan senaryo yeniden yazılmaz;
+  FFmpeg senkron katmanı (0.5x-1.5x video hızı) farkı kapatır.
 
 ## 7. Gözlemlenebilirlik
 

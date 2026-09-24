@@ -2,13 +2,33 @@
 
 DuckDuckGo ile çoklu sorgu yapar, sonuçları çapraz analiz için LLM'e hazır
 hale getirir. API key gerektirmez, tamamen ücretsiz.
+
+Drift eden bir DDGS isteğinin susup pipepeline'ı takmasını önlemek için her
+sorgu önce bellek içi (iş parçacığı + kuyruk) zaman aşımıyla denenir; bu ölçüm
+"hâlâ çalışıyor" derse yanıt proses izolasyonuyla tekrar denenir ve eninde
+sonunda zaman aşımına uğrar (boş sonuç döner, Research Fact Lock fallback'ine
+bırakılır). GitHub Actions'ta iş parçacığı çöp toplama zamanlayıcısı 'import os'
+akışı nedeniyle sınırlı olabildiği için sıfır deneme yerine 1 güvenli deneme
+tutulur.
 """
+import multiprocessing
+import os
 import re
+import threading
 from typing import List, Dict, Any
+
+
+def _env_int(ad: str, varsayilan: int) -> int:
+    try:
+        return max(1, int(os.environ.get(ad, varsayilan)))
+    except (TypeError, ValueError):
+        return varsayilan
+
 
 def _temizle_metin(text: str, max_chars: int = 500) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text[:max_chars] if len(text) > max_chars else text
+
 
 def _ddgs_sinifi():
     """`duckduckgo_search` paketi `ddgs` adıyla yeniden adlandırıldı; eski paket
@@ -23,14 +43,82 @@ def _ddgs_sinifi():
         return DDGS
 
 
+def _raw_sonuclar(sorgu: str, max_sonuc: int, ddgs_cls) -> list:
+    with ddgs_cls() as ddgs:
+        return list(ddgs.text(sorgu, max_results=max_sonuc) or [])
+
+
+def _run_calisan_ile(sorgu: str, max_sonuc: int, timeout: int, ddgs_cls):
+    """Aynı proseste yan iş parçacığında DDGS çağrısı; yanıt kuyruktan okunur."""
+    try:
+        from queue import Queue
+    except Exception:
+        return None
+    kuyruk = Queue()
+
+    def calis():
+        try:
+            kuyruk.put(("ok", _raw_sonuclar(sorgu, max_sonuc, ddgs_cls)))
+        except Exception as e:  # noqa: BLE001
+            kuyruk.put(("hata", e))
+
+    t = threading.Thread(target=calis, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        return None  # hâlâ çalışıyor -> üst katman proses izolasyonu deneyecek
+    try:
+        durum, deger = kuyruk.get_nowait()
+    except Exception:
+        return None
+    if durum == "ok":
+        return deger
+    raise deger
+
+
+def _proses_hedefi(kuyruk, sorgu: str, max_sonuc: int) -> None:
+    try:
+        kuyruk.put(_raw_sonuclar(sorgu, max_sonuc, _ddgs_sinifi()))
+    except Exception as e:  # noqa: BLE001
+        kuyruk.put(e)
+
+
+def _run_proses_ile(sorgu: str, max_sonuc: int, timeout: int):
+    """DDGS yan iş parçacığında asılı kalırsa ayrı proses + kuyruk ile dener."""
+    try:
+        ctx = multiprocessing.get_context("spawn")
+        kuyruk = ctx.Queue()
+        proc = ctx.Process(target=_proses_hedefi, args=(kuyruk, sorgu, max_sonuc))
+        proc.start()
+        proc.join(timeout=timeout)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=2)
+            return []
+        if kuyruk.empty():
+            return []
+        sonuc = kuyruk.get_nowait()
+        if isinstance(sonuc, Exception):
+            raise sonuc
+        return sonuc or []
+    except Exception:
+        return []
+
+
 def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict[str, str]]:
-    """Tek bir web sorgusu çalıştırır (ddgs metasearch)."""
+    """Tek bir web sorgusu çalıştırır (ddgs metasearch).
+
+    Drift eden bir isteğin susup kalmaması için önce iş parçacığı zaman aşımı,
+    desteklenmezse proses izolasyonu denenir; iki katman da sessizce boş döner.
+    """
     try:
         DDGS = _ddgs_sinifi()
-        with DDGS() as ddgs:
-            results = list(ddgs.text(sorgu, max_results=max_sonuc) or [])
+        timeout = _env_int("DDGS_TIMEOUT", 8)
+        ham = _run_calisan_ile(sorgu, max_sonuc, timeout, DDGS)
+        if ham is None:
+            ham = _run_proses_ile(sorgu, max_sonuc, timeout)
         temiz = []
-        for r in results:
+        for r in ham or []:
             title = _temizle_metin(r.get("title", ""), 150)
             body = _temizle_metin(r.get("body", ""), 500)
             href = str(r.get("href", "")).strip()
@@ -43,6 +131,7 @@ def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict
         if log_ekle:
             log_ekle(f"⚠️ Web sorgu hatası ({sorgu[:40]}...): {str(e)[:100]}")
         return []
+
 
 def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
     """Forensic analizden agentic sorgu listesi üretir."""
@@ -69,6 +158,7 @@ def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
             sorgular.append(f"{tam_ad} {soru_metni}")
 
     return sorgular[:6]
+
 
 def web_arastirma_yap(video_state: Dict[str, Any], log_ekle) -> str:
     """Tüm sorguları çalıştırır, LLM'e hazır metin bloğu döndürür."""

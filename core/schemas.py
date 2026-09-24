@@ -163,10 +163,26 @@ HOOK_GEN_SCHEMA = {
     "type": "object",
     "properties": {
         "secilen_sablon": {"type": "string", "enum": ["Efsane_Curutme", "Ters_Kose", "Negatif_Uyari"]},
-        "kapak_metni": {"type": "string", "description": "Videonun üstüne yazılacak maksimum 5-6 kelimelik kışkırtıcı başlık."},
-        "ilk_3_saniye_kanca": {"type": "string", "description": "Seslendirmenin ilk cümlesi. İzleyiciyi şok etmeli."}
+        "kapak_basliklari": {
+            "type": "array",
+            "description": (
+                "[Kural: Reels Kapak Yazısı Formatı] TAM 5 FARKLI kapak alternatifi; tek başlık ASLA yeterli değildir. "
+                "Her alternatif iki katman: ust = dikkat çekici kanca, TAMAMI BÜYÜK HARF, 2-4 kelime (kaydırmayı durdurur, merak uyandırır); "
+                "alt = tamamlayıcı detay, cümle düzeni (yalnızca ilk harf büyük), 4-7 kelime (merakı açıklar, izlemek için sebep verir)."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "ust": {"type": "string", "description": "ÜST BAŞLIK: 2-4 kelime, TAMAMI BÜYÜK HARF."},
+                    "alt": {"type": "string", "description": "Alt başlık: 4-7 kelime, yalnızca ilk harf büyük."}
+                },
+                "required": ["ust", "alt"]
+            }
+        },
+        "kapak_metni": {"type": "string", "description": "En güçlü alternatifin ÜST başlığı (2-4 kelime, TAMAMI BÜYÜK HARF). kapak_basliklari[0].ust ile aynı."},
+        "ilk_3_saniye_kanca": {"type": "string", "description": "Seslendirmenin ilk cümlesi. İzleyiciyi şok etmeli; kapak başlığını birebir tekrar etmemeli."}
     },
-    "required": ["secilen_sablon", "kapak_metni", "ilk_3_saniye_kanca"]
+    "required": ["secilen_sablon", "kapak_basliklari", "kapak_metni", "ilk_3_saniye_kanca"]
 }
 
 SCRIPT_WRITER_SCHEMA = {
