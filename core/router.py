@@ -17,16 +17,37 @@ from core.config import (
     COOLDOWN_BULUNAMADI,
     COOLDOWN_DIGER,
     COOLDOWN_FREE_TIER_YOK,
+    ISTEK_ZAMAN_ASIMI_MS,
+    ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE,
+    ASIRI_YUK_ATLAMA_PENCERESI_SANIYE,
     model_arama_destekliyor_mu,
 )
 from core.utils import guvenli_json_yukle
 from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
-REQUEST_TIMEOUT_MS = 60_000
+# İstemci düzeyi varsayılan zaman aşımı (ms). Her istek ayrıca kendi profiline
+# göre daha kısa bir zaman aşımı taşır (bkz. ISTEK_PROFILLERI).
+REQUEST_TIMEOUT_MS = max(ISTEK_ZAMAN_ASIMI_MS.values())
+
+# İstek profilleri: {zaman_asimi_ms, butce_saniye}. Eylül 2026 logunda 60 sn'lik
+# tek zaman aşımı, yoğunlukta asılı kalan her denemeye ~1 dk kaybettiriyordu
+# (bir Critic çağrısı 236 sn, Detective 77 sn, anlatım modu 67 sn boşa gitti).
+#   metin        : Script Writer / Caption / Threads / Metadata (kısa-orta JSON)
+#   uzun_metin   : Editorial / Fact Lock / Final QA (uzun JSON)
+#   istege_bagli : güvenli varsayılanı olan ajanlar; toplam süre bütçesi de var
+#   video        : Forensic video analizi (inline video upload)
+#   tts          : tek/çoklu ses üretimi
+ISTEK_PROFILLERI = {
+    "metin": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["metin"], "butce_saniye": None},
+    "uzun_metin": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["uzun_metin"], "butce_saniye": None},
+    "istege_bagli": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["istege_bagli"], "butce_saniye": ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE},
+    "video": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["video"], "butce_saniye": None},
+    "tts": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["tts"], "butce_saniye": None},
+}
 
 # Bir deneme bu süreden uzun sürüp hata verirse (timeout/yavaş 503) model "yavaş"
 # sayılır: SİLİNMEZ, yalnızca 3 dk boyunca listenin sonuna atılır.
-SLOW_ATTEMPT_SECONDS = 30
+SLOW_ATTEMPT_SECONDS = 20
 SLOW_MODEL_COOLDOWN = 180
 SLOW_HITS_BEFORE_NEXT_MODEL = 2
 # Günlük kota (PerDay) o gün geri gelmez; bu çalışma boyunca atlanır.
@@ -44,15 +65,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-OVERLOAD_RETRY_ROUNDS = _env_int("ROUTER_OVERLOAD_RETRY_ROUNDS", 3)
-OVERLOAD_RETRY_WAITS = (20, 40, 60)
+OVERLOAD_RETRY_ROUNDS = _env_int("ROUTER_OVERLOAD_RETRY_ROUNDS", 2)
+# Eski 20/40/60 sn beklemeler tek bir Editorial isteğini 4+ dakikaya taşıyordu;
+# 503 dalgaları genelde saniyeler içinde açılıyor, kısa bekleme + hızlı tam tur yeter.
+OVERLOAD_RETRY_WAITS = (15, 30, 45)
 # Tüm çalışma boyunca aşırı-yük beklemelerine ayrılan toplam süre (saniye).
 # GitHub Actions job'u 30 dk ile sınırlı; bu bütçe bitince eski davranışa
 # (hemen hata) dönülür ve job zaman aşımına düşmez.
-OVERLOAD_WAIT_BUDGET_SECONDS = _env_int("ROUTER_OVERLOAD_WAIT_BUDGET", 480)
+OVERLOAD_WAIT_BUDGET_SECONDS = _env_int("ROUTER_OVERLOAD_WAIT_BUDGET", 180)
 # Router oluşturulduktan bu kadar saniye sonra yeni aşırı-yük beklemesi
 # başlatılmaz (job 30 dk; render + Telegram upload için pay bırakılır).
-OVERLOAD_RETRY_DEADLINE_SECONDS = _env_int("ROUTER_OVERLOAD_RETRY_DEADLINE", 20 * 60)
+OVERLOAD_RETRY_DEADLINE_SECONDS = _env_int("ROUTER_OVERLOAD_RETRY_DEADLINE", 12 * 60)
 _sleep = time.sleep
 
 # ---
@@ -91,6 +114,10 @@ class SmartRouter:
         # >0 iken aşırı-yük beklemesi yapılmaz (güvenli varsayılanı olan
         # isteğe bağlı adımlar bütçeyi zorunlu adımlara bırakır).
         self._overload_retry_off = 0
+        # Son "tam tur aşırı yük" (tüm model+key geçici hata) anı; atlanabilir
+        # ajanlar bu pencere içinde hiç denenmeden güvenli varsayılana düşer.
+        self._last_full_overload_at = None
+        self._aktif_profil = None
         self._request_counter_lock = threading.Lock()
         for mail, api_key in self._ordered_api_items():
             if api_key and api_key.strip():
@@ -172,6 +199,18 @@ class SmartRouter:
             "combo": "zaman aşımı/geçici hata",
         }.get(scope, "geçici hata")
 
+    @staticmethod
+    def _config_with_timeout(config, timeout_ms):
+        """İstek config'ine profil zaman aşımını ekler (istemci varsayılanını ezer)."""
+        if config is None or not timeout_ms:
+            return config
+        try:
+            if getattr(config, "http_options", None) is not None:
+                return config
+            return config.model_copy(update={"http_options": types.HttpOptions(timeout=int(timeout_ms))})
+        except Exception:
+            return config
+
     def _make_request(
         self,
         model_listesi: List[str],
@@ -180,9 +219,18 @@ class SmartRouter:
         log_ekle,
         stop_on_quota=False,
         require_text=False,
+        profil: Optional[str] = None,
     ):
         son_hata = None
         modeller = list(model_listesi or [])
+        # Açık profil > pipeline'ın `istek_profili()` bağlamı > varsayılan "metin".
+        profil = profil or getattr(self, "_aktif_profil", None) or "metin"
+        profil_ayari = ISTEK_PROFILLERI.get(profil) or ISTEK_PROFILLERI["metin"]
+        config = self._config_with_timeout(config, profil_ayari.get("zaman_asimi_ms"))
+        # İsteğe bağlı ajanlarda toplam süre bütçesi: bütçe dolunca kalan
+        # model+key kombinasyonları denenmez, çağıran güvenli varsayılana düşer.
+        butce_saniye = profil_ayari.get("butce_saniye")
+        butce_doldu = False
         # Yakın zamanda yavaş/timeout veren modeller silinmez, yalnızca sona atılır.
         modeller = [m for m in modeller if not self._is_slow(m)] + [m for m in modeller if self._is_slow(m)]
         # Search araçlı isteklerde gelen kota hatası aracın kotası olabilir; günlük yasağı bunlara uygulama.
@@ -196,7 +244,9 @@ class SmartRouter:
             request_id = self.request_counter
         log_ekle(
             f"🌐 API REQUEST #{request_id} START | models={len(modeller)} | "
-            f"keys={len(self._ordered_api_items())} | content={type(contents).__name__}"
+            f"keys={len(self._ordered_api_items())} | content={type(contents).__name__} | "
+            f"profil={profil} timeout={int(profil_ayari.get('zaman_asimi_ms') or 0)//1000}s"
+            + (f" bütçe={butce_saniye}s" if butce_saniye else "")
         )
 
         max_rounds = 1 if getattr(self, "_overload_retry_off", 0) else OVERLOAD_RETRY_ROUNDS + 1
@@ -217,6 +267,10 @@ class SmartRouter:
                 slow_hits = 0
 
                 for mail, _api_key in self._ordered_api_items():
+                    if butce_saniye and (time.perf_counter() - request_started) >= butce_saniye:
+                        log_ekle(f"⏱️ API #{request_id}: isteğe bağlı ajan bütçesi ({butce_saniye}s) doldu; kalan denemeler atlanıyor.")
+                        butce_doldu = True
+                        break
                     # Bu key'e özel kalıcı yasak (free-tier) → bu key'i atla, diğer
                     # key denenir (farklı key/project farklı tier'a sahip olabilir).
                     if self._is_key_banned(mail, model_adi):
@@ -289,9 +343,14 @@ class SmartRouter:
                     )
                     return response, f"{mail}+{model_adi}"
 
+                if butce_doldu:
+                    break
+
             if round_transient == 0:
                 break
-            if round_no >= max_rounds:
+            if round_transient:
+                self._last_full_overload_at = time.monotonic()
+            if butce_doldu or round_no >= max_rounds:
                 break
             wait_s = OVERLOAD_RETRY_WAITS[min(round_no - 1, len(OVERLOAD_RETRY_WAITS) - 1)]
             spent = getattr(self, "_overload_wait_spent", 0.0)
@@ -314,6 +373,28 @@ class SmartRouter:
         total_elapsed = time.perf_counter() - request_started
         log_ekle(f"🌐 API REQUEST #{request_id} FAIL | toplam {total_elapsed:.2f}s ({total_elapsed/60:.2f} dk)")
         raise son_hata if son_hata else Exception("Tüm model+key kombinasyonları başarısız.")
+
+    def yakin_zamanda_asiri_yuk_var_mi(self, pencere_saniye=None) -> bool:
+        """Son `pencere_saniye` içinde bir istek TAM TUR (tüm model+key) geçici
+        hatayla düştüyse True. Atlanabilir ajanlar bu durumda API'yi hiç yormadan
+        güvenli varsayılanla devam eder; bekleme bütçesi zorunlu adımlara kalır."""
+        son = getattr(self, "_last_full_overload_at", None)
+        if son is None:
+            return False
+        pencere = ASIRI_YUK_ATLAMA_PENCERESI_SANIYE if pencere_saniye is None else pencere_saniye
+        return (time.monotonic() - son) < pencere
+
+    @contextmanager
+    def istek_profili(self, profil: str):
+        """Bu blok içindeki isteklere zaman aşımı / süre bütçesi profili uygular
+        (bkz. ISTEK_PROFILLERI). Pipeline ajanları `metin_uret` imzasını
+        değiştirmeden bu bağlamla kısa zaman aşımı alır."""
+        onceki = getattr(self, "_aktif_profil", None)
+        self._aktif_profil = profil if profil in ISTEK_PROFILLERI else onceki
+        try:
+            yield self
+        finally:
+            self._aktif_profil = onceki
 
     @contextmanager
     def hizli_basarisizlik(self):
@@ -338,8 +419,11 @@ class SmartRouter:
         log_ekle,
         model_listesi=None,
         arama_kullan=True,
+        profil: Optional[str] = None,
     ):
         model_listesi = model_listesi or (ARAMA_MODELLERI if arama_kullan else METIN_MODELLERI)
+        if profil is not None and profil not in ISTEK_PROFILLERI:
+            profil = None
 
         if arama_kullan:
             kwargs = dict(system_instruction=system_prompt)
@@ -360,6 +444,7 @@ class SmartRouter:
                 log_ekle,
                 stop_on_quota=False,
                 require_text=True,
+                profil=profil,
             )
             parsed = self._json_parse_or_none(getattr(response, "text", ""))
             if parsed is not None:
@@ -382,6 +467,7 @@ class SmartRouter:
                     log_ekle,
                     stop_on_quota=False,
                     require_text=True,
+                    profil=profil,
                 )
                 return guvenli_json_yukle(getattr(response, "text", "")), info
 
@@ -408,6 +494,7 @@ class SmartRouter:
                     log_ekle,
                     stop_on_quota=False,
                     require_text=True,
+                    profil=profil,
                 )
                 return guvenli_json_yukle(getattr(response, "text", "")), info
             except Exception:
@@ -439,6 +526,7 @@ class SmartRouter:
             types.GenerateContentConfig(**kwargs),
             log_ekle,
             require_text=True,
+            profil="video",
         )
         return guvenli_json_yukle(getattr(response, "text", "")), info
 
@@ -517,12 +605,13 @@ class SmartRouter:
             ),
         )
         try:
-            response, info = self._make_request(
-                SES_MODELLERI,
-                self._tts_performans_promptu_olustur(metin, ses_adi),
-                config,
-                log_ekle,
-            )
+            with self.istek_profili("tts"):
+                response, info = self._make_request(
+                    SES_MODELLERI,
+                    self._tts_performans_promptu_olustur(metin, ses_adi),
+                    config,
+                    log_ekle,
+                )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
             return (ok, info if ok else None)
@@ -589,12 +678,13 @@ class SmartRouter:
                 + " + ".join(f"{speaker}={voice}" for speaker, voice in zip(names, voices))
             )
 
-            response, info = self._make_request(
-                SES_MODELLERI,
-                prompt,
-                config,
-                log_ekle,
-            )
+            with self.istek_profili("tts"):
+                response, info = self._make_request(
+                    SES_MODELLERI,
+                    prompt,
+                    config,
+                    log_ekle,
+                )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
             return (ok, info if ok else None)

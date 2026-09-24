@@ -30,6 +30,11 @@ from core.media import (
     video_suresini_al,
 )
 from core.narration_mode import anlatim_modu_karar_ver
+from core.cover_titles import (
+    ALTERNATIF_SAYISI as KAPAK_ALTERNATIF_SAYISI,
+    kapak_basliklarini_normalize_et,
+    kapak_basliklarini_metne_dok,
+)
 from duo.duo_audio import duo_ses_uret
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
@@ -37,6 +42,11 @@ MAX_QA_REGEN = 1
 VOICE_REGEN_MAX = 2
 VOICE_DURATION_MIN_RATIO = 0.85
 VOICE_DURATION_MAX_RATIO = 1.15
+# Kelime aralığı dışındaki senaryo yalnızca sapma bu oranın ÜZERİNDEYSE yeniden
+# yazdırılır (hedefe göre). Eylül 2026 logunda 137 kelime (hedef 140-170) için
+# bile tam Script+Critic turu tekrarlanıyordu; küçük sapmayı FFmpeg senkron
+# katmanı (0.5x-1.5x video hızı) zaten kapatıyor.
+VOICE_WORD_TOLERANCE_RATIO = 0.20
 
 QA_REGEN_TARGETS = {
     "VOICEOVER_FAIL",
@@ -217,7 +227,9 @@ def _secilen_hook_getir(reels_state):
     reels_state = _object_state_or_empty(reels_state)
     families = reels_state.get('hook_families') or []
     if not families:
-        return {"kapak_metni": reels_state.get("kapak_basliklari", [{}])[0].get("ana", "")}
+        basliklar = reels_state.get("kapak_basliklari") or [{}]
+        ilk = basliklar[0] if isinstance(basliklar[0], dict) else {}
+        return {"kapak_metni": ilk.get("ana") or ilk.get("ust") or "", "kapak_alt": ilk.get("alt", "")}
     return families[0] if families else {}
 
 
@@ -242,10 +254,11 @@ def _research_calistir(router, video_state, log):
         durumu_metne_donustur('ARAŞTIRMA İHTİYAÇLARI',video_state.get('viral_arastirma_ihtiyaclari',[])),
         durumu_metne_donustur('WEB ARAŞTIRMA SONUÇLARI', web_sonuclari or "Web araştırması yapılamadı.")
     )
-    return _run_timed(
-        log, "Research / Fact Lock (Agentic Web + Gemini Analiz)",
-        lambda: router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=False),
-    )
+    with _istek_profili(router, "uzun_metin"):
+        return _run_timed(
+            log, "Research / Fact Lock (Agentic Web + Gemini Analiz)",
+            lambda: router.metin_uret(content,research_promptunu_olustur(),FACT_LOCK_SCHEMA,log,arama_kullan=False),
+        )
 
 
 def _editorial_oncelik_denetimi(editorial_state, log):
@@ -294,10 +307,11 @@ def _editorial_oncelik_denetimi(editorial_state, log):
 
 def _editorial_calistir(router, video_state, fact_state, notes, log, ton=None):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE',video_state),durumu_metne_donustur('FACT LOCK',fact_state),notes or '')
-    result, model = _run_timed(
-        log, "Editorial Brain (Gemini)",
-        lambda: router.metin_uret(content,editorial_promptunu_olustur(ton),EDITORIAL_SCHEMA,log,arama_kullan=False),
-    )
+    with _istek_profili(router, "uzun_metin"):
+        result, model = _run_timed(
+            log, "Editorial Brain (Gemini)",
+            lambda: router.metin_uret(content,editorial_promptunu_olustur(ton),EDITORIAL_SCHEMA,log,arama_kullan=False),
+        )
     return _editorial_oncelik_denetimi(result, log), model
 
 
@@ -365,7 +379,12 @@ def _anlatim_modu_karari_ekle(router, video_state, fact_state, editorial_state, 
     if _explicit_voice_mode_from_notes(notes):
         log('🎚️ Kullanıcı notunda açık ses modu talebi var; AI mod kararı atlandı.')
         return editorial
-    with _hizli_basarisizlik(router):
+    if _yakin_zamanda_asiri_yuk(router):
+        # Karar verilemezse pipeline zaten varsayılan DUO ile ilerliyor; yoğunlukta
+        # bu isteğe bağlı çağrı (logda 67 sn boşa gitti) hiç yapılmaz.
+        log('⏭️ Anlatım modu kararı atlandı: API yakın zamanda tam tur aşırı yük verdi; varsayılan mod kullanılacak.')
+        return editorial
+    with _hizli_basarisizlik(router), _istek_profili(router, "istege_bagli"):
         karar = _run_timed(
             log, "Anlatım modu kararı (Gemini)",
             lambda: anlatim_modu_karar_ver(router, video_state, fact_state, editorial, sure_saniye, ton, log),
@@ -444,12 +463,27 @@ def _detective_calistir(router, video_state, fact_state, editorial_state, log):
         lambda: router.metin_uret(content, prompt, DETECTIVE_SCHEMA, log, arama_kullan=False),
     )
 
+KAPAK_FORMAT_KURALI = (
+    "🚨 [Kural: Reels Kapak Yazısı Formatı] — İSTİSNASIZ:\n"
+    f"kapak_basliklari alanına TAM {KAPAK_ALTERNATIF_SAYISI} FARKLI kapak alternatifi yaz; tek başlık ASLA kabul edilmez.\n"
+    "Her alternatif iki katmandan oluşur:\n"
+    "  • ust (ÜST BAŞLIK): Dikkat çekici kanca. TAMAMI BÜYÜK HARF. 2-4 kelime. Amaç: kaydırmayı durdurmak, merak yaratmak.\n"
+    "  • alt (Alt başlık): Tamamlayıcı detay. Cümle düzeni (yalnızca ilk harf büyük, gerisi küçük). 4-7 kelime. "
+    "Amaç: merakı açıklamak, izlemek için sebep vermek; cevabı vermez.\n"
+    "Her alternatif farklı açı/duygu/formül kullansın (şok rakam, efsane çürütme, negatif uyarı, Türkiye mağduriyeti, ters köşe). "
+    "Üst ve alt aynı cümleyi tekrar etmesin; marka adını tek başına başlık yapma; 'YENİ VİDEO' gibi boş kalıplar yasak.\n"
+    "kapak_metni alanına en güçlü alternatifin ust değerini aynen yaz.\n"
+    "Örnek: ust='BU SUV NORMAL DEĞİL' / alt='Aile arabası gibi duruyor ama değil'."
+)
+
+
 def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log):
     prompt = (
         "Sen otoXtra'nın Kışkırtıcı Kanca Üreticisisin. Dedektifin bulduğu malzemeyi kullanarak "
         "ilk 3 saniyede izleyiciyi şok edecek bir kanca üreteceksin.\n"
         "Şablonlardan birini seç: Efsane_Curutme, Ters_Kose, Negatif_Uyari.\n"
-        "Kapak metni ve ilk 3 saniye kancası ultra viral ve iddialı olmalı."
+        "Kapak metni ve ilk 3 saniye kancası ultra viral ve iddialı olmalı; ilk 3 saniye kancası kapak başlığını birebir tekrar etmemeli.\n\n"
+        + KAPAK_FORMAT_KURALI
     )
     content = girdi_birlestir(
         durumu_metne_donustur('DETECTIVE', detective_state),
@@ -550,11 +584,25 @@ def _hook_fallback(editorial_state):
     elif isinstance(territories, str):
         ilk = territories.strip()
     core_story = str(editorial.get("core_story") or "").strip()
+    basliklar = kapak_basliklarini_normalize_et(None, editorial, {}, {"ilk_3_saniye_kanca": ilk or core_story})
     return {
         "secilen_sablon": "Ters_Kose",
-        "kapak_metni": " ".join((ilk or core_story).split()[:6]),
+        "kapak_basliklari": basliklar,
+        "kapak_metni": basliklar[0]["ust"] if basliklar else " ".join((ilk or core_story).split()[:4]),
         "ilk_3_saniye_kanca": ilk or core_story,
     }
+
+
+def _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log):
+    """Hook ajanının kapak setini kurala göre doğrular; eksikse 5'e tamamlar ve
+    hook_state'i güncellenmiş kapak seti ile döndürür (ana == ust)."""
+    hook_state = dict(_object_state_or_empty(hook_state))
+    ham = hook_state.get("kapak_basliklari") or hook_state.get("kapak_metni") or ""
+    basliklar = kapak_basliklarini_normalize_et(ham, editorial_state, detective_state, hook_state, log)
+    hook_state["kapak_basliklari"] = basliklar
+    hook_state["kapak_metni"] = basliklar[0]["ust"] if basliklar else str(hook_state.get("kapak_metni") or "")
+    log("🎯 Kapak başlıkları (Üst/Alt) hazır:\n" + kapak_basliklarini_metne_dok(basliklar))
+    return hook_state, basliklar
 
 
 @contextmanager
@@ -569,11 +617,37 @@ def _hizli_basarisizlik(router):
         yield
 
 
-def _istege_bagli_ajan(log, etiket, callback, varsayilan, router=None):
-    """Zenginleştirici ajan (Detective/Hook/Critic/Metadata) API'si geçici olarak
-    tamamen düşerse tüm pipeline'ı öldürmek yerine güvenli varsayılanla devam eder."""
+@contextmanager
+def _istek_profili(router, profil):
+    """Router destekliyorsa bloktaki isteklere zaman aşımı/bütçe profili uygular."""
+    ctx = getattr(router, "istek_profili", None)
+    if callable(ctx):
+        with ctx(profil):
+            yield
+    else:
+        yield
+
+
+def _yakin_zamanda_asiri_yuk(router):
+    fn = getattr(router, "yakin_zamanda_asiri_yuk_var_mi", None)
     try:
-        with _hizli_basarisizlik(router):
+        return bool(fn()) if callable(fn) else False
+    except Exception:
+        return False
+
+
+def _istege_bagli_ajan(log, etiket, callback, varsayilan, router=None, atlanabilir=False):
+    """Zenginleştirici ajan (Detective/Hook/Critic/Metadata) API'si geçici olarak
+    tamamen düşerse tüm pipeline'ı öldürmek yerine güvenli varsayılanla devam eder.
+
+    atlanabilir=True: Router yakın zamanda TAM TUR aşırı yük gördüyse ajan hiç
+    denenmez (Eylül 2026 logunda Detective 77 sn, Critic 236 sn boşa harcadı);
+    güvenli varsayılanla anında devam edilir."""
+    if atlanabilir and _yakin_zamanda_asiri_yuk(router):
+        log(f"⏭️ {etiket} atlandı: API yakın zamanda tam tur aşırı yük verdi; güvenli varsayılanla devam ediliyor.")
+        return varsayilan, "atlandi"
+    try:
+        with _hizli_basarisizlik(router), _istek_profili(router, "istege_bagli"):
             state, model = callback()
     except Exception as exc:
         log(f"⚠️ {etiket} kullanılamadı; güvenli varsayılanla devam ediliyor: {type(exc).__name__}: {str(exc)[:160]}")
@@ -590,23 +664,26 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     hedef_kelime_bilgisi = f"Hedef {hedef} kelime. Kesin aralık {minimum}-{maksimum} kelime."
     
-    # 1. Detective (Sadece ilk denemede çalışır, veri değişmez)
+    # 1. Detective (Sadece ilk denemede çalışır, veri değişmez; API yoğunsa atlanır)
     detective_state, _ = _istege_bagli_ajan(
         log, "🕵️ Detective Ajan",
         lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log),
         {},
         router=router,
+        atlanabilir=True,
     )
     
-    # 2. Hook Gen (Sadece ilk denemede çalışır)
+    # 2. Hook Gen (Sadece ilk denemede çalışır) — kapak seti burada üretilir.
     hook_state, _ = _istege_bagli_ajan(
         log, "🪝 Hook Generator Ajan",
         lambda: _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log),
         _hook_fallback(editorial_state),
         router=router,
     )
-    if not str(hook_state.get("kapak_metni") or "").strip():
+    if not str(hook_state.get("kapak_metni") or "").strip() and not hook_state.get("kapak_basliklari"):
         hook_state = {**_hook_fallback(editorial_state), **{k: v for k, v in hook_state.items() if v}}
+    # [Kural: Reels Kapak Yazısı Formatı] — her zaman 5 Üst/Alt alternatifi.
+    hook_state, kapak_basliklari = _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log)
     
     son_reels = {}
     son_duo_plan = {}
@@ -625,12 +702,13 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         script_state = _object_state_or_empty(script_state)
         son_model = model_script
         
-        # 4. Critic (isteğe bağlı: düşerse senaryo onaylı sayılır)
+        # 4. Critic (isteğe bağlı: düşerse/atlanırsa senaryo onaylı sayılır)
         critic_state, _ = _istege_bagli_ajan(
             log, "🔥 Critic Ajan",
             lambda: _critic_calistir(router, script_state, hook_state, log),
             {"score": 10, "approved": True, "feedback": ""},
             router=router,
+            atlanabilir=True,
         )
         
         # Critic Döngüsü (MAX 1 Revize)
@@ -655,10 +733,18 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         soru = str(script_state.get("yorum_tetikleyici_soru") or "").strip()
         full_text = " ".join(str(seg.get("text", "") or "").strip() for seg in segments)
         full_text = f"{full_text} {soru}".strip()
+        secili_kapak = kapak_basliklari[0] if kapak_basliklari else {"ust": hook_state.get("kapak_metni", ""), "alt": ""}
         reels_state = {
             "seslendirme_metni": full_text,
-            "kapak_basliklari": [{"ana": hook_state.get("kapak_metni", ""), "alt": ""}],
-            "hook_families": [{"kapak_ana": hook_state.get("kapak_metni", ""), "ilk_uc_saniye": hook_state.get("ilk_3_saniye_kanca", "")}],
+            # [Kural: Reels Kapak Yazısı Formatı] 5 alternatif; her biri ust (2-4 kelime, BÜYÜK)
+            # + alt (4-7 kelime, cümle düzeni). `ana` == ust (geriye dönük uyumluluk).
+            "kapak_basliklari": [dict(x) for x in kapak_basliklari],
+            "kapak_format": "ust_alt_5",
+            "hook_families": [{
+                "kapak_ana": secili_kapak.get("ust", ""),
+                "kapak_alt": secili_kapak.get("alt", ""),
+                "ilk_uc_saniye": hook_state.get("ilk_3_saniye_kanca", ""),
+            }],
             "metadata": {}
         }
         
@@ -714,9 +800,12 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         log(f'📝 Agentic Seslendirme uzunluk kontrolü: {adet} kelime | hedef {hedef} | izin verilen {minimum}-{maksimum}')
         
         if adet < minimum or adet > maksimum:
-            if deneme < VOICE_REGEN_MAX:
+            sapma = abs(adet - hedef) / float(hedef or 1)
+            if sapma <= VOICE_WORD_TOLERANCE_RATIO:
+                log(f'🎚️ Kelime sayısı aralık dışında ama tolerans içinde (sapma %{sapma*100:.0f} ≤ %{VOICE_WORD_TOLERANCE_RATIO*100:.0f}); yeniden yazım atlandı, video senkron katmanı dengeleyecek.')
+            elif deneme < VOICE_REGEN_MAX:
                 hedef_kelime_bilgisi = f"Önceki üretim {adet} kelimeydi. Hedef {hedef}, izin verilen {minimum}-{maksimum}. Bu kez metni mutlaka bu aralıkta tut."
-                log(f'⚠️ Kelime aralığı dışında; Script Writer yeniden yazıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
+                log(f'⚠️ Kelime aralığı dışında (sapma %{sapma*100:.0f}); Script Writer yeniden yazıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
                 continue
             else:
                 log('⚠️ Kelime aralığı hala düzeltilemedi, devam ediliyor.')
@@ -746,11 +835,13 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 log(f'🎚️ TTS/video oranı {oran:.2f}x; geçerli WAV korunuyor, video senkron katmanına bırakılıyor.')
             
             # Başarılı TTS ve Süre. Metadata üretilir ve döngüden çıkılır.
+            # (Atlanırsa captin, _qa_regeneration_loop içindeki Caption ajanı ile tamamlanır.)
             metadata_state, _ = _istege_bagli_ajan(
                 log, "🏷️ Metadata Generator Ajan",
                 lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log),
                 {},
                 router=router,
+                atlanabilir=True,
             )
             reels_state["metadata"] = metadata_state
             
@@ -764,10 +855,11 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 def _qa_calistir(router,video_state,fact_state,editorial_state,reels_state,caption_state,threads_state,sure_saniye,log,duo_plan=None,duo_script=None,ton=None):
     content=girdi_birlestir(durumu_metne_donustur('VIDEO',video_state),durumu_metne_donustur('FACT LOCK',fact_state),durumu_metne_donustur('EDITORIAL',editorial_state),durumu_metne_donustur('REELS',reels_state),durumu_metne_donustur('DUO PLAN',duo_plan or {}),durumu_metne_donustur('DUO SCRIPT',duo_script or {}),durumu_metne_donustur('CAPTION',caption_state),durumu_metne_donustur('THREADS',threads_state),f'VIDEO SÜRESİ: {sure_saniye}',f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}')
     try:
-        result, model = _run_timed(
-            log, "Final QA (Gemini)",
-            lambda: router.metin_uret(content,qa_promptunu_olustur(ton),QA_SCHEMA,log,arama_kullan=False),
-        )
+        with _istek_profili(router, "uzun_metin"):
+            result, model = _run_timed(
+                log, "Final QA (Gemini)",
+                lambda: router.metin_uret(content,qa_promptunu_olustur(ton),QA_SCHEMA,log,arama_kullan=False),
+            )
     except Exception as exc:
         # QA API'si (tüm model+key + aşırı-yük tekrarları) geçici olarak
         # erişilemezse hazır TTS/render çöpe atılmaz: yapısal kontroller

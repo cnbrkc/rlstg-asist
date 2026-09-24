@@ -94,18 +94,27 @@ def video_duration(path):
 
 def _format_title_options(titles):
     if not titles:
-        return "🎯 BAŞLIK SEÇENEKLERİ\n\nBaşlık seçeneği üretilemedi."
-    lines = ["🎯 BAŞLIK SEÇENEKLERİ", ""]
+        return "🎯 KAPAK BAŞLIĞI ALTERNATİFLERİ\n\nBaşlık alternatifi üretilemedi."
+    # [Kural: Reels Kapak Yazısı Formatı] — 5 farklı iki katmanlı alternatif:
+    # Üst (2-4 kelime, TAMAMI BÜYÜK HARF) + Alt (4-7 kelime, cümle düzeni).
+    lines = ["🎯 KAPAK BAŞLIĞI ALTERNATİFLERİ", ""]
+    shown = 0
     for i, item in enumerate(titles, 1):
         if isinstance(item, dict):
-            ana = str(item.get("ana", "")).strip()
-            alt = str(item.get("alt", "")).strip()
-            lines.append(f"{i}️⃣ {ana}")
-            if alt:
-                lines.append(f"   ↳ {alt}")
+            ust = str(item.get("ust") or item.get("ana") or item.get("kapak_ana") or "").strip()
+            alt = str(item.get("alt") or "").strip()
+        elif isinstance(item, str):
+            ust, alt = item.strip(), ""
         else:
-            lines.append(f"{i}️⃣ {str(item).strip()}")
-    return "\n".join(lines)
+            continue
+        if not ust and not alt:
+            continue
+        shown += 1
+        lines.append(f"Alternatif {shown}:")
+        lines.append(f"Üst: {ust}")
+        lines.append(f"Alt: {alt}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _loading_text(done, current=None, warnings=0, errors=0, steps=None):
