@@ -19,7 +19,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
-from core.pipeline import (
+from core.agentic import (
     VOICE_WORD_TOLERANCE_RATIO,
     agentic_icerik_uretimi,
 )
@@ -61,9 +61,9 @@ class _DetectiveRouter:
 
 
 class AsiriYukAtlamaTestleri(unittest.TestCase):
-    @patch("core.pipeline._ses_suresini_al", return_value=25.0)
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
-    @patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 5, 15, 2.5, 5))
+    @patch("core.agentic._ses_suresini_al", return_value=25.0)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 5, 15, 2.5, 5))
     def test_dedektif_asiri_yukta_hic_denenmez(self, mock_kelime, mock_ses_uret, mock_ses_sure):
         router = _DetectiveRouter()
         router.yakin_zamanda_asiri_yuk_var_mi = lambda pencere_saniye=None: True
@@ -77,9 +77,9 @@ class AsiriYukAtlamaTestleri(unittest.TestCase):
         self.assertTrue(any("atlandı" in l for l in logs))
         self.assertEqual(len(reels["kapak_basliklari"]), 5)
 
-    @patch("core.pipeline._ses_suresini_al", return_value=25.0)
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
-    @patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 5, 15, 2.5, 5))
+    @patch("core.agentic._ses_suresini_al", return_value=25.0)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 5, 15, 2.5, 5))
     def test_dedektif_asiri_yuk_yoksa_denenir(self, mock_kelime, mock_ses_uret, mock_ses_sure):
         router = _DetectiveRouter()
         router.yakin_zamanda_asiri_yuk_var_mi = lambda pencere_saniye=None: False

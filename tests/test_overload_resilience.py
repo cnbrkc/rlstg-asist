@@ -15,7 +15,8 @@ os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
 import core.router as router_mod
 from core.router import SmartRouter
-from core.pipeline import _caption_state_normalize, agentic_icerik_uretimi
+from core.pipeline import _caption_state_normalize
+from core.agentic import agentic_icerik_uretimi
 
 
 class _SeqModels:
@@ -143,9 +144,9 @@ class _FlakyAgentRouter:
 
 
 class AgenticDegradationTests(unittest.TestCase):
-    @patch("core.pipeline._ses_suresini_al", return_value=25.0)
-    @patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic._ses_suresini_al", return_value=25.0)
+    @patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_optional_agents_failing_do_not_stop_production(self, *_):
         router = _FlakyAgentRouter()
         logs = []
@@ -161,9 +162,9 @@ class AgenticDegradationTests(unittest.TestCase):
         self.assertEqual(meta, {})
         self.assertTrue(any("Detective Ajan kullanılamadı" in line for line in logs))
 
-    @patch("core.pipeline._ses_suresini_al", return_value=60.0)
-    @patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic._ses_suresini_al", return_value=60.0)
+    @patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_valid_wav_kept_even_if_duration_ratio_is_off(self, mock_tts, *_):
         from test_pipeline_modes import _Router, _detective, _hook, _critic, _metadata
         router = _Router([_detective(), _hook(), dict(_SCRIPT), _critic(), _metadata()])

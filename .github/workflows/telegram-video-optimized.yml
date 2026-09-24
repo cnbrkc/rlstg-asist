@@ -83,7 +83,6 @@ jobs:
             cloudflare/
             data/pending/
             core/
-            duo/
             telegram/
             requirements.txt
           sparse-checkout-cone-mode: false
@@ -130,7 +129,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           echo "::group::Reels pipeline ayrıntılı zamanlama"
-          /usr/bin/time -v python -m telegram.telegram_pipeline_social_entry
+          /usr/bin/time -v python -m telegram.telegram_pipeline_worker
           echo "::endgroup::"
 
       - name: Publish diagnostic summary

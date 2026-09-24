@@ -187,12 +187,6 @@ def medya_raporu(dosya_yolu: str, etiket: str, log_ekle) -> dict:
 def video_suresini_al(video_yolu: str) -> float:
     return float(_ffprobe_bilgi_al(video_yolu).get("duration",0.0))
 
-def _kalite_filtresi_olustur(input_bilgi: dict, log_ekle) -> tuple:
-    # unsharp mask ve lanczos upscale GitHub Actions CPU'sunu yorar ve render süresini uzatır.
-    # Instagram/Telegram zaten yükleme sırasında kendi keskinleştirmesini uygular.
-    # Python tarafında ikinci kez netlik eklemek hem zaman israfıdır hem de halo/artifact yaratır.
-    return None, None
-
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
     if not ses_yolu or not os.path.exists(ses_yolu): return False
     input_bilgi = medya_raporu(video_yolu, "INPUT", log_ekle)
@@ -222,9 +216,10 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
     hareket = 'hızlandırma' if video_hiz > 1.001 else 'yavaşlatma' if video_hiz < 0.999 else '1:1'
     log_ekle(f"🎚️ VIDEO-TTS SENKRONU: video {video_sure:.2f}s + TTS {ses_sure:.2f}s → hedef {hedef_sure:.2f}s | video hızı {video_hiz:.3f}x ({hareket}).")
 
-    kalite_filtresi, _ = _kalite_filtresi_olustur(input_bilgi, log_ekle)
+    # Not: unsharp/lanczos gibi kalite filtreleri kasıtlı olarak YOK; GitHub Actions
+    # CPU'sunu yorar, halo/artifact yaratır; Instagram/Telegram yüklemede kendi
+    # keskinleştirmesini zaten uygular.
     video_filtresi = speed_filter
-    if kalite_filtresi: video_filtresi = f"{video_filtresi},{kalite_filtresi}"
 
     output_fps = input_bilgi.get("fps") or 30.0
     komut = [FFMPEG_BIN, "-y", "-i", video_yolu, "-i", ses_yolu, "-filter:v", video_filtresi, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", str(VIDEO_CRF), "-pix_fmt", "yuv420p", "-r", f"{output_fps:.6f}", "-af", "apad", "-c:a", "aac", "-ar", str(FINAL_AUDIO_SAMPLE_RATE), "-ac", str(SES_KANAL), "-b:a", FINAL_AUDIO_BITRATE, "-t", f"{hedef_sure:.6f}", cikti_yolu]

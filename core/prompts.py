@@ -60,41 +60,6 @@ def research_promptunu_olustur():
 def editorial_promptunu_olustur(icerik_tonu=None):
     return _oku("editorial_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Editorial Brain")
 
-def _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani=None):
-    oran = float(kelime_hizi_orani or 2.9)
-    yuvarlama = 5
-    hedef = max(5, int(round((float(sure_saniye or 30) * oran) / yuvarlama) * yuvarlama))
-    minimum = max(5, int(round(hedef * 0.90)))
-    maksimum = max(minimum, int(round(hedef * 1.10)))
-    return hedef, minimum, maksimum, oran, yuvarlama
-
-def reels_creative_promptunu_olustur(sure_saniye, icerik_tonu, kelime_hizi_orani=None, ek_talimat=""):
-    template = _oku("reels_creative_prompt.txt")
-    ton, bilgi_orani = _reels_ton_ayarlarini_hazirla(icerik_tonu)
-    hedef, minimum, maksimum, oran, yuvarlama = _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani)
-    replacements = {
-        "{sure_saniye}": str(sure_saniye),
-        "{kelime_sayisi}": str(hedef),
-        "{min_kelime}": str(minimum),
-        "{max_kelime}": str(maksimum),
-        "{kelime_hizi_orani}": str(oran),
-        "{kelime_yuvarlama}": str(yuvarlama),
-        "{bilgi_orani}": bilgi_orani,
-    }
-    for eski, yeni in replacements.items():
-        template = template.replace(eski, yeni)
-    
-    runtime = (
-        f"\n\nRUNTIME KİLİDİ — BU ÜRETİM İÇİN: Hedef süre {sure_saniye} sn; hedef {hedef} kelime; "
-        f"izin verilen aralık {minimum}-{maksimum} kelime; içerik tonu {ton}. "
-        "Bu değerler prompt içindeki örneklerden veya önceki üretimlerden bağımsız olarak geçerlidir. "
-        "Seslendirme metnini bu kelime aralığının dışına çıkarma. Bilgi yoğunluğunu seçilen tona uygun tut."
-        + icerik_tonu_talimati(ton, "Reels Creative")
-    )
-    if ek_talimat and ek_talimat.strip():
-        runtime += "\n\n🚨 YENİDEN ÜRETİM TALİMATI:\n" + ek_talimat.strip()
-    return template + runtime
-
 def caption_promptunu_olustur(icerik_tonu=None):
     return _oku("caption_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Caption")
 

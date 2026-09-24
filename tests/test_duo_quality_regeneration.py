@@ -7,7 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
-from core.pipeline import agentic_icerik_uretimi
+from core.agentic import agentic_icerik_uretimi
 
 
 class _Router:
@@ -69,15 +69,15 @@ def _mock_duo_ses(router, segments, output_path, log, hiz_carpani=1.0):
     return True, "fake-duo-tts"
 
 
-_kelime_patch = patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
-_ses_sure_patch = patch("core.pipeline._ses_suresini_al", return_value=25.0)
+_kelime_patch = patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
+_ses_sure_patch = patch("core.agentic._ses_suresini_al", return_value=25.0)
 
 
 class AgenticQualityRegenerationTests(unittest.TestCase):
 
     @_ses_sure_patch
     @_kelime_patch
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_critic_reject_triggers_single_rewrite(self, mock_tts, mock_kelime, mock_ses):
         """Critic red verirse Script Writer 1 kez yeniden yazmalı."""
         poor_script = _script([
@@ -108,7 +108,7 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
 
     @_ses_sure_patch
     @_kelime_patch
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_critic_approve_no_rewrite(self, mock_tts, mock_kelime, mock_ses):
         """Critic onay verirse yeniden yazım olmamalı."""
         good_script = _script([
@@ -132,7 +132,7 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
 
     @_ses_sure_patch
     @_kelime_patch
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_tts_tags_preserved_in_segments(self, mock_tts, mock_kelime, mock_ses):
         """TTS etiketleri segmentlerde korunmalı."""
         script_data = _script([
@@ -156,7 +156,7 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
 
     @_ses_sure_patch
     @_kelime_patch
-    @patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_comment_trigger_added_as_final_segment(self, mock_tts, mock_kelime, mock_ses):
         """Yorum tetikleyici soru final segment olarak eklenmeli."""
         script_data = _script([

@@ -10,7 +10,7 @@ import unittest
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from duo.duo_audio import _duo_transcript
+from core.duo_audio import _duo_transcript
 
 
 class DuoAudioTests(unittest.TestCase):

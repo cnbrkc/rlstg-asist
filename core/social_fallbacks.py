@@ -70,7 +70,7 @@ def model_identity(video_state) -> str:
     return ""
 
 
-def caption_fallback(reels_state, fact_state, editorial_state, video_state) -> tuple:
+def caption_fallback(fact_state, editorial_state, video_state) -> tuple:
     """Caption modeli boş/artifact dönerse güvenli Fact Lock tabanlı caption üretir."""
     identity = model_identity(video_state) or "bu araç"
     editorial = editorial_state if isinstance(editorial_state, dict) else {}
