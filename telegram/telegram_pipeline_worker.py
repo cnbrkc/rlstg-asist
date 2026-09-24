@@ -15,10 +15,7 @@ from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from core.pipeline import pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
 from core.media import video_suresini_al
-from core.social_fallbacks import (
-    first_fact as first_verified_fact, model_identity,
-    text as _text,
-)
+from core.social_fallbacks import caption_fallback, threads_fallback, text as _text
 
 
 def _token():
@@ -35,12 +32,12 @@ def _base():
 
 PIPELINE_STEPS = [
     "🎥 Forensic video analizi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
-    "🎙️ Reels Creative + gerçek voice mode", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA + kontrollü regeneration",
+    "🎙️ Agentic üretim döngüsü + gerçek voice mode", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA + kontrollü regeneration",
     "🎧 TTS + gerçek süre doğrulaması", "🎬 FFmpeg video render",
 ]
 TEXT_PIPELINE_STEPS = [
     "📝 Metin girdisi", "🔎 Research / Fact Lock", "🧠 Editorial Brain",
-    "🎙️ Reels Creative + gerçek voice mode", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA + kontrollü regeneration",
+    "🎙️ Agentic üretim döngüsü + gerçek voice mode", "📝 Caption + Hashtag", "🧵 Threads", "🔍 QA + kontrollü regeneration",
     "🎧 TTS + gerçek süre doğrulaması",
 ]
 TON_MAP = {"eglence": TON_EGLENCE, "dengeli": TON_DENGELI, "bilgi": TON_BILGI, "teknik": TON_TEKNIK}
@@ -180,25 +177,13 @@ def _qa_text(qa_result):
         return str(qa_result)
 
 
-def _social_fallbacks(result):
-    """result dict'inden güvenli caption/hashtags/threads üretir (model boş/artifact döndüğünde kullanılır)."""
+def _social_states(result):
+    """result dict'inden core.social_fallbacks'un istediği state'leri çıkarır."""
     result = result if isinstance(result, dict) else {}
-    editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
     fact_state = result.get("fact_lock") if isinstance(result.get("fact_lock"), dict) else {}
+    editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
     video_state = (result.get("pipeline_state") or {}).get("video_state", {}) if isinstance(result.get("pipeline_state"), dict) else {}
-    identity = model_identity(video_state) or "bu araç"
-    core = _text(editorial.get("core_story"))
-    discussion = _text(editorial.get("discussion_territory"))
-    fact = first_verified_fact(fact_state)
-    caption = "\n\n".join(x for x in [
-        f"{identity}: videonun ötesinde asıl merak edilen taraf burada başlıyor.",
-        core or fact or "Videodaki detayları Fact Lock sınırları içinde değerlendiriyoruz.",
-        fact,
-        "Rakamlar kadar gerçek kullanımın ne söylediği de önemli.",
-    ] if x)[:900].rstrip()
-    threads = (discussion or core or fact or f"{identity} tarafında asıl tartışma, görünen detayın gerçek kullanımda ne ifade ettiği.")[:480].rstrip()
-    hashtags = ["otoxtra", "otomobil", "araba", "otomobilhaber", "arabasever"]
-    return caption, hashtags, threads
+    return fact_state, editorial, video_state
 
 
 def _caption_with_hashtags(description, hashtags):
@@ -291,11 +276,13 @@ def _setup_env(steps, loading_id):
 
 
 def _ensure_social_outputs(result, warnings):
-    """Caption/hashtags/threads boş veya artifact ise Fact Lock tabanlı fallback uygular."""
+    """Caption/hashtags/threads boş ise core.social_fallbacks'un Fact Lock tabanlı
+    güvenli metinleriyle tamamlar (artifact kontrolü pipeline'da yapılır)."""
+    fact_state, editorial, video_state = _social_states(result)
     caption = _text(result.get("reels_aciklamasi"))
     hashtags = result.get("reels_hashtagleri") or []
     if not caption or not hashtags:
-        fallback_caption, fallback_hashtags, fallback_threads = _social_fallbacks(result)
+        fallback_caption, fallback_hashtags = caption_fallback(fact_state, editorial, video_state)
         if not caption:
             caption = fallback_caption
             result["reels_aciklamasi"] = caption
@@ -306,10 +293,9 @@ def _ensure_social_outputs(result, warnings):
             warnings.append("⚠️ Hashtag modeli boş döndü; güvenli varsayılan hashtag seti kullanıldı.")
     threads = _text(result.get("threads_aciklamasi"))
     if not threads:
-        _, _, fallback_threads = _social_fallbacks(result)
-        threads = fallback_threads
+        threads = threads_fallback(fact_state, editorial, video_state)
         result["threads_aciklamasi"] = threads
-        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli fallback kullanıldı.")
+        warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli sosyal fallback kullanıldı.")
     return caption, hashtags, threads
 
 

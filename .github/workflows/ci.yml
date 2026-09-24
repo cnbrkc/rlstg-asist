@@ -32,13 +32,13 @@ jobs:
           pip install --disable-pip-version-check pytest ruff pyyaml
 
       - name: Compile Python
-        run: python -m compileall -q core duo telegram tests
+        run: python -m compileall -q core telegram tests
 
       - name: Unit tests
         run: pytest -q
 
       - name: Fatal lint checks
-        run: ruff check core duo telegram tests --select F,E9
+        run: ruff check core telegram tests --select F,E9
 
       - name: Validate workflow YAML
         run: |

@@ -15,6 +15,8 @@ import multiprocessing
 import os
 import re
 import threading
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Any
 
 
@@ -145,8 +147,9 @@ def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
     if not marka or marka.upper() == "UNKNOWN":
         return []
 
-    # 1. Kimlik ve Teknik
-    sorgular.append(f"{tam_ad} özellikleri teknik 2025")
+    # 1. Kimlik ve Teknik (yıl: sorgu her zaman güncel kalır)
+    yil = datetime.now(ZoneInfo("Europe/Istanbul")).year
+    sorgular.append(f"{tam_ad} özellikleri teknik {yil}")
     # 2. Çelişki ve Şikayet (Agentic fark yaratan sorgu)
     sorgular.append(f"{tam_ad} kullanıcı şikayet sorun gizli kusur")
     # 3. Türkiye Pazarı

@@ -1,281 +1,260 @@
-# otoXtra Reels & Telegram Asistanı — Güncel Mimari Şema
+# rlstg-asist — Mimari Şema (v4 · 24 Eylül 2026)
 
-> Son güncelleme: 21 Eylül 2026
->
-> Bu belge üretimdeki gerçek kod akışını, veri sözleşmelerini ve güvenlik kurallarını açıklar.
+> **Bu belge AI'a proje yetkilendirmek için yazıldı.** Her dosyanın sorumluluğu, veri
+> sözleşmeleri, fail-closed kurallar ve runtime akışı tek yerde. Kod tek gerçek kaynaktır;
+> bu belge okuma yol haritası + dokunma kurallarıdır.
 
-## 1. Fiziksel yapı
+## 0. 30 saniyelik özet
 
-```text
-rlstg-asist/
-├── .github/workflows/
-│   ├── ci.yml                         # PR/main test ve statik kontrol kapısı
-│   └── telegram-video-optimized.yml   # Tek üretim workflow'u
-├── cloudflare/
-│   └── telegram-webhook.js            # Telegram webhook ve workflow_dispatch
-├── core/
-│   ├── character_profiles.py          # female=Autonoe, male=Charon
-│   ├── config.py                      # API key/model listeleri ve medya ayarları
-│   ├── media.py                       # FFmpeg/ffprobe, WAV ve render işlemleri
-│   ├── pipeline.py                    # Ana orkestrasyon, QA ve zaman ölçümü
-│   ├── prompts.py                     # Prompt yükleme ve runtime kilitleri
-│   ├── prompts/*.txt                  # Rol bazlı promptlar
-│   ├── router.py                      # Model/key rotasyonu ve Gemini TTS
-│   ├── schemas.py                     # Gemini structured-output sözleşmeleri
-│   ├── social_fallbacks.py            # Güvenli caption/Threads fallbackleri
-│   └── utils.py                       # JSON ayrıştırma yardımcıları
-├── duo/
-│   ├── duo_strategy.py                # Kullanıcı override + AI mod normalizasyonu
-│   ├── duo_script.py                  # Konuşma haritası normalizasyonu
-│   ├── duo_script_engine.py           # Diyalog sözleşmesi ve doğrulama
-│   └── duo_audio.py                   # Tek çağrıda multi-speaker TTS
-├── telegram/
-│   ├── telegram_webhook_intake.py     # Telegram videosunu runner'a indirir
-│   ├── telegram_pipeline_worker.py    # Pipeline ve Telegram teslimatı
-│   ├── telegram_pipeline_guard.py     # Üretim single-pass ve sosyal korumalar
-│   └── telegram_pipeline_social_entry.py # Üretim workflow giriş/uyumluluk katmanı
-├── tests/                             # Birim ve bütünlük testleri
-├── schema/proje_yapisi.md             # Bu belge
-└── requirements.txt
+Telegram'dan gelen video/metin → Cloudflare Worker (ton seçimi + GitHub dispatch) →
+GitHub Actions (video indirme) → `telegram.telegram_pipeline_worker.main()` →
+`core.pipeline` (Forensic → Research/Fact Lock → Editorial → Agentic 4-ajan döngüsü
+(Detective→Hook→Script→Critic→TTS→Metadata) → Threads → Final QA (≤1 kontrollü
+yenileme) → FFmpeg render) → Telegram'a final video + 5 kapak alternatifi + Threads.
+
+**Monkey-patch katmanı YOK.** Sosyal korumalar, research fallback'i ve QA
+non-blocking fallback'i `core/pipeline.py` içinde native uygulanır.
+
+```
+Telegram → cloudflare/telegram-webhook.js (pending kuyruk + ton butonları)
+  → workflow_dispatch: telegram-video-optimized.yml (ref=main)
+  → python -m telegram.telegram_webhook_intake   (yalnız video modu; stdlib-only)
+  → python -m telegram.telegram_pipeline_worker  (üretim + teslimat)
 ```
 
-## 2. Üretim giriş akışı
+## 1. Dosya haritası
 
-```text
-Telegram
-  → Cloudflare Worker
-  → GitHub workflow_dispatch (telegram-video-optimized.yml, ref=main)
-  → Telegram videosunu indir
-  → telegram.telegram_pipeline_social_entry
-  → compatibility guard'ları yükle
-  → telegram_pipeline_guard'ı yükle
-  → telegram_pipeline_worker.main()
-  → core.pipeline
-  → Telegram'a final video + başlıklar + Threads gönder
-```
+| Dosya | Satır | Sorumluluk (tek görev) | Dışa açılan API |
+|---|---|---|---|
+| `core/config.py` | ~115 | API key okuma, model listeleri, timeout/bütçe, medya sabitleri, `PIPELINE_ADIMLARI` | `API_KEYS`, `*_MODELLERI`, `ISTEK_ZAMAN_ASIMI_MS`, cooldown sabitleri, `TON_*`, `model_arama_destekliyor_mu` |
+| `core/schemas.py` | ~180 | Gemini structured-output sözleşmeleri (7 üretim + 5 agentic şema) | `VIDEO_ANALYSIS/FACT_LOCK/EDITORIAL/CAPTION/THREADS/QA_SCHEMA`, `DETECTIVE/HOOK_GEN/SCRIPT_WRITER/CRITIC/METADATA_GEN_SCHEMA` |
+| `core/prompts.py` | ~75 | `core/prompts/*.txt` yükleme + runtime içerik-türü kilidi + kelime aralığı | `*promptunu_olustur(...)` (forensic/research/editorial/caption/threads/qa), `icerik_tonu_talimati`, `durumu_metne_donustur`, `girdi_birlestir` |
+| `core/prompts/*.txt` | 533 | Rol promptları (7 dosya: forensic, research, guncellik_talimati, editorial, caption, threads_promptu, qa) | — (metin) |
+| `core/router.py` | ~710 | `SmartRouter`: model×key turu, hata sınıflandırması, kota/slow/overload bütçeleri, TTS config'leri | `SmartRouter` (`metin_uret`, `video_analiz_et`, `ses_uret`, `coklu_ses_uret`, `istek_profili`, `hizli_basarislik`, `yakin_zamanda_asiri_yuk_var_mi`), `guvenli_json_yukle` |
+| `core/pipeline.py` | ~680 | Orkestrasyon: adım fonksiyonları, sosyal korumalar, QA yenileme döngüsü, payload, iki giriş | `pipeline_calistir`, `metin_pipeline_calistir` (+ `_*` dahili) |
+| `core/agentic.py` | ~610 | Agentic 4-ajan döngüsü + kelime/TTS güvenlik + TTS segment üretimi. **`core.pipeline`'ı İTHAL ETMEZ** | `agentic_icerik_uretimi`, `_run_timed`, `_coerce_positive_float`, `_beklenen_gercek_mod`, `_istege_bagli_ajan`, `_istek_profili`, `_hizli_basarislik`, `_yakin_zamanda_asiri_yuk`, `VOICE_*` sabitleri |
+| `core/narration_mode.py` | ~150 | Anlatım modu AI kararı (DUO/SOLO_FEMALE/SOLO_MALE) + `ANLATIM_MODU_SCHEMA` | `anlatim_modu_karar_ver`, `ANLATIM_MODU_SCHEMA`, `GECERLI_MODLAR` |
+| `core/cover_titles.py` | ~370 | [Kural: Reels Kapak Yazısı Formatı]: 5×(Üst 2-4 kelime BÜYÜK + Alt 4-7 kelime cümle) doğrulama/düzeltme/yerel tamamlama | `kapak_basliklarini_normalize_et`, `kapak_basliklarini_metne_dok`, `ust/alt_baslik_duzenle`, `ALTERNATIF_SAYISI` |
+| `core/duo_audio.py` | ~65 | Karakter→voice haritası (Autonoe/Charon) + tek çağrı multi-speaker TTS (fail-closed) | `CHARACTER_VOICES`, `voice_for_character`, `duo_ses_uret`, `_duo_transcript` |
+| `core/social_fallbacks.py` | ~95 | Artifact tanıma + Fact Lock tabanlı güvenli caption/threads metinleri | `looks_like_artifact`, `sanitize_hashtags`, `caption_fallback`, `threads_fallback`, `text`, `first_fact`, `model_identity`, `DEFAULT_HASHTAGS` |
+| `core/media.py` | ~235 | FFmpeg/ffprobe: WAV yazma, atempo hızlandırma, süre/probe, video+TTS render | `video_ve_sesi_birlestir`, `sesi_hizlandir`, `wav_yaz`, `gecici_dosya_yolu`, `gecici_ses_yolu`, `temp_dosya_temizle`, `medya_raporu`, `video_suresini_al`, `_parse_ffmpeg_stderr` |
+| `core/web_search.py` | ~185 | DuckDuckGo (`ddgs`) çoklu sorgu; thread+process izolasyonlu timeout | `web_arastirma_yap`, `arastirma_sorgulari_olustur`, `duckduckgo_sorgu` |
+| `telegram/telegram_pipeline_worker.py` | ~400 | Production giriş: Telegram mesaj/video gönderimi, ilerleme barı, timing log, `pipeline_result.json`, teslimat öncesi son sosyal tamamlama | `main()`, `process(path)`, `process_text(text)` |
+| `telegram/telegram_webhook_intake.py` | ~78 | Video modu: videoyu runner'a indirir. **stdlib-only** (workflow'ta `pip install` ÖNCE çalışmaz) | `main()`, `_safe_filename` |
+| `cloudflare/telegram-webhook.js` | ~90 | Webhook: girdiyi `data/pending/<update_id>.json` yazar (GitHub Contents API), inline ton butonları, callback→`workflow_dispatch`, 24s stale cleanup | — |
+| `tests/` | ~1600 |
 
-Tek üretim yolu `telegram-video-optimized.yml` dosyasıdır. Böylece farklı guard veya runner davranışı taşıyan paralel workflow bulunmaz.
+`duo/` paketi, `core/utils.py`, `core/character_profiles.py`, monkey-patch dosyaları
+(`telegram_pipeline_guard.py`, `telegram_pipeline_social_entry.py`) ve
+`reels_creative_prompt.txt` + `REELS_CREATIVE_SCHEMA` **kaldırıldı** (üretimde ölüydü;
+gerekli davranışlar yukarıdaki dosyalara native taşındı).
 
-## 3. İçerik ve medya akışı
+## 2. Üretim akışı (adım → girdi/çıktı → düşme davranışı)
 
-```text
-1. Forensic Video Analysis
-   video bytes → VIDEO_ANALYSIS_SCHEMA
+| # | Adım | Şema | Profiller | API düştüğünde |
+|---|---|---|---|---|
+| 1 | Forensic video analizi | `VIDEO_ANALYSIS_SCHEMA` | `video` (120s) | **Zorunlu** — exception pipeline'ı durdurur |
+| 2 | Research/Fact Lock (DDGS + Gemini, `arama_kullan=False`; DDGS katmanı `web_search.py` içinde) | `FACT_LOCK_SCHEMA` | `uzun_metin` (60s) | **Fallback:** yalnız OBSERVED gerçeklerle Fact Lock (`forensic-fallback`); yeni iddia üretilmez |
+| 3 | Editorial Brain (+ `_runtime_priority_audit`: seçilen index vs en yüksek `toplam_oncelik` → `aligned`/`review`) | `EDITORIAL_SCHEMA` | `uzun_metin` | **Zorunlu** |
+| 4a | Anlatım modu kararı (isteğe bağlı; kullanıcı notunda açık mod varsa atlanır; yakın zamanda tam-tur aşırı yük varsa hiç denenmez) | `ANLATIM_MODU_SCHEMA` | `istege_bagli` (30s + 60s bütçe) | {} → mod varsayılan DUO |
+| 4b | **Agentic döngü** (bkz. §3) | — | — | Script Writer zorunlu; diğerleri güvenli varsayılanla |
+| 4c | Metadata→Caption eşleme + eksikse Caption ajanı (sosyal korumalı, §6) | `METADATA_GEN_SCHEMA`/`CAPTION_SCHEMA` | `metin` | Fallback: Fact Lock caption + `DEFAULT_HASHTAGS` |
+| 4d | Threads (sosyal korumalı, §6) | `THREADS_SCHEMA` | `metin` | Fallback: Fact Lock threads |
+| 5 | Final QA | `QA_SCHEMA` | `uzun_metin` | `qa_unavailable: True` + PASS (yapısal kontroller yine çalışır) |
+| 6 | FFmpeg render (yalnız video modu; metin modu ses dosyasını payload'da bırakır) | — | — | `final_video=""` → worker "final video üretilemedi" ile FAIL |
 
-2. Research / Fact Lock
-   video_state → Search destekli model
-   model biliniyorsa Türkiye satış durumu + global fiyat/değer + ekonomik/pratik/teknik ilgi taraması
-   doğrulanmış adaylar → turkiye_ilgi_sinyalleri (0-10 önem puanı + güvenli anlatım)
-   Search başarısızsa structured-output denemesi
-   tüm model rotaları başarısızsa yalnızca OBSERVED verilerle güvenli fallback
+`pipeline_calistir` payload anahtarları (worker bunları okur):
+`mode, seslendirme_metni, reels_aciklamasi, reels_hashtagleri, kapak_basliklari[],
+threads_aciklamasi, ses_basarili, ses_dosyasi, secilen_ses_ingilizce,
+kullanilan_{metin,ses,threads}_modeli, ses_modu, ses_modu_sesi, qa_regeneration_rounds,
+final_video, temp_input_video, fact_lock, editorial_brief, duo_plan, duo_script,
+qa_result, qa_pass, content_tone, pipeline_state{...}, input_media?, output_media?`
 
-3. Editorial Brain
-   video_state + fact_lock + kullanıcı notu + runtime içerik türü kilidi → EDITORIAL_SCHEMA
-   en az 3 hikâye adayı; kanıt, Türkiye ilgisi, ekonomik/pratik etki, şaşırtıcılık ve görsel destek puanlanır
-   runtime seçilen index'i en yüksek puanlı adayla ayrıca karşılaştırır
+### QA yenileme döngüsü (`_qa_regeneration_loop`)
+- Maks **1** kontrollü yenileme. Hedef→etki: `VOICEOVER_FAIL|COVER_FAIL|DUO_SCRIPT_FAIL`
+  → agentic döngü tam yeniden (eski çıktı exception'ta korunur); `CAPTION_FAIL` →
+  yalnız caption; `THREADS_FAIL` → yalnız threads.
+- **DUO fail-closed:** `expected_mode == DUO` iken `ses_modu != DUO` veya WAV yoksa
+  PASS bile olsa `DUO_SCRIPT_FAIL` → FAIL.
+- **Non-blocking fallback:** yenileme bittikten sonra kalan tek hedef
+  `DUO_SCRIPT_FAIL` ise VE geçerli bir **DUO** WAV mevcutsa (tek sesli dosya bu yoldan
+  geçemez) → `qa_pass=True`, `qa_state["duo_nonblocking_fallback"]=True`.
+- Dönüş **15'liuplü, sabit sıralama**:
+  `(reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli,
+  ses_modu, ses_dosyasi, caption_state, threads_state, qa_state, qa_rounds,
+  model_caption, model_threads, qa_pass)` — bu sırayı bozma; çağıranlar pozisyonel unpack eder.
 
-4. Reels Creative
-   editorial + fact_lock + video + runtime süre/içerik türü kilidi → REELS_CREATIVE_SCHEMA
+## 3. Agentic döngü (`core/agentic.py :: agentic_icerik_uretimi`)
 
-5. Voice plan
-   kullanıcı açık mod söylediyse mutlak override
-   kullanıcı mod söylemediyse video/içeriğe göre AI kararı
-   DUO seçildiyse konuşma haritasında female ve male zorunlu
+Sıra: **Detective → Hook → Script Writer → Critic → TTS → Metadata** (tek `for deneme in
+range(VOICE_REGEN_MAX+1)` döngüsü içinde; Detective/Hook döngü başında bir kez).
 
-6. DUO Script
-   plan + Fact Lock → DUO_SCRIPT_SCHEMA
-   hook → friction → proof → reversal → payoff/callback konuşma omurgası
-   conversation_design + her turda purpose/reply_anchor
-   speaker, kelime, turn exchange, konuşmacı katkısı, asimetrik ritim ve lexical uptake doğrulanır
-   kalite işaretlenirse TTS'den önce yalnız script için en fazla 1 kontrollü yenileme
+| Ajan | Şema | Zorunluluk | Düşerse |
+|---|---|---|---|
+| Detective | `DETECTIVE_SCHEMA` | isteğe bağlı, **atlanabilir** (aşıyı-yük penceresinde hiç denenmez) | `{}` |
+| Hook Gen | `HOOK_GEN_SCHEMA` (+`KAPAK_FORMAT_KURALI`) | isteğe bağlı | `_hook_fallback(editorial)` (territories/core_story'den) |
+| Script Writer | `SCRIPT_WRITER_SCHEMA` | **ZORUNLU** (router overload tekrarlarına rağmen düşerse exception yukarı) | — |
+| Critic | `CRITIC_SCHEMA` | isteğe bağlı, atlanabilir | onaylı sayılır; onay vermezse **1 revize** (boş revize eski scripti korur) |
+| Metadata | `METADATA_GEN_SCHEMA` | isteğe bağlı, atlanabilir | `{}` → caption Caption ajanıyla tamamlanır |
 
-7. TTS
-   DUO: tek Gemini çağrısı, Autonoe + Charon
-   sabit döngülü duygu tag'i ve her turda aynı short-pause kullanılmaz
-   sahne düzeyi Audio Profile + Scene + Director's Notes doğal performansı yönetir
-   SOLO: kullanıcı override'ı veya AI editoryal kararıyla tek prebuilt voice
+**Kapak kuralı (istisnasız):** Hook çıktısı `kapak_basliklarini_normalize_et` ile
+doğrulanır; eksikse Editorial/Detective kanıtları + şablon havuzuyla **5'e tamamlanır**.
+Her öğe `{ust, alt, ana(==ust), kaynak}`; `ana` worker uyumluluğu için.
 
-8. Caption + Threads
-   aynı Editorial/Fact Lock ve içerik türü sözleşmesiyle birbirinden bağımsız iki kol paralel çalışır;
-   boş/artifact yanıtta Fact Lock tabanlı yerel fallback
+**DUO diyalog kuralları** (Script Writer promptu içinde, QA `duo_check` bunları denetler):
+HOOK→FRICTION→PROOF→REVERSAL→PAYOFF/CALLBACK omurgası, 2. turdan itibaren lexical
+uptake, asimetrik ritim (eşit uzunluk/mechanik salınım yasak), callback kapanış.
+SOLO'da: hook→bilgi→dönüş→callback; diyalog kalıbı yasak.
 
-9. QA
-   Fact Lock, seçilen içerik türü, voice mode, TTS dosyası ve sosyal çıktılar doğrulanır
+**TTS segment üretimi:** `segments[].tts_tag` + `text` → `"{tag} {text}"`;
+`yorum_tetikleyici_soru` sona `"[vurgulu] {soru}"` olarak eklenir (DUO'da son
+konuşmacının karşıtı, SOLO'da tek speaker). `duo_script = {status: ready|fallback,
+segments, contract:{mode}, conversation_design:{}, model:"agentic"}`.
 
-10. FFmpeg render
-   gerçek WAV süresi ölçülür; video güvenli hız sınırları içinde senkronlanır
-
-11. Telegram delivery
-   final rapor, video, başlık seçenekleri ve Threads gönderilir
-```
-
-Telegram ilerleme arayüzü dokuz üst seviye adım gösterir. Actions logları yukarıdaki alt işlemleri ayrı ayrı ölçer.
+**Güvenlik duvarları (döngü içi):**
+- Boş segment → yeniden yazım (≤`VOICE_REGEN_MAX=2`).
+- Kelime sayısı: `hedef = sure × KELIME_HIZI_ORANI(2.9)` 5'e yuvarlak; aralık ±%10.
+  Sapma **`VOICE_WORD_TOLERANCE_RATIO=0.20`'den azsa yeniden yazım ATLANIR** (FFmpeg
+  senkron kapatır).
+- TTS/video süre oranı (0.85–1.15) **diagnostiktir**: oran dışı WAV silinmez, render'a bırakılır.
+- DUO TTS başarısızsa SOLO'ya düşülmez (fail-closed, `core/duo_audio.py` + `_duo_ses_veya_legacy_uret`).
+- `reels_state` her turda: `seslendirme_metni, kapak_basliklari[5], kapak_format,
+  hook_families[1], turkiye_ilgi_kancasi` (Fact Lock'taki en yüksek `onem_puani`'li
+  sinyalin `guvenli_anlatim`), `metadata`.
 
 ## 4. Ses modu sözleşmesi
 
-### 4.1 Kullanıcı override + AI editoryal karar
+**Karar hiyerarşisi (üst→alt):**
+1. Kullanıcı notunda açık mod (`_explicit_voice_mode_from_notes`: "duo/iki sesli",
+   "solo/tek ses", "yalnızca kadın/erkek" + olumsuzluk "olmasın" ayrımı; "sen seç" ifadesi
+   kararı AI'a bırakır). Video modda not = video caption; **metin modda not = kullanıcı metnin kendisi.**
+2. `ANLATIM_MODU_ZORLA` env (test/operasyon).
+3. AI kararı (`anlatim_modu_karar_ver`, 4a adımı) → `editorial["anlatim_modu_karari"]`.
+4. Varsayılan: **DUO**.
 
-- Kullanıcı açıkça `DUO`, iki ses, `SOLO_FEMALE`, yalnızca kadın, `SOLO_MALE` veya yalnızca erkek isterse runtime bu talebi model kararının üstünde uygular.
-- Kullanıcı ses modu belirtmezse Reels Creative modeli video, hikâye ve doğal konuşma yapısına göre `DUO`, `SOLO_FEMALE` veya `SOLO_MALE` seçer.
-- İki anlamlı bakış açısı ve gerçek tercih gerilimi varsa DUO; ikinci karakter dolgu olacaksa SOLO tercih edilmesi beklenir.
-- Aynı notta açık DUO/iki ses talebi bulunması, olumsuz örnek içindeki SOLO sözcüklerinin yanlış override oluşturmasını engeller.
-- Geçersiz veya eksik model modu güvenli varsayılan olarak `DUO`ya düşer.
+**Karakter→voice (tek kaynak `core/duo_audio.py`):** `female→Autonoe`, `male→Charon`
+(hem Gemini speaker etiketi hem prebuilt voice aynı ad).
 
-### 4.2 Karakter eşleşmesi
+**Multi-speaker wire (kritik):** `SpeechConfig.multi_speaker_voice_config =
+MultiSpeakerVoiceConfig(speaker_voice_configs=[Autonoe→Autonoe, Charon→Charon])`
+tam olarak 2, farklı etiket+ses. `MultiSpeakerVoiceConfig`'i `speech_config`'e
+DOĞRUDAN vererek boş `speechConfig:{}` (tek ses) oluşturma.
 
-| Script speaker | Gemini speaker etiketi | Prebuilt voice |
-|---|---|---|
-| `female` | `Autonoe` | `Autonoe` |
-| `male` | `Charon` | `Charon` |
+## 5. Structured-output şemaları (zorunlu alanlar)
 
-### 4.3 Gemini multi-speaker wire yapısı
-
-DUO isteği aşağıdaki iç içe yapı ile gönderilir:
-
-```text
-GenerateContentConfig
-└── speech_config: SpeechConfig
-    └── multi_speaker_voice_config: MultiSpeakerVoiceConfig
-        └── speaker_voice_configs (tam olarak 2)
-            ├── Autonoe → Autonoe
-            └── Charon  → Charon
-```
-
-`MultiSpeakerVoiceConfig` doğrudan `speech_config` alanına verilmez. Böyle bir kullanım SDK tarafından sessizce `speechConfig: {}` şekline dönüşebilir ve tek ses üretimine neden olur.
-
-### 4.4 Fail-closed kuralları
-
-DUO üretiminde:
-
-- Tam olarak iki farklı speaker etiketi bulunmalıdır.
-- İki farklı voice bulunmalıdır.
-- Script hem `female` hem `male` segment içermelidir.
-- DUO TTS başarısızsa tek sesli TTS ile başarılıymış gibi devam edilmez.
-- QA yalnızca gerçekten `ses_modu == DUO` ve geçerli WAV varsa DUO sesini kabul eder.
-
-## 5. Structured-output şemaları
-
-| Şema | Ana zorunlu alanlar |
+| Şema | Zorunlu alanlar |
 |---|---|
-| `VIDEO_ANALYSIS_SCHEMA` | `video_identity`, `kapak_ani_saniye`, `timeline`, `observed_facts`, `unknowns`, `possible_inference`, `visual_opportunities` |
-| `FACT_LOCK_SCHEMA` | `facts`, `turkiye_satis_durumu`, `turkiye_ilgi_sinyalleri` |
-| `EDITORIAL_SCHEMA` | `story_options`, `selected_story_index`, `core_story`, `selected_story_category`, `selection_rationale`, `primary_facts`, `audience_trigger`, `tone` |
-| `REELS_CREATIVE_SCHEMA` | `turkiye_ilgi_kancasi`, `ana_hikaye_sadakat_kontrolu`, `hook_families`, `secilen_aile_index`, `kapak_basliklari`, `seslendirme_metni`, `anlatim_modu`, `duo_stratejisi`, `konusma_haritasi` |
-| `DUO_SCRIPT_SCHEMA` | `conversation_design` (`central_tension`, `hook_open_loop`, `reversal`, `payoff_callback`), `segments[].speaker`, `purpose`, `reply_anchor`, `text` |
-| `CAPTION_SCHEMA` | `reels_aciklamasi`, `reels_hashtagleri` |
-| `THREADS_SCHEMA` | `threads_aciklamasi` |
-| `QA_SCHEMA` | `tone_check`, `viral_priority_check`, `overall`, `regeneration_targets` |
+| `VIDEO_ANALYSIS_SCHEMA` | `video_identity{brand, exact_model, confidence}`, `kapak_ani_saniye`, `timeline[{olay,...}]`, `observed_facts`, `unknowns`, `possible_inference`, `visual_opportunities` |
+| `FACT_LOCK_SCHEMA` | `facts[{fact, status∈OBSERVED/VERIFIED/INFERENCE/UNKNOWN/CONTRADICTED, source?}]`, `turkiye_satis_durumu∈VAR/YOK/BILINMIYOR`, `turkiye_ilgi_sinyalleri[{kategori, bulgu, neden_turkiyede_ilginc, guvenli_anlatim, onem_puani 0-10}]` |
+| `EDITORIAL_SCHEMA` | `story_options[{isim,kategori,fact_strength,turkish_audience_relevance,economic_or_practical_impact,surprise_gap,visual_support,shareability,repetition_risk,toplam_oncelik,dayanak}]`, `core_story`, `selected_story_index`, `selected_story_category`, `selection_rationale`, `why_it_matters`, `primary_facts`, `audience_trigger`, `tone` |
+| `CAPTION_SCHEMA` | `reels_aciklamasi`, `reels_hashtagleri[5]` |
+| `THREADS_SCHEMA` | `threads_aciklamasi` (≤500 kr, soru/hashtag yok) |
+| `QA_SCHEMA` | `tone_check`, `viral_priority_check`, `overall`, `regeneration_targets[]` (diğer check alanları isteğe bağlı) |
+| `ANLATIM_MODU_SCHEMA` | `anlatim_modu∈DUO/SOLO_FEMALE/SOLO_MALE`, `duo_katma_degeri`, `solo_katma_degeri`, `guven`, `gerekce` |
+| `DETECTIVE_SCHEMA` | `kronik_sikayetler`, `turkiye_ozel_magduriyet`, `viral_kan_mali` |
+| `HOOK_GEN_SCHEMA` | `secilen_sablon`, `kapak_basliklari[5×{ust,alt}]`, `kapak_metni`, `ilk_3_saniye_kanca` |
+| `SCRIPT_WRITER_SCHEMA` | `segments[{speaker, tts_tag, text}]`, `yorum_tetikleyici_soru` |
+| `CRITIC_SCHEMA` | `score 1-10`, `approved`, `feedback` |
+| `METADATA_GEN_SCHEMA` | `reels_baslik`, `reels_aciklama`, `reels_hashtag` |
 
-Seçilen içerik türü (`eglence`, `dengeli`, `bilgi`, `teknik`) Telegram'dan pipeline'a taşınır ve yalnız Reels metninde değil Editorial Brain, Reels Creative, Caption, Threads ve Final QA katmanlarının tamamında aynı runtime sözleşmesi olarak kilitlenir. Pipeline sonucu ve logu uygulanan türü ayrıca kaydeder.
+**İçerik türü kilidi** (`eglence|dengeli|bilgi|teknik`): Telegram butonu → workflow
+input → `state.content_tone` → editorial/caption/threads/qa promptlarına runtime kilidi
+olarak eklenir; bilinmeyen değer `dengeli`ye düşer.
 
-Türkiye ilgi önceliği “her zaman fiyat” şeklinde kör bir kural değildir. Doğrulanmış fiyat/değer ve erişilebilirlik sıra dışıysa güçlü biçimde öne çıkar; değilse kullanım maliyeti/vergi, ürün kalitesi, teknoloji, performans, pratiklik ve son olarak mikro tasarım detayları kanıt + Türkiye ilgisi + şaşırtıcılık üzerinden karşılaştırılır. Türkiye'de satılmayan modelin global fiyatı kullanılabilir, fakat pazar/para birimi ve Türkiye satışının bulunmadığı açıkça korunur; kesin Türkiye fiyatı türetilmez.
+**Türkiye fiyat kuralı:** Global fiyat pazar/para birimi bağlamıyla kullanılabilir;
+kesin Türkiye fiyatı/ÖTV UYDURMAZ; `turkiye_satis_durumu` mutlaka taşınır.
 
-`anlatim_modu` ve `duo_stratejisi.uygunluk` değerleri `DUO`, `SOLO_FEMALE`, `SOLO_MALE` enum'larıyla sınırlandırılmıştır. Runtime kullanıcı override'ı model kararından üstündür; override yoksa doğrulanmış model kararı korunur.
+## 6. Sosyal koruma katmanı (`core/pipeline.py` + `core/social_fallbacks.py`)
 
-### 5.1 Reels kapak yazısı formatı
+- `_caption_calistir` / `_threads_calistir` her üretimde doğrular: metin boş değil +
+  `looks_like_artifact` değil (`/tmp/`, `data/`, `.wav/.mp4...` gibi) + caption'da
+  hashtag listesi dolu. Geçmezse **1 kontrollü yeniden üretim**, sonra Fact Lock
+  tabanlı güvenli fallback (`model="local-fallback"`).
+- Worker (`_ensure_social_outputs`) teslimattan önce BOŞ çıktıları aynı fallback'lerle
+  son kez tamamlar (artifact kontrolü pipeline'dadır).
+- Fallback metinler "güvenli şablon"dur; QA bunları geçerli caption saymaz
+  (QA promptu bunu açıkça söyler) — ama teslimat asla boş gitmez.
 
-`[Kural: Reels Kapak Yazısı Formatı]` istisnasız uygulanır:
+## 7. Router kuralları (`SmartRouter`)
 
-- Kapak için asla tek başlık üretilmez; her üretimde TAM **5 farklı** alternatif sunulur.
-- Her alternatif iki katmandır:
-  - **Üst Başlık** (dikkat çekici kanca): TAMAMI BÜYÜK HARF, 2-4 kelime.
-  - **Alt Başlık** (tamamlayıcı detay): cümle düzeni (yalnızca ilk harf büyük), 4-7 kelime.
-- Hook Generator ajanı `HOOK_GEN_SCHEMA.kapak_basliklari` (5× `ust`/`alt`) alanını doldurur.
-- Çıktı `core.cover_titles.kapak_basliklarini_normalize_et` ile deterministik olarak
-  doğrulanır/düzeltilir: Türkçe büyük-küçük harf, kelime sınırları, tekrar tespiti ve
-  üst/alt aynılığı denetlenir; ajan eksik dönerse Editorial/Detective verisinden yerel
-  alternatiflerle 5'e tamamlanır (API yoğunluğunda bile asla tek başlık gitmez).
-- Payload'daki `kapak_basliklari[]` öğesi `{"ust", "alt", "ana"}` taşır; `ana == ust`
-  (Telegram worker ve seçili hook ile geriye dönük uyumluluk).
+- **Tur mantığı:** her model, her key'de TAM 1 kez, seri, bekleme yok. Tam tur (tüm
+  key'ler) düşmeden sonraki modele geçilmez. Geçici hatanın adımlar arası hafızası yok.
+- **Kalıcı yasaklar** (adım boyunca): `404/not_found` ve `400/unsupported` → model
+  blacklist (`*+model`, 24h); `limit: 0` → key blacklist (`mail+model`, 7 gün);
+  `PerDay` kotası → key+model bu çalışma boyunca atlanır (Search araçlı isteklerde değil).
+- **429/dakikalık kota, 503, timeout:** GEÇICI — bekleme/yasak yok, sonraki key.
+- **Yavaş model:** ≥20sn süren hatalı deneme → model 3 dk sona atılır (silinmez);
+  aynı modelde 2 yavaş deneme → kalan key'ler atlanır.
+- **Aşırı-yük koruması:** tüm model+key geçici hatayla düşerse 15/30/45sn bekleyip tam
+  tur ≤`OVERLOAD_RETRY_ROUNDS=2` kez. Toplam bekleme bütçesi 180sn; çalışma
+  süresi + bekleme > 12dk ise beklenmez. `hizli_basarislik()` bloklarında bekleme YOK.
+- **Aşıri-yük atlama penceresi (90sn):** tam tur düşüşünden sonra atlanabilir ajanlar
+  (Detective/Critic/anlatım modu/Metadata) hiç denenmez → `yakin_zamanda_asiri_yuk_var_mi`.
+- **İstek profilleri** (`istek_profili(...)`): `metin` 45s · `uzun_metin` 60s ·
+  `istege_bagli` 30s + 60sn toplam bütçe (dolunca kalan kombinasyonlar atlanır) ·
+  `video` 120s · `tts` 60s. Env ile ezilebilir (`ROUTER_*`).
+- **Research fallback rotası:** `metin_uret(arama_kullan=True)` JSON parse edemezse →
+  Search'siz structured-output denemesi; o da düşerse `arama_kullan=False` fallback.
+- API key değerleri loglanmaz; yalnız `GEMINI_API_KEY_N` alias'ları.
 
-## 6. Model ve API key rotasyonu
+## 8. Medya sözleşmesi
 
-`SmartRouter`:
+- TTS ham PCM 24kHz/mono/16bit → atempo **1.20×** (`SES_HIZ_CARPANI`) → render'da AAC.
+- Final: 48kHz mono AAC 192k; video H.264 `veryfast` CRF20 `yuv420p`, kaynak FPS korunur.
+- Senkron: `hedef = ceil(ses_suresi)`; `video_hiz = video_sure / hedef`
+  **0.50×–1.50×** aralığa kırpılır; süre oranı (0.85–1.15) yalnız log, WAV'i korur.
+- Render timeout 600sn. Kalite (unsharp/lanczos) filtresi kasıtlı olarak YOK.
+- Süre okuma: ffprobe → yoksa `ffmpeg -i` stderr parse (`_parse_ffmpeg_stderr`).
 
-1. Her modeli yapılandırılmış API key'lerinde sırayla dener.
-2. 429/kota ve 503/geçici hatalarda sıradaki key'e geçer.
-3. 404 veya desteklenmeyen model/config hatasında modeli geçici blacklist'e alır.
-4. Free-tier desteği olmayan key/model kombinasyonunu key bazında atlar.
-5. Search rotası başarısız olduğunda Search'siz structured-output fallback'i dener.
-6. Günlük kota (`PerDay`) biten key+model çifti o çalışma boyunca atlanır (Search araçlı isteklerde uygulanmaz); dakikalık kota her istekte yeniden denenir.
-7. 20 sn'den uzun süren hatalı deneme (timeout) modeli 3 dk boyunca listenin sonuna atar (silmez); aynı modelde 2 yavaş denemeden sonra kalan key'ler atlanıp sıradaki modele geçilir.
+## 9. Kuyruk yaşam döngüsü (Telegram/Cloudflare)
 
-API key değerleri loglanmaz; yalnızca `GEMINI_API_KEY_1` gibi alias'lar görünür.
+- Girdi `data/pending/<update_id>.json` olarak GitHub'da tutulur
+  (`{file_id, chat_id, filename, video_note, text_input, input_type, created_at}`).
+- Ton butonu callback → `workflow_dispatch(telegram-video-optimized.yml, ref=main)` +
+  pending dosyası silinir. Dispatch başarısızsa dosya kalır (retry mümkün).
+- Her doğrulanmış webhook isteğinde 24s+ eski pending'lar temizlenir.
+- `data/pending/*.json` gitignore'da — **asla commit etme**.
+- Concurrency: `telegram-video-${chat_id}`, `cancel-in-progress: true`. Job 30dk.
 
-### 6.1 Aşırı yük (503) hız koruması
+## 10. Loglama ve gizlilik
 
-Eylül 2026 üretim logları, tek bir run'da 26+ dakikaya çıkan beklemelerin çoğunun
-zorunlu iş değil, "her modele her key'de bir tur daha" ödünleri olduğunu gösterdi.
-Bu yüzden:
-
-- İstekler profil bazlı zaman aşımı/bütçe taşır (`ISTEK_PROFILLERI`): kısa metin
-  ajanları için 45 sn, uzun JSON adımları (Editorial/QA/Fact Lock) için 60 sn,
-  isteğe bağlı ajanlar için 30 sn zaman aşımı + 60 sn toplam bütçe, video için
-  120 sn, TTS için 60 sn. Bütçe dolan isteğe bağlı istek kalan denemeleri atlayıp
-  güvenli varsayılana düşer.
-- Tam tur aşırı yük (tüm model+key geçici hata) sonrasında, router `ASIRI_YUK_ATLAMA_PENCERESI`
-  (90 sn) boyunca atlanabilir ajanları (Detective, Critic, anlatım modu, Metadata)
-  hiç denemeden geçer — bekleme bütçesi zorunlu adımlara (Script Writer, TTS, Forensic) kalır.
-- Tam tur beklemeleri 15/30/45 sn'ye indi, tekrar sayısı 2, toplam bekleme bütçesi 180 sn,
-  son bekleme sınırı 12 dk. Kanıtlanmış modeller (gemini-3.5-flash-lite, gemini-3.6-flash)
-  model listelerinin başına alındı.
-- Kelime sayısı kontrolü toleranslı: hedeften %20'den az sapan senaryo yeniden yazılmaz;
-  FFmpeg senkron katmanı (0.5x-1.5x video hızı) farkı kapatır.
-
-## 7. Gözlemlenebilirlik
-
-Actions loglarında:
-
-- Her satırda UTC zaman ve pipeline başlangıcından beri geçen süre
-- Her üst seviye stage için START/END ve dakika
-- Her Gemini request için request numarası
-- Her model/key denemesinin süresi
-- Model turu ve toplam API süresi
-- Forensic, Research, Editorial, Reels, DUO Script, TTS, Caption, Threads ve QA süreleri
-- FFmpeg render süresi
-- Telegram mesaj/video gönderim süreleri
-- Pipeline sonunda timing summary ve toplam wall time
-- `/usr/bin/time -v` ile CPU/RAM özeti
-- GitHub Job Summary içinde QA, voice mode, warning ve error sayıları
-
-Tam promptlar, API key değerleri ve tam kullanıcı/model metinleri Actions loguna yazılmaz. Yalnızca anahtar listesi, JSON karakter sayısı, metin karakter sayısı ve liste elemanı sayısı gibi yapısal özetler yazılır.
-
-## 8. Fallback sınırları
-
-- **Research:** Dış doğrulama tamamen başarısızsa yalnızca videoda gözlenen gerçeklerle devam eder; yeni iddia üretmez.
-- **Caption/Threads:** Boş veya artifact çıktı Fact Lock tabanlı yerel metinle değiştirilir.
-- **DUO Script:** LLM scripti başarısızsa onaylı Reels metni konuşma haritasına göre yerel olarak bölünebilir; ancak ortaya çıkan script yine iki speaker içermeli ve multi-speaker TTS'den geçmelidir.
-- **DUO Audio:** Tek sese fallback yoktur.
-- **Süre uyumu:** Geçerli WAV sırf ideal oran dışında diye silinmez; FFmpeg senkronuna bırakılır.
-
-## 9. Kuyruk yaşam döngüsü
-
-- Telegram girdisi ton seçimi beklerken `data/pending/<update_id>.json` olarak geçici tutulur.
-- Workflow başarıyla dispatch edildiği anda ilgili pending dosyası silinir.
-- Kullanıcı ton seçmeden kuyruğu terk ederse `created_at` alanı sayesinde 24 saatten eski kayıtlar sonraki doğrulanmış webhook isteklerinde otomatik temizlenir.
-- `data/pending/*.json` Git tarafından ignore edilir; runtime kuyruk verileri kaynak kod geçmişine eklenmez.
-- GitHub Actions runner'ına indirilen video ve `/tmp` medya çıktıları ephemeral runner sona erdiğinde yok olur.
-
-## 10. Medya sözleşmesi
-
-- TTS ham PCM: `24000 Hz`, mono, 16-bit
-- TTS konuşma hızı: `1.20x`
-- Final audio: `48000 Hz`, mono AAC, `192k`
-- Video hızlandırma üst sınırı: `1.50x`
-- Video yavaşlatma alt sınırı: `0.50x`
-- Video codec: H.264, `yuv420p`
-- Render timeout: 600 saniye
-
-Kaynak medya raporu ve final medya raporu Actions loguna yazılır.
+- Her log satırı: `[UTC ms] [+job_süresi] mesaj`. Stage `📊 STAGE START/END`, adım
+  `⏱️ START/END/FAIL | süre`, API istekleri numaralandırılmış.
+- Model çıktıları loga **yazılmaz**: yalnız yapısal özet (`_safe_result_summary`:
+  anahtar listesi, json/metin karakter sayısı, liste boyutu + model adı).
+- API key değeri, tam prompt, tam kullanıcı/model metni ASLA loglanmaz.
+- Son: `PIPELINE TIMING SUMMARY` + wall time; workflow `Job Summary`'e
+  `pipeline_result.json` özeti (qa_pass, rounds, voice_mode, warning/error sayısı).
 
 ## 11. Test ve PR kapısı
 
-PR öncesinde en az:
-
 ```bash
 GEMINI_API_KEY=test python -m pytest -q
-python -m compileall -q core duo telegram
+python -m compileall -q core telegram tests
+python -m ruff check core telegram tests --select F,E9   # fatal lint
 node --check cloudflare/telegram-webhook.js
+# + workflow YAML parse (ci.yml)
 ```
+- Router/agentic testleri ağ YAPMAZ: sahte `genai.Client`/`metin_uret` istemcileri.
+- Agentic testleri `core.agentic.*` hedeflerini patch'ler (modül taşınsa bile
+  `core.agentic` isim uzayı sabittir).
+- Gerçek Gemini/Telegram entegrasyonu secret gerektirir; CI'da YOK.
 
-Ayrıca tüm workflow YAML dosyaları parse edilmeli ve `git diff --check` temiz olmalıdır. Gerçek Gemini/Telegram entegrasyon testi secret gerektirdiği için unit testlerden ayrı tutulur.
+## 12. AI'a dokunma kuralları (en önemli bölüm)
+
+1. **Monkey-patch YOKTUR** ve yeniden eklenmesin. Davranış değişikliği ilgili
+   fonksiyona (pipeline/adım/ajant) native yapılır.
+2. `_qa_regeneration_loop` 15'liuplü dönüş SIRASI sözleşmedir (bkz. §2); değiştirmen
+   gerekiyorsa önce `pipeline_calistir` + `metin_pipeline_calistir` unpack'lerini güncelle.
+3. `core/agentic.py` → `core/pipeline.py` importu EKLEME (döngü); tersi serbest.
+4. TTS fail-closed zinciri korunur: DUO'da tek-ses fallback, SOLO'da DUO fallback YOK.
+5. Kapak kuralı tek yerden: `core/cover_titles.py`; prompt/şemada kopya kurallama.
+6. Karakter→voice tek yerden: `core/duo_audio.py CHARACTER_VOICES`.
+7. Fallback metinleri tek yerden: `core/social_fallbacks.py`.
+8. `telegram_webhook_intake.py` **stdlib-only** kalmalı (workflow'ta bağımlılıklar
+   kurulmadan çalışır).
+9. Yeni model/model sırası: `core/config.py` listeleri (kanıtlı model başta).
+10. Log'a model içeriği yazma kuralı (§10) — yeni log satırlarında da geçerli.
+11. Yeni şema alanı: `core/schemas.py` + ilgili `core/prompts/*.txt` birlikte güncellenir.
+12. Test adımları: davranış değişiyorsa `tests/` içinde ilgili regresyon dosyasını
+    güncelle; ağ bağımlılığı ekleme.

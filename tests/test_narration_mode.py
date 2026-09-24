@@ -2,11 +2,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.narration_mode import (
-    anlatim_modu_karar_ver,
-    mod_kilit_talimati,
-    mod_kilidini_uygula,
-)
+from core.narration_mode import anlatim_modu_karar_ver
 
 
 class FakeRouter:
@@ -46,33 +42,3 @@ def test_env_override_skips_ai_call(monkeypatch):
     karar = anlatim_modu_karar_ver(router, {}, {}, {}, 20, "dengeli", _log)
     assert karar["mode"] == "DUO"
     assert router.calls == 0
-
-
-def test_solo_lock_collapses_map_to_single_speaker_without_mutating_input():
-    reels = {
-        "anlatim_modu": "DUO",
-        "duo_stratejisi": {"uygunluk": "DUO", "hook_speaker": "male"},
-        "konusma_haritasi": [
-            {"speaker": "female", "detay": "a"},
-            {"speaker": "male", "detay": "b"},
-        ],
-    }
-    out = mod_kilidini_uygula(reels, {"mode": "SOLO_FEMALE"})
-    assert out["anlatim_modu"] == "SOLO_FEMALE"
-    assert out["duo_stratejisi"]["uygunluk"] == "SOLO_FEMALE"
-    assert {x["speaker"] for x in out["konusma_haritasi"]} == {"female"}
-    assert [x["detay"] for x in out["konusma_haritasi"]] == ["a", "b"]
-    assert reels["anlatim_modu"] == "DUO"
-
-
-def test_no_decision_means_no_lock():
-    reels = {"anlatim_modu": "DUO"}
-    assert mod_kilidini_uygula(reels, {}) == reels
-    assert mod_kilit_talimati({}) == ""
-    assert "SOLO_MALE" in mod_kilit_talimati({"mode": "SOLO_MALE"})
-
-
-def test_lock_replaces_stale_model_rationale_with_decision_reason():
-    reels = {"anlatim_modu": "DUO", "duo_stratejisi": {"rationale": "iki ses daha canlı"}}
-    out = mod_kilidini_uygula(reels, {"mode": "SOLO_MALE", "reason": "teknik yoğun içerik"})
-    assert out["duo_stratejisi"]["rationale"] == "[SOLO_MALE] teknik yoğun içerik"

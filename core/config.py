@@ -106,7 +106,7 @@ PIPELINE_ADIMLARI = [
     "🎥 Video analiz ediliyor (Forensic)...",
     "🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...",
     "🧠 Hikâye seçiliyor (Editorial Brain)...",
-    "🎙️ Reels hazırlanıyor (Cover + Hook + Voiceover)...",
+    "🎙️ Agentic üretim döngüsü (Detective + Hook + Script + Critic)...",
     "📝 Caption + hashtag hazırlanıyor...",
     "🧵 Threads hazırlanıyor...",
     "🔍 Son kalite kontrol (QA)...",

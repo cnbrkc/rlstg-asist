@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from contextlib import contextmanager
@@ -22,7 +23,6 @@ from core.config import (
     ASIRI_YUK_ATLAMA_PENCERESI_SANIYE,
     model_arama_destekliyor_mu,
 )
-from core.utils import guvenli_json_yukle
 from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 
 # İstemci düzeyi varsayılan zaman aşımı (ms). Her istek ayrıca kendi profiline
@@ -58,6 +58,22 @@ DAILY_QUOTA_COOLDOWN = 6 * 60 * 60
 # fırlatıp tüm pipeline'ı öldürmez. Kısa bir bekleme sonrası tam tur yeniden
 # yapılır. Tek tek denemeler arasında bekleme YOK (hızlı tam tur felsefesi
 # korunur); bekleme yalnızca komple başarısız bir turdan sonra devreye girer.
+def guvenli_json_yukle(metin: str) -> dict:
+    """Model yanıtındaki JSON'u güvenli biçimde ayrıştırır (kod bloğu/serbest metin toleranslı)."""
+    if not metin:
+        raise ValueError("Model boş yanıt verdi.")
+    metin = metin.strip()
+    if metin.startswith("```"):
+        metin = re.sub(r"^```(?:json)?\s*|\s*```$", "", metin, flags=re.I | re.S).strip()
+    try:
+        return json.loads(metin)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", metin, re.S)
+        if m:
+            return json.loads(m.group(0))
+        raise
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return max(0, int(os.environ.get(name, default)))

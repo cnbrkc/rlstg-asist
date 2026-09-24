@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
 from core.pipeline import _editorial_oncelik_denetimi
-from core.prompts import editorial_promptunu_olustur, qa_promptunu_olustur, reels_creative_promptunu_olustur, research_promptunu_olustur
-from core.schemas import EDITORIAL_SCHEMA, FACT_LOCK_SCHEMA, QA_SCHEMA, REELS_CREATIVE_SCHEMA
+from core.prompts import editorial_promptunu_olustur, qa_promptunu_olustur, research_promptunu_olustur
+from core.schemas import EDITORIAL_SCHEMA, FACT_LOCK_SCHEMA, QA_SCHEMA
 
 
 class ViralResearchContractTests(unittest.TestCase):
@@ -67,13 +67,6 @@ class EditorialPriorityTests(unittest.TestCase):
 
 
 class CreativeAndQaPriorityTests(unittest.TestCase):
-    def test_reels_must_carry_selected_turkey_hook(self):
-        prompt = reels_creative_promptunu_olustur(30, "dengeli")
-        self.assertIn("TÜRKİYE İLGİ KANCASI", prompt)
-        self.assertIn("kapı/far/ekran gibi daha zayıf", prompt)
-        self.assertIn("turkiye_ilgi_kancasi", REELS_CREATIVE_SCHEMA["required"])
-        self.assertIn("ana_hikaye_sadakat_kontrolu", REELS_CREATIVE_SCHEMA["required"])
-
     def test_qa_fails_when_micro_detail_hides_stronger_verified_signal(self):
         prompt = qa_promptunu_olustur("dengeli")
         self.assertIn("viral_priority_check", prompt)

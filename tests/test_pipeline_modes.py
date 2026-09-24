@@ -4,7 +4,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("GEMINI_API_KEY", "test")
 
-from core.pipeline import _explicit_voice_mode_from_notes, agentic_icerik_uretimi
+from core.pipeline import _explicit_voice_mode_from_notes
+from core.agentic import agentic_icerik_uretimi
 
 
 class _Router:
@@ -65,8 +66,8 @@ def _mock_duo_ses(router, segments, output_path, log, hiz_carpani=1.0):
     return True, "fake-duo-tts"
 
 
-_kelime_patch = patch("core.pipeline._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
-_ses_sure_patch = patch("core.pipeline._ses_suresini_al", return_value=25.0)
+_kelime_patch = patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 1, 999, 2.5, 5))
+_ses_sure_patch = patch("core.agentic._ses_suresini_al", return_value=25.0)
 
 
 def test_explicit_solo_and_duo_note_detection():
@@ -110,7 +111,7 @@ def test_agentic_solo_male_mode(mock_kelime, mock_ses):
 
 @_ses_sure_patch
 @_kelime_patch
-@patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+@patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
 def test_agentic_duo_mode(mock_tts, mock_kelime, mock_ses):
     router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
     logs = []
@@ -126,7 +127,7 @@ def test_agentic_duo_mode(mock_tts, mock_kelime, mock_ses):
 
 @_ses_sure_patch
 @_kelime_patch
-@patch("core.pipeline.duo_ses_uret", side_effect=_mock_duo_ses)
+@patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
 def test_metadata_generated(mock_tts, mock_kelime, mock_ses):
     router = _Router([_detective(), _hook(), _script(), _critic(), _metadata()])
     logs = []
