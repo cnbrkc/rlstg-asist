@@ -115,7 +115,7 @@ jobs:
           PY
 
       - name: Compile check
-        run: python -m compileall -q core duo telegram
+        run: python -m compileall -q core telegram
 
       - name: Run Reels pipeline
         env:

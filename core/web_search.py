@@ -15,6 +15,7 @@ import multiprocessing
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any
@@ -170,9 +171,19 @@ def web_arastirma_yap(video_state: Dict[str, Any], log_ekle) -> str:
         log_ekle("🔍 Marka/model belirsiz; web araştırması atlandı.")
         return ""
 
+    # Sorgular birbirinden bağımsız: seri çalıştırıldığında 5 sorgu ~11 sn
+    # sürüyordu. Küçük bir havuzla eşzamanlı çalıştırılır (DDGS rate-limit'e
+    # takılmamak için en fazla WEB_SEARCH_PARALLEL iş parçacığı); sonuç sırası
+    # sorgu sırasıyla aynı kalır.
+    paralel = min(len(sorgular), _env_int("WEB_SEARCH_PARALLEL", 3))
+    if paralel > 1:
+        with ThreadPoolExecutor(max_workers=paralel, thread_name_prefix="ddgs") as havuz:
+            tum_sonuclar = list(havuz.map(lambda q: duckduckgo_sorgu(q, max_sonuc=4, log_ekle=log_ekle), sorgular))
+    else:
+        tum_sonuclar = [duckduckgo_sorgu(q, max_sonuc=4, log_ekle=log_ekle) for q in sorgular]
+
     bloklar = []
-    for sorgu in sorgular:
-        sonuclar = duckduckgo_sorgu(sorgu, max_sonuc=4, log_ekle=log_ekle)
+    for sorgu, sonuclar in zip(sorgular, tum_sonuclar):
         if sonuclar:
             satirlar = [f"SORGU: {sorgu}"]
             for i, s in enumerate(sonuclar, 1):

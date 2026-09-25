@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI
@@ -94,7 +95,7 @@ def _coerce_positive_float(value):
 def _hizli_basarislik(router):
     """Güvenli varsayılanı olan adımlarda router'ın aşırı-yük beklemesini kapatır;
     bekleme bütçesi zorunlu adımlara (Script Writer, TTS, Forensic...) kalır."""
-    ctx = getattr(router, "hizli_basarislik", None)
+    ctx = getattr(router, "hizli_basarislik", None) or getattr(router, "hizli_basarisizlik", None)
     if callable(ctx):
         with ctx():
             yield
@@ -251,7 +252,7 @@ KAPAK_FORMAT_KURALI = (
 )
 
 
-def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log):
+def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim=""):
     prompt = (
         "Sen otoXtra'nın Kışkırtıcı Kanca Üreticisisin. Dedektifin bulduğu malzemeyi kullanarak "
         "ilk 3 saniyede izleyiciyi şok edecek bir kanca üreteceksin.\n"
@@ -259,6 +260,8 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
         "Kapak metni ve ilk 3 saniye kancası ultra viral ve iddialı olmalı; ilk 3 saniye kancası kapak başlığını birebir tekrar etmemeli.\n\n"
         + KAPAK_FORMAT_KURALI
     )
+    if geri_bildirim:
+        prompt += f"\n\n🚨 FINAL QA GERİ BİLDİRİMİ (kapak/kancayı buna göre düzelt): {geri_bildirim}"
     content = girdi_birlestir(
         durumu_metne_donustur('DETECTIVE', detective_state),
         durumu_metne_donustur('FACT LOCK', fact_state),
@@ -270,7 +273,7 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
     )
 
 
-def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO"):
+def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO", qa_geri_bildirimi=""):
     if mod == "DUO":
         karakter_bilgisi = "Karakterler: Autonoe (şüpheci, zeki kadın), Charon (iddialı, kanıtlayan erkek). İki kişilik doğal muhabbet."
         diyalog_kurallari = (
@@ -298,6 +301,12 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
         prompt += f"\n\n🚨 KELİME LİMİTİ: {hedef_kelime_bilgisi}"
     if feedback:
         prompt += f"\n\n🚨 ELEŞTİRMEN GERİ BİLDİRİMİ (Revize Et): {feedback}"
+    if qa_geri_bildirimi:
+        prompt += (
+            "\n\n🚨 FINAL QA BU SENARYONUN ÖNCEKİ SÜRÜMÜNÜ REDDETTİ. Aşağıdaki sorunların HEPSİNİ düzelt; "
+            "Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia, rakam veya özellik kullanma, emin olmadığın bilgiyi çıkar:\n"
+            f"{qa_geri_bildirimi}"
+        )
 
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
@@ -379,12 +388,18 @@ def _hook_fallback(editorial_state):
     }
 
 
-def _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log):
+def _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log, ajan_basarili=True):
     """Hook ajanının kapak setini kurala göre doğrular; eksikse 5'e tamamlar ve
     hook_state'i güncellenmiş kapak seti ile döndürür (ana == ust)."""
     hook_state = dict(_object_state_or_empty(hook_state))
     ham = hook_state.get("kapak_basliklari") or hook_state.get("kapak_metni") or ""
-    basliklar = kapak_basliklarini_normalize_et(ham, editorial_state, detective_state, hook_state, log)
+    if ajan_basarili:
+        basliklar = kapak_basliklarini_normalize_et(ham, editorial_state, detective_state, hook_state, log)
+    else:
+        # Hook ajanı düştü: set yerel fallback'ten geliyor; logda "Hook ajanı 5
+        # geçerli alternatif verdi" diye yanıltıcı rapor verilmez.
+        basliklar = kapak_basliklarini_normalize_et(ham, editorial_state, detective_state, hook_state)
+        log(f"⚠️ Kapak başlıkları: Hook ajanı kullanılamadı; {len(basliklar)} alternatif Editorial/Detective verisinden yerel olarak üretildi.")
     hook_state["kapak_basliklari"] = basliklar
     hook_state["kapak_metni"] = basliklar[0]["ust"] if basliklar else str(hook_state.get("kapak_metni") or "")
     log("🎯 Kapak başlıkları (Üst/Alt) hazır:\n" + kapak_basliklarini_metne_dok(basliklar))
@@ -411,41 +426,152 @@ def _turkiye_ilgi_kancasi_getir(fact_state):
     return str(en_iyi[1].get("guvenli_anlatim") or en_iyi[1].get("bulgu") or "").strip()
 
 
+class _HazirSonuc:
+    """Future benzeri: arka plan iş parçacığı açılamazsa senkron sonuç taşır."""
+
+    def __init__(self, value=None, exc=None):
+        self._value, self._exc = value, exc
+
+    def result(self, timeout=None):
+        if self._exc is not None:
+            raise self._exc
+        return self._value
+
+    def cancel(self):
+        return False
+
+
+def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log):
+    def _calistir():
+        return _istege_bagli_ajan(
+            log, "🏷️ Metadata Generator Ajan",
+            lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log),
+            {},
+            router=router,
+            atlanabilir=True,
+        )
+
+    try:
+        havuz = ThreadPoolExecutor(max_workers=1, thread_name_prefix="metadata")
+    except Exception:
+        try:
+            return _HazirSonuc(_calistir())
+        except Exception as exc:  # pragma: no cover - _istege_bagli_ajan zaten yutar
+            return _HazirSonuc(exc=exc)
+    future = havuz.submit(_calistir)
+    havuz.shutdown(wait=False)
+    return future
+
+
+def _metadata_sonucu_al(future, log):
+    try:
+        state, _ = future.result()
+    except Exception as exc:
+        log(f"⚠️ 🏷️ Metadata Generator Ajan kullanılamadı; güvenli varsayılanla devam ediliyor: {type(exc).__name__}: {str(exc)[:160]}")
+        return {}
+    return _object_state_or_empty(state)
+
+
 # --- Ana döngü -----------------------------------------------------------------
 
-def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None):
+def _mod_coz(mod_karari):
+    """mod_karari dict veya (arka planda hesaplanan karar için) dict döndüren
+    callable olabilir; geçerli mod adına indirger (varsayılan DUO)."""
+    if callable(mod_karari):
+        try:
+            mod_karari = mod_karari()
+        except Exception:
+            mod_karari = {}
+    mod = str((mod_karari or {}).get("mode") or "DUO").strip().upper() if isinstance(mod_karari, dict) else "DUO"
+    return mod if mod in {"DUO", "SOLO_FEMALE", "SOLO_MALE"} else "DUO"
+
+
+def _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=""):
+    """Hook ajanını çalıştırır ve kapak setini kurala göre 5 Üst/Alt'a tamamlar."""
+    hook_state, hook_model = _istege_bagli_ajan(
+        log, "🪝 Hook Generator Ajan",
+        lambda: _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim=geri_bildirim),
+        _hook_fallback(editorial_state),
+        router=router,
+    )
+    ajan_basarili = hook_model not in ("hata", "atlandi")
+    if not str(hook_state.get("kapak_metni") or "").strip() and not hook_state.get("kapak_basliklari"):
+        hook_state = {**_hook_fallback(editorial_state), **{k: v for k, v in hook_state.items() if v}}
+        ajan_basarili = False
+    # [Kural: Reels Kapak Yazısı Formatı] — her zaman 5 Üst/Alt alternatifi.
+    return _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log, ajan_basarili=ajan_basarili)
+
+
+def kapaklari_yeniden_uret(router, reels_state, baglam, fact_state, editorial_state, log, qa_geri_bildirimi=""):
+    """Yalnız COVER_FAIL için: kapak başlıkları seslendirmeye gömülü değildir;
+    Script + TTS yeniden üretilmeden sadece Hook ajanı QA geri bildirimiyle
+    tekrar çalıştırılır. reels_state'in kapak alanları güncellenmiş kopyasını döndürür."""
+    baglam = baglam if isinstance(baglam, dict) else {}
+    detective_state = baglam.get("detective_state") or {}
+    hook_state, kapak_basliklari = _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=qa_geri_bildirimi)
+    baglam["hook_state"] = hook_state
+    reels = dict(_object_state_or_empty(reels_state))
+    secili = kapak_basliklari[0] if kapak_basliklari else {"ust": hook_state.get("kapak_metni", ""), "alt": ""}
+    reels["kapak_basliklari"] = [dict(x) for x in kapak_basliklari]
+    reels["hook_families"] = [{
+        "kapak_ana": secili.get("ust", ""),
+        "kapak_alt": secili.get("alt", ""),
+        "ilk_uc_saniye": hook_state.get("ilk_3_saniye_kanca", ""),
+    }]
+    return reels
+
+
+def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None, baglam=None, qa_geri_bildirimi=""):
     """4 Ajanlı Viral Üretim Döngüsü (Kelime ve TTS Süre Güvenlik Duvarlı).
+
+    mod_karari: dict veya dict döndüren callable. Callable ise yalnızca Script
+      Writer'dan hemen önce çözülür; böylece anlatım modu kararı Detective/Hook
+      ile PARALEL hesaplanabilir.
+    baglam: (isteğe bağlı, giriş/çıkış) dict. Detective/Hook çıktıları buraya
+      yazılır; QA yenilemesinde yeniden kullanılır (aynı veriyle tekrar
+      çağrılmaz). baglam["hook_yenile"] True ise Hook yeniden üretilir.
+    qa_geri_bildirimi: Final QA'nın reddetme gerekçeleri; Script Writer'a
+      verilir. Bu durumda Critic atlanır (hakem zaten QA).
 
     Dönüş (9'luplü):
       (reels_state, model, duo_plan, duo_script, ses_basarili,
        kullanilan_ses_modeli, ses_modu, ses_dosyasi, metadata_state)
     """
-    mod = str((mod_karari or {}).get("mode") or "DUO").strip().upper()
-    if mod not in {"DUO", "SOLO_FEMALE", "SOLO_MALE"}:
-        mod = "DUO"
+    baglam = baglam if isinstance(baglam, dict) else {}
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     hedef_kelime_bilgisi = f"Hedef {hedef} kelime. Kesin aralık {minimum}-{maksimum} kelime."
 
-    # 1. Detective (Sadece ilk denemede çalışır, veri değişmez; API yoğunsa atlanır)
-    detective_state, _ = _istege_bagli_ajan(
-        log, "🕵️ Detective Ajan",
-        lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log),
-        {},
-        router=router,
-        atlanabilir=True,
-    )
+    # 1. Detective (veri değişmez; QA yenilemesinde bağlamdan yeniden kullanılır,
+    # API yoğunsa atlanır)
+    if "detective_state" in baglam:
+        detective_state = _object_state_or_empty(baglam.get("detective_state"))
+        log("♻️ Detective çıktısı önceki turdan yeniden kullanılıyor (API çağrısı yok).")
+    else:
+        detective_state, _ = _istege_bagli_ajan(
+            log, "🕵️ Detective Ajan",
+            lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log),
+            {},
+            router=router,
+            atlanabilir=True,
+        )
+        baglam["detective_state"] = detective_state
 
-    # 2. Hook Gen (Sadece ilk denemede çalışır) — kapak seti burada üretilir.
-    hook_state, _ = _istege_bagli_ajan(
-        log, "🪝 Hook Generator Ajan",
-        lambda: _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log),
-        _hook_fallback(editorial_state),
-        router=router,
-    )
-    if not str(hook_state.get("kapak_metni") or "").strip() and not hook_state.get("kapak_basliklari"):
-        hook_state = {**_hook_fallback(editorial_state), **{k: v for k, v in hook_state.items() if v}}
-    # [Kural: Reels Kapak Yazısı Formatı] — her zaman 5 Üst/Alt alternatifi.
-    hook_state, kapak_basliklari = _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log)
+    # 2. Hook Gen — kapak seti burada üretilir (QA yenilemesinde yalnız
+    # COVER_FAIL varsa yeniden üretilir).
+    if baglam.get("hook_state") and not baglam.get("hook_yenile"):
+        hook_state = dict(baglam["hook_state"])
+        kapak_basliklari = [dict(x) for x in (hook_state.get("kapak_basliklari") or []) if isinstance(x, dict)]
+        log("♻️ Hook/kapak seti önceki turdan yeniden kullanılıyor (API çağrısı yok).")
+    else:
+        hook_state, kapak_basliklari = _hook_uret(
+            router, detective_state, fact_state, editorial_state, log,
+            geri_bildirim=qa_geri_bildirimi if baglam.get("hook_yenile") else "",
+        )
+        baglam["hook_state"] = hook_state
+        baglam["hook_yenile"] = False
+
+    # Anlatım modu (arka planda hesaplanıyorsa burada sonucu beklenir).
+    mod = _mod_coz(mod_karari)
 
     son_reels = {}
     son_duo_plan = {}
@@ -460,19 +586,26 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         # düşerse hata yukarı taşınır)
         script_state, model_script = _script_writer_calistir(
             router, hook_state, detective_state, fact_state, editorial_state,
-            video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
+            video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
+            qa_geri_bildirimi=qa_geri_bildirimi,
         )
         script_state = _object_state_or_empty(script_state)
         son_model = model_script
 
-        # 4. Critic (isteğe bağlı: düşerse/atlanırsa senaryo onaylı sayılır)
-        critic_state, _ = _istege_bagli_ajan(
-            log, "🔥 Critic Ajan",
-            lambda: _critic_calistir(router, script_state, hook_state, log),
-            {"score": 10, "approved": True, "feedback": ""},
-            router=router,
-            atlanabilir=True,
-        )
+        # 4. Critic (isteğe bağlı: düşerse/atlanırsa senaryo onaylı sayılır).
+        # QA yenilemesinde hakem Final QA'dır; Critic + revize turu (~1-2 dk)
+        # tekrar edilmez.
+        if qa_geri_bildirimi:
+            log("⏭️ 🔥 Critic Ajan atlandı: QA geri bildirimiyle yeniden yazım; son hakem Final QA.")
+            critic_state = {"score": 10, "approved": True, "feedback": ""}
+        else:
+            critic_state, _ = _istege_bagli_ajan(
+                log, "🔥 Critic Ajan",
+                lambda: _critic_calistir(router, script_state, hook_state, log),
+                {"score": 10, "approved": True, "feedback": ""},
+                router=router,
+                atlanabilir=True,
+            )
 
         # Critic Döngüsü (MAX 1 Revize)
         if not _critic_onayladi_mi(critic_state):
@@ -481,7 +614,8 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             try:
                 revize_state, revize_model = _script_writer_calistir(
                     router, hook_state, detective_state, fact_state, editorial_state,
-                    video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod
+                    video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
+                    qa_geri_bildirimi=qa_geri_bildirimi,
                 )
                 revize_state = _object_state_or_empty(revize_state)
                 if revize_state.get("segments"):
@@ -574,11 +708,19 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             else:
                 log('⚠️ Kelime aralığı hala düzeltilemedi, devam ediliyor.')
 
+        baglam["script_state"] = script_state
+
+        # Metadata yalnız senaryoya bağlıdır (TTS'e değil): TTS (~45 sn) ile
+        # EŞZAMANLI başlatılır; seri çalıştırmada ~15 sn ek bekleme yaratıyordu.
+        metadata_future = _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log)
+
         # TTS Üretimi
         ses_dosyasi = gecici_ses_yolu()
         ok, info, mod_tts = _duo_ses_veya_legacy_uret(router, duo_script, full_text, legacy_voice, log, ses_dosyasi)
 
         if not ok:
+            # Bu senaryo için başlatılan metadata artık geçersiz; sonucu beklenmez.
+            metadata_future.cancel()
             temp_dosya_temizle(ses_dosyasi)
             if deneme < VOICE_REGEN_MAX:
                 hedef_kelime_bilgisi = "TTS üretimi başarısız oldu. Daha doğal ve okunabilir bir metin yaz."
@@ -597,18 +739,13 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 # katmanı (0.5x-1.5x video hızı) farkı zaten kapatıyor.
                 log(f'🎚️ TTS/video oranı {oran:.2f}x; geçerli WAV korunuyor, video senkron katmanına bırakılıyor.')
 
-            # Başarılı TTS ve Süre. Metadata üretilir ve döngüden çıkılır.
-            metadata_state, _ = _istege_bagli_ajan(
-                log, "🏷️ Metadata Generator Ajan",
-                lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log),
-                {},
-                router=router,
-                atlanabilir=True,
-            )
+            # Başarılı TTS ve Süre. Paralel üretilen metadata alınır ve döngüden çıkılır.
+            metadata_state = _metadata_sonucu_al(metadata_future, log)
             reels_state["metadata"] = metadata_state
 
             return reels_state, "agentic", duo_plan, duo_script, True, info, mod_tts, ses_dosyasi, metadata_state
 
+        metadata_future.cancel()
         temp_dosya_temizle(ses_dosyasi)
 
     return son_reels, son_model, son_duo_plan, son_duo_script, False, None, "LEGACY", "", {}

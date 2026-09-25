@@ -133,7 +133,6 @@ class SmartRouter:
         # Son "tam tur aşırı yük" (tüm model+key geçici hata) anı; atlanabilir
         # ajanlar bu pencere içinde hiç denenmeden güvenli varsayılana düşer.
         self._last_full_overload_at = None
-        self._aktif_profil = None
         self._request_counter_lock = threading.Lock()
         for mail, api_key in self._ordered_api_items():
             if api_key and api_key.strip():
@@ -141,6 +140,34 @@ class SmartRouter:
                     api_key=api_key.strip(),
                     http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
                 )
+
+    # --- İş parçacığına özel bağlam -------------------------------------
+    # Threads / Metadata / anlatım modu kolları ana akışla EŞZAMANLI çalışır.
+    # İstek profili (zaman aşımı/bütçe) ve hızlı-başarısızlık bayrağı paylaşılan
+    # örnek alanı olursa bir kolun `istege_bagli` profili diğer kolun zorunlu
+    # isteğine sızar. Bu yüzden ikisi de thread-local tutulur.
+    def _yerel(self):
+        tls = self.__dict__.get("_tls")
+        if tls is None:
+            tls = threading.local()
+            self.__dict__["_tls"] = tls
+        return tls
+
+    @property
+    def _aktif_profil(self):
+        return getattr(self._yerel(), "profil", None)
+
+    @_aktif_profil.setter
+    def _aktif_profil(self, value):
+        self._yerel().profil = value
+
+    @property
+    def _overload_retry_off(self):
+        return getattr(self._yerel(), "overload_retry_off", 0)
+
+    @_overload_retry_off.setter
+    def _overload_retry_off(self, value):
+        self._yerel().overload_retry_off = value
 
     def _ordered_api_items(self):
         def _rank(name: str):
@@ -415,11 +442,17 @@ class SmartRouter:
     @contextmanager
     def hizli_basarisizlik(self):
         """Bu blok içindeki isteklerde aşırı-yük beklemesi yapılmaz (tek tam tur)."""
-        self._overload_retry_off = getattr(self, "_overload_retry_off", 0) + 1
+        self._overload_retry_off = self._overload_retry_off + 1
         try:
             yield self
         finally:
-            self._overload_retry_off = max(0, getattr(self, "_overload_retry_off", 1) - 1)
+            self._overload_retry_off = max(0, self._overload_retry_off - 1)
+
+    # Pipeline/agentic katmanı bu bağlamı `hizli_basarislik` adıyla arıyor.
+    # Dosya birleştirmesinde metot adı `hizli_basarisizlik` olarak kalınca
+    # isteğe bağlı ajanlar hızlı-başarısızlık korumasını HİÇ alamıyordu
+    # (aşırı yükte 15/30/45 sn tam-tur beklemesine giriyorlardı). İki ad da geçerli.
+    hizli_basarislik = hizli_basarisizlik
 
     def _json_parse_or_none(self, text: str):
         try:
