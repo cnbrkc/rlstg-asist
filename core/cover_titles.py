@@ -164,13 +164,31 @@ def ust_baslik_duzenle(metin: str) -> str:
     return tr_buyuk(metin).rstrip(".…:;,")
 
 
+# Kırpılmış bir alt başlık bu kelimelerle BİTEMEZ (yarım cümle hissi verir).
+_SARKIK_SON_KELIMELER = {
+    "ve", "ile", "için", "ama", "fakat", "ancak", "da", "de", "ki", "bir", "veya", "ya", "yada",
+    "gibi", "olan", "en", "çok", "daha", "hem", "ne", "şu", "bu", "o", "her", "tüm", "kadar",
+}
+_TEK_TIRNAK_RE = re.compile(r"(^|\s)['‘’`]+|['‘’`]+(?=\s|$)")
+
+
+def _kirpik_sonu_temizle(metin: str) -> str:
+    """Kelime sınırından kırpılmış metnin sonundaki sarkık bağlaç/edatları ve
+    eşleşmemiş tek tırnakları temizler ("... ve 'teknolojik" → "...")."""
+    metin = _BOSLUK_RE.sub(" ", _TEK_TIRNAK_RE.sub(lambda m: m.group(1) or "", metin)).strip(" ,;:-–—")
+    sozler = metin.split(" ")
+    while sozler and tr_kucuk(re.sub(r"[^\w]", "", sozler[-1])) in _SARKIK_SON_KELIMELER:
+        sozler.pop()
+    return " ".join(sozler).strip(" ,;:-–—")
+
+
 def alt_baslik_duzenle(metin: str) -> str:
     """Alt başlık: 4-7 kelime, cümle düzeni (yalnızca ilk harf büyük)."""
     metin = _cumle_duzeni(metin)
     if not metin:
         return ""
     if kelime_sayisi(metin) > ALT_MAX_KELIME:
-        metin = _cumle_duzeni(_kelime_kirp(metin, ALT_MAX_KELIME))
+        metin = _cumle_duzeni(_kirpik_sonu_temizle(_kelime_kirp(metin, ALT_MAX_KELIME)))
     return metin
 
 
@@ -248,13 +266,18 @@ def _parcalar(metin: str) -> list:
 
 def _kaynaktan_alt(metin: str) -> str:
     """Kanıt cümlesinden 4-7 kelimelik, cümle düzeninde alt başlık türetir.
-    Önce doğal parça (ilk cümle/yan cümle) denenir; kırpma son çaredir."""
-    parcalar = _parcalar(metin)
-    for parca in parcalar[:3]:
+    Yalnızca DOĞAL parça (bütün cümle / yan cümle) kabul edilir. Türkçe yüklem
+    sonda olduğu için uzun cümleyi 7. kelimede kırpmak yüklemi keser
+    ("... fiziksel tuşlardan", "... ve 'teknolojik"); böyle yarım cümle yerine
+    kurala uygun şablon alt başlıklara düşülür."""
+    for parca in _parcalar(metin)[:3]:
         if ALT_MIN_KELIME <= kelime_sayisi(parca) <= ALT_MAX_KELIME:
-            return alt_baslik_duzenle(parca)
-    aday = alt_baslik_duzenle(parcalar[0] if parcalar else metin)
-    return aday if kelime_sayisi(aday) >= ALT_MIN_KELIME else ""
+            aday = alt_baslik_duzenle(parca)
+            if _TEK_TIRNAK_RE.search(aday):
+                aday = _cumle_duzeni(_kirpik_sonu_temizle(aday))
+            if kelime_sayisi(aday) >= ALT_MIN_KELIME:
+                return aday
+    return ""
 
 
 def _kaynaktan_ust(metin: str) -> str:

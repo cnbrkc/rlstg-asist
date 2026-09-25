@@ -15,6 +15,8 @@ import multiprocessing
 import os
 import re
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any
@@ -86,7 +88,8 @@ def _proses_hedefi(kuyruk, sorgu: str, max_sonuc: int) -> None:
 
 
 def _run_proses_ile(sorgu: str, max_sonuc: int, timeout: int):
-    """DDGS yan iş parçacığında asılı kalırsa ayrı proses + kuyruk ile dener."""
+    """DDGS yan iş parçacığında asılı kalırsa ayrı proses + kuyruk ile dener.
+    Zaman aşımı / hata → None (boş sonuçtan AYIRT edilir; üst katman tekrar dener)."""
     try:
         ctx = multiprocessing.get_context("spawn")
         kuyruk = ctx.Queue()
@@ -96,22 +99,24 @@ def _run_proses_ile(sorgu: str, max_sonuc: int, timeout: int):
         if proc.is_alive():
             proc.terminate()
             proc.join(timeout=2)
-            return []
+            return None
         if kuyruk.empty():
-            return []
+            return None
         sonuc = kuyruk.get_nowait()
         if isinstance(sonuc, Exception):
-            raise sonuc
+            return None
         return sonuc or []
     except Exception:
-        return []
+        return None
 
 
-def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict[str, str]]:
+def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None, hata_bildir=None) -> List[Dict[str, str]]:
     """Tek bir web sorgusu çalıştırır (ddgs metasearch).
 
     Drift eden bir isteğin susup kalmaması için önce iş parçacığı zaman aşımı,
     desteklenmezse proses izolasyonu denenir; iki katman da sessizce boş döner.
+    hata_bildir: verilirse sorgu HATA/zaman aşımı/hız sınırı yüzünden sonuçsuz
+    kaldığında çağrılır (gerçekten 0 sonuçlu sorgudan ayırt etmek için).
     """
     try:
         DDGS = _ddgs_sinifi()
@@ -119,6 +124,12 @@ def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict
         ham = _run_calisan_ile(sorgu, max_sonuc, timeout, DDGS)
         if ham is None:
             ham = _run_proses_ile(sorgu, max_sonuc, timeout)
+        if ham is None:
+            if callable(hata_bildir):
+                hata_bildir()
+            if log_ekle:
+                log_ekle(f"⚠️ Web '{sorgu[:60]}...' zaman aşımı/hata; sonuç alınamadı.")
+            return []
         temiz = []
         for r in ham or []:
             title = _temizle_metin(r.get("title", ""), 150)
@@ -130,6 +141,8 @@ def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None) -> List[Dict
             log_ekle(f"🔍 Web '{sorgu[:60]}...' → {len(temiz)} sonuç")
         return temiz
     except Exception as e:
+        if callable(hata_bildir):
+            hata_bildir()
         if log_ekle:
             log_ekle(f"⚠️ Web sorgu hatası ({sorgu[:40]}...): {str(e)[:100]}")
         return []
@@ -170,9 +183,40 @@ def web_arastirma_yap(video_state: Dict[str, Any], log_ekle) -> str:
         log_ekle("🔍 Marka/model belirsiz; web araştırması atlandı.")
         return ""
 
+    # Sorgular birbirinden bağımsız: seri çalıştırıldığında 5 sorgu ~11 sn
+    # sürüyordu. Küçük bir havuzla eşzamanlı çalıştırılır (DDGS rate-limit'e
+    # takılmamak için en fazla WEB_SEARCH_PARALLEL iş parçacığı); sonuç sırası
+    # sorgu sırasıyla aynı kalır.
+    paralel = min(len(sorgular), _env_int("WEB_SEARCH_PARALLEL", 3))
+    if paralel > 1:
+        hatali = set()
+        kilit = threading.Lock()
+
+        def _sorgula(indeks_sorgu):
+            indeks, q = indeks_sorgu
+
+            def _bildir():
+                with kilit:
+                    hatali.add(indeks)
+
+            return duckduckgo_sorgu(q, max_sonuc=4, log_ekle=log_ekle, hata_bildir=_bildir)
+
+        with ThreadPoolExecutor(max_workers=paralel, thread_name_prefix="ddgs") as havuz:
+            tum_sonuclar = list(havuz.map(_sorgula, enumerate(sorgular)))
+        # KALİTE: Paralel aşamada hata/hız sınırı/zaman aşımı yüzünden sonuçsuz
+        # kalan sorgular kısa bir aradan sonra SERİ olarak bir kez daha denenir;
+        # paralellik araştırma kapsamını asla daraltmaz.
+        tekrar = sorted(i for i in hatali if not tum_sonuclar[i])
+        if tekrar:
+            log_ekle(f"🔁 {len(tekrar)} web sorgusu paralel aşamada hata/hız sınırı aldı; seri olarak yeniden deneniyor.")
+            time.sleep(_env_int("WEB_SEARCH_RETRY_DELAY", 2))
+            for i in tekrar:
+                tum_sonuclar[i] = duckduckgo_sorgu(sorgular[i], max_sonuc=4, log_ekle=log_ekle)
+    else:
+        tum_sonuclar = [duckduckgo_sorgu(q, max_sonuc=4, log_ekle=log_ekle) for q in sorgular]
+
     bloklar = []
-    for sorgu in sorgular:
-        sonuclar = duckduckgo_sorgu(sorgu, max_sonuc=4, log_ekle=log_ekle)
+    for sorgu, sonuclar in zip(sorgular, tum_sonuclar):
         if sonuclar:
             satirlar = [f"SORGU: {sorgu}"]
             for i, s in enumerate(sonuclar, 1):

@@ -100,6 +100,34 @@ class OverloadRetryTests(unittest.TestCase):
         self.assertLessEqual(sum(sleeps), 30)
 
 
+    def test_optional_profile_retries_from_separate_pool(self):
+        # Kalite: isteğe bağlı ajan da aşırı yükte bekleyip yeniden dener; ama
+        # bekleme zorunlu adımların havuzundan düşülmez.
+        router = _router(["503", "ok"])
+        sleeps = []
+        with patch.object(router_mod, "_sleep", sleeps.append):
+            with router.istek_profili("istege_bagli"):
+                _, info = router._make_request(["m"], "x", None, lambda *a: None, require_text=True)
+        self.assertEqual(info, "k0+m")
+        self.assertEqual(len(sleeps), 1)
+        self.assertEqual(router._overload_wait_spent, 0.0)
+        self.assertGreater(router._optional_overload_wait_spent, 0.0)
+
+    def test_exhausted_optional_pool_does_not_block_mandatory_waits(self):
+        router = _router(["503"])
+        sleeps = []
+        with patch.object(router_mod, "_sleep", sleeps.append), \
+                patch.object(router_mod, "OVERLOAD_OPTIONAL_WAIT_BUDGET_SECONDS", 0):
+            with router.istek_profili("istege_bagli"):
+                with self.assertRaises(Exception):
+                    router._make_request(["m"], "x", None, lambda *a: None, require_text=True)
+            self.assertEqual(sleeps, [])
+            router.clients = {"k0": _Client(["503", "ok"])}
+            _, info = router._make_request(["m"], "x", None, lambda *a: None, require_text=True)
+        self.assertEqual(info, "k0+m")
+        self.assertEqual(len(sleeps), 1)
+
+
 class CaptionMappingTests(unittest.TestCase):
     def test_metadata_agent_keys_map_to_caption(self):
         out = _caption_state_normalize({

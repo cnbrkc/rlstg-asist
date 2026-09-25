@@ -64,7 +64,9 @@ class AsiriYukAtlamaTestleri(unittest.TestCase):
     @patch("core.agentic._ses_suresini_al", return_value=25.0)
     @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     @patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 5, 15, 2.5, 5))
-    def test_dedektif_asiri_yukta_hic_denenmez(self, mock_kelime, mock_ses_uret, mock_ses_sure):
+    def test_dedektif_asiri_yukta_da_denenir_kalite_oncelikli(self, mock_kelime, mock_ses_uret, mock_ses_sure):
+        # Varsayılan politika kalite önceliklidir: yakın zamandaki aşırı yük
+        # isteğe bağlı ajanı ATLATMAZ; ajan denenir (router tekrarlarıyla).
         router = _DetectiveRouter()
         router.yakin_zamanda_asiri_yuk_var_mi = lambda pencere_saniye=None: True
         logs = []
@@ -72,10 +74,25 @@ class AsiriYukAtlamaTestleri(unittest.TestCase):
             router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
         )
         self.assertTrue(ok)
-        # Detective hiç denenmedi
+        self.assertTrue(any("Detective Ajan (Derin Analiz)" in l for l in logs))
+        self.assertFalse(any("atlandı" in l for l in logs))
+        self.assertEqual(len(reels["kapak_basliklari"]), 5)
+
+    @patch("core.config.ISTEGE_BAGLI_ASIRI_YUK_ATLA", True)
+    @patch("core.agentic._ses_suresini_al", return_value=25.0)
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
+    @patch("core.agentic._reels_kelime_ayarlarini_hazirla", return_value=(10, 5, 15, 2.5, 5))
+    def test_dedektif_hiz_modunda_asiri_yukta_atlanir(self, mock_kelime, mock_ses_uret, mock_ses_sure):
+        # Operasyon anahtarı (ISTEGE_BAGLI_ASIRI_YUK_ATLA=1) eski hız davranışını açar.
+        router = _DetectiveRouter()
+        router.yakin_zamanda_asiri_yuk_var_mi = lambda pencere_saniye=None: True
+        logs = []
+        reels, model, plan, script, ok, *_ = agentic_icerik_uretimi(
+            router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append, mod_karari={"mode": "DUO"}
+        )
+        self.assertTrue(ok)
         self.assertFalse(any("Detective Ajan (Derin Analiz)" in l for l in logs))
         self.assertTrue(any("atlandı" in l for l in logs))
-        self.assertEqual(len(reels["kapak_basliklari"]), 5)
 
     @patch("core.agentic._ses_suresini_al", return_value=25.0)
     @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)

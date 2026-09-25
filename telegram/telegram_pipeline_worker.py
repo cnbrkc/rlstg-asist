@@ -2,6 +2,7 @@ import json
 import mimetypes
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 
 from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
-from core.pipeline import pipeline_calistir, metin_pipeline_calistir
+from core.pipeline import MAX_QA_REGEN, SOCIAL_QA_EXTRA_REGEN, pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
 from core.media import video_suresini_al
 from core.social_fallbacks import caption_fallback, threads_fallback, text as _text
@@ -131,6 +132,35 @@ def _extract_media_lines(warnings):
     return [x for x in warnings if x.startswith("📐 ") or x.startswith("🎚️ ")]
 
 
+def _qa_final_label(result):
+    qa = result.get("qa_result") if isinstance(result.get("qa_result"), dict) else {}
+    if not result.get("qa_pass"):
+        return "FAIL"
+    if qa.get("qa_unavailable"):
+        return "PASS (QA modeli erişilemedi; yapısal kontroller)"
+    nonblocking = qa.get("nonblocking_targets") or []
+    if nonblocking:
+        return f"PASS (uyarılı: {', '.join(str(x) for x in nonblocking)})"
+    return "PASS"
+
+
+def _qa_issue_lines(qa, limit=6):
+    """QA'nın FAIL dediği kontrolleri kısa satırlar hâlinde döndürür; render
+    durduysa kullanıcı NEDENİNİ Telegram raporunda görür."""
+    if not isinstance(qa, dict):
+        return []
+    lines = []
+    for key, value in qa.items():
+        if not key.endswith("_check") or not isinstance(value, str):
+            continue
+        if value.strip().upper().startswith("FAIL"):
+            lines.append(f"• {key}: {value.strip()[:220]}")
+    targets = qa.get("regeneration_targets") or qa.get("nonblocking_targets") or []
+    if targets:
+        lines.append(f"• Hedefler: {', '.join(str(x) for x in targets)}")
+    return lines[:limit]
+
+
 def _final_report(step_status, warnings, errors, result, tone_key):
     lines = ["📊 PIPELINE RAPORU", ""]
     for i, name in enumerate(PIPELINE_STEPS):
@@ -149,8 +179,9 @@ def _final_report(step_status, warnings, errors, result, tone_key):
         f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
         f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
         "⚡ TTS hız: 1.20x",
-        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1",
-        f"✅ QA final: {'PASS' if result.get('qa_pass') else 'FAIL'}",
+        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / {MAX_QA_REGEN}"
+        + (f" (+{SOCIAL_QA_EXTRA_REGEN} sosyal)" if SOCIAL_QA_EXTRA_REGEN else ""),
+        f"✅ QA final: {_qa_final_label(result)}",
         f"🎚️ Senkron: {result.get('sync_note') or 'TTS gerçek WAV süresi doğrulandı'}",
     ]
     if input_media:
@@ -161,6 +192,9 @@ def _final_report(step_status, warnings, errors, result, tone_key):
     media_lines = _extract_media_lines(warnings)
     if media_lines:
         lines += ["", "🎥 MEDYA TEŞHİSİ"] + media_lines
+    qa_lines = _qa_issue_lines(result.get("qa_result"))
+    if qa_lines:
+        lines += ["", "🔍 QA BULGULARI"] + qa_lines
     if warnings:
         lines += ["", "⚠️ UYARILAR"] + [f"• {x}" for x in warnings[:8]]
     if errors:
@@ -203,6 +237,64 @@ def _threads_message(threads):
     return str(threads or '').strip()
 
 
+class _LoadingEditor:
+    """İlerleme mesajı düzenlemelerini arka planda, sırayla ve birleştirerek
+    gönderir. Her `editMessageText` ~0.4 sn sürüyor ve eskiden pipeline'ı
+    senkron bekletiyordu (aşama başına bir kez). Bekleyen birden çok güncelleme
+    varsa yalnız en sonuncusu gönderilir. `flush()` final rapor öncesi çağrılır;
+    böylece geç kalan bir ilerleme mesajı final raporu ezmez."""
+
+    def __init__(self, message_id, on_error=None):
+        self.message_id = message_id
+        self.on_error = on_error
+        self._lock = threading.Lock()
+        self._idle = threading.Event()
+        self._idle.set()
+        self._pending = None
+        self._running = False
+
+    def submit(self, text):
+        with self._lock:
+            self._pending = text
+            if self._running:
+                return
+            self._running = True
+            self._idle.clear()
+        try:
+            threading.Thread(target=self._drain, name="telegram-progress", daemon=True).start()
+        except Exception:
+            with self._lock:
+                self._running = False
+            self._drain_sync()
+
+    def _send(self, text):
+        try:
+            edit_message(self.message_id, text)
+        except Exception as exc:  # noqa: BLE001
+            if callable(self.on_error):
+                self.on_error(exc)
+
+    def _drain(self):
+        while True:
+            with self._lock:
+                text, self._pending = self._pending, None
+                if text is None:
+                    self._running = False
+                    self._idle.set()
+                    return
+            self._send(text)
+
+    def _drain_sync(self):
+        with self._lock:
+            text, self._pending = self._pending, None
+        if text is not None:
+            self._send(text)
+        self._idle.set()
+
+    def flush(self, timeout=15):
+        self._idle.wait(timeout)
+
+
 def _setup_env(steps, loading_id):
     """Ortam değişkenlerinden tone kurar ve log/progress callback'leri ile durum torbalarını hazırlar."""
     step_status, warnings, errors = {}, [], []
@@ -213,6 +305,10 @@ def _setup_env(steps, loading_id):
     process_started = time.perf_counter()
     active_stage = {"index": None, "started": None}
     stage_durations = {}
+    editor = _LoadingEditor(
+        loading_id,
+        on_error=lambda exc: log(f"⚠️ Loading mesajı güncellenemedi: {type(exc).__name__}: {str(exc)[:160]}"),
+    )
 
     def log(msg):
         # Actions satırlarında UTC duvar saati + job başlangıcından itibaren süre.
@@ -253,13 +349,11 @@ def _setup_env(steps, loading_id):
         if done > 0:
             step_status[done - 1] = "🟢"
         current = steps[idx] if idx is not None else str(msg)
-        try:
-            edit_message(loading_id, _loading_text(done, current, len(warnings), len(errors), steps=steps))
-        except Exception as exc:
-            log(f"⚠️ Loading mesajı güncellenemedi: {type(exc).__name__}: {str(exc)[:160]}")
+        editor.submit(_loading_text(done, current, len(warnings), len(errors), steps=steps))
 
     def finish_timing(status="SUCCESS"):
         _close_active_stage()
+        editor.flush()
         total_elapsed = time.perf_counter() - process_started
         log("=" * 72)
         log(f"📈 PIPELINE TIMING SUMMARY | status={status}")
@@ -272,6 +366,7 @@ def _setup_env(steps, loading_id):
 
     log.finish_timing = finish_timing
     log.close_stage = _close_active_stage
+    log.flush_progress = editor.flush
     return step_status, warnings, errors, tone_key, selected_tone, log, progress
 
 
@@ -329,6 +424,7 @@ def process(path):
 
     # Pipeline çekirdek aşamalarını sosyal gönderim süresinden ayrı ölç.
     log.close_stage()
+    log.flush_progress()
     final = result.get("final_video")
     if not final or not Path(final).exists():
         errors.append("Pipeline tamamlandı ancak final video üretilemedi.")
@@ -371,6 +467,7 @@ def process_text(text):
         raise
 
     log.close_stage()
+    log.flush_progress()
     caption, hashtags, threads = _ensure_social_outputs(result, warnings)
     for i in range(len(TEXT_PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
