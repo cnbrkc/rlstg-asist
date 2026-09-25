@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
+import core.config as _cfg
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI
 from core.schemas import (
     DETECTIVE_SCHEMA, HOOK_GEN_SCHEMA, SCRIPT_WRITER_SCHEMA,
@@ -122,18 +123,44 @@ def _yakin_zamanda_asiri_yuk(router):
         return False
 
 
+@contextmanager
+def _istege_bagli_router_baglami(router):
+    """İsteğe bağlı ajan istekleri için router bağlamı.
+
+    KALİTE ÖNCELİKLİ (varsayılan): `istege_bagli` profili (kısa zaman aşımı +
+    süre bütçesi) uygulanır ama aşırı-yük tekrar denemesi KAPATILMAZ; ajan
+    yoğunlukta 15/30 sn bekleyip yeniden dener. Beklemeler router'da zorunlu
+    adımlardan AYRI bir havuzdan düşer. `ISTEGE_BAGLI_HIZLI_BASARISIZLIK=1`
+    ile eski hız-öncelikli davranış (tek tam tur, beklemesiz) açılabilir."""
+    if getattr(_cfg, "ISTEGE_BAGLI_HIZLI_BASARISIZLIK", False):
+        with _hizli_basarislik(router), _istek_profili(router, "istege_bagli"):
+            yield
+    else:
+        with _istek_profili(router, "istege_bagli"):
+            yield
+
+
+def _asiri_yukte_atla_mi(router, atlanabilir=True):
+    """Yakın zamandaki tam-tur aşırı yükte isteğe bağlı çağrı hiç yapılmasın mı?
+    Varsayılan HAYIR (kalite): ajan her zaman denenir. Yalnız
+    `ISTEGE_BAGLI_ASIRI_YUK_ATLA=1` operasyon anahtarıyla eski atlama açılır."""
+    return bool(atlanabilir and getattr(_cfg, "ISTEGE_BAGLI_ASIRI_YUK_ATLA", False) and _yakin_zamanda_asiri_yuk(router))
+
+
 def _istege_bagli_ajan(log, etiket, callback, varsayilan, router=None, atlanabilir=False):
     """Zenginleştirici ajan (Detective/Hook/Critic/Metadata) API'si geçici olarak
     tamamen düşerse tüm pipeline'ı öldürmek yerine güvenli varsayılanla devam eder.
 
-    atlanabilir=True: Router yakın zamanda TAM TUR aşırı yük gördüyse ajan hiç
-    denenmez (logda Detective 77 sn, Critic 236 sn boşa harcandı); güvenli
-    varsayılanla anında devam edilir."""
-    if atlanabilir and _yakin_zamanda_asiri_yuk(router):
+    Varsayılan politika kalite önceliklidir: ajan her zaman denenir ve router'ın
+    aşırı-yük tekrarlarından (ayrı bekleme havuzuyla) yararlanır. Asılı kalan
+    istekler `istege_bagli` profilinin zaman aşımı/bütçesiyle sınırlıdır.
+    atlanabilir=True: yalnız `ISTEGE_BAGLI_ASIRI_YUK_ATLA=1` iken, yakın zamanda
+    tam-tur aşırı yük görüldüyse ajan denenmeden varsayılana düşer."""
+    if _asiri_yukte_atla_mi(router, atlanabilir):
         log(f"⏭️ {etiket} atlandı: API yakın zamanda tam tur aşırı yük verdi; güvenli varsayılanla devam ediliyor.")
         return varsayilan, "atlandi"
     try:
-        with _hizli_basarislik(router), _istek_profili(router, "istege_bagli"):
+        with _istege_bagli_router_baglami(router):
             state, model = callback()
     except Exception as exc:
         log(f"⚠️ {etiket} kullanılamadı; güvenli varsayılanla devam ediliyor: {type(exc).__name__}: {str(exc)[:160]}")
@@ -322,13 +349,21 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
     )
 
 
-def _critic_calistir(router, script_state, hook_state, log):
+def _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=""):
     prompt = (
         "Sen trol, şüpheci ve zor beğenen bir Türk izleyicisisin. Bu senaryoyu oku.\n"
         "Robotik mi? Sıkıcı mı? Sonundaki soru yorum yaptıracak kadar kışkırtıcı mı?\n"
         "Eğer 10 üzerinden 7 veya üzeriyse approved: true yap.\n"
         "Değilse approved: false yap ve SADECE NET BİR REVİZE TALİMATI (feedback) ver. Uzatma."
     )
+    if qa_geri_bildirimi:
+        prompt += (
+            "\n\nBAĞLAM: Bu senaryo, Final QA'nın aşağıdaki gerekçelerle reddettiği önceki sürümün "
+            "düzeltilmiş hâlidir. Bu sorunlar gerçekten giderilmiş mi, onu da değerlendir; giderilmemişse "
+            "approved: false ver. Revize talimatın bu düzeltmeleri GERİ ALDIRMAMALI ve doğrulanmamış "
+            "iddia, rakam ya da özellik ekletmemeli:\n"
+            f"{qa_geri_bildirimi}"
+        )
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
         durumu_metne_donustur('SCRIPT', script_state)
@@ -441,6 +476,20 @@ class _HazirSonuc:
         return False
 
 
+def _arka_plan_baslat(fn, ad):
+    """fn'i tek iş parçacıklı havuzda başlatır; havuz açılamazsa senkron çalıştırır."""
+    try:
+        havuz = ThreadPoolExecutor(max_workers=1, thread_name_prefix=ad)
+    except Exception:
+        try:
+            return _HazirSonuc(fn())
+        except Exception as exc:  # pragma: no cover
+            return _HazirSonuc(exc=exc)
+    future = havuz.submit(fn)
+    havuz.shutdown(wait=False)
+    return future
+
+
 def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log):
     def _calistir():
         return _istege_bagli_ajan(
@@ -451,16 +500,7 @@ def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, l
             atlanabilir=True,
         )
 
-    try:
-        havuz = ThreadPoolExecutor(max_workers=1, thread_name_prefix="metadata")
-    except Exception:
-        try:
-            return _HazirSonuc(_calistir())
-        except Exception as exc:  # pragma: no cover - _istege_bagli_ajan zaten yutar
-            return _HazirSonuc(exc=exc)
-    future = havuz.submit(_calistir)
-    havuz.shutdown(wait=False)
-    return future
+    return _arka_plan_baslat(_calistir, "metadata")
 
 
 def _metadata_sonucu_al(future, log):
@@ -499,7 +539,42 @@ def _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_b
         hook_state = {**_hook_fallback(editorial_state), **{k: v for k, v in hook_state.items() if v}}
         ajan_basarili = False
     # [Kural: Reels Kapak Yazısı Formatı] — her zaman 5 Üst/Alt alternatifi.
-    return _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log, ajan_basarili=ajan_basarili)
+    hook_state, basliklar = _kapak_basliklarini_hazirla(hook_state, editorial_state, detective_state, log, ajan_basarili=ajan_basarili)
+    return hook_state, basliklar, ajan_basarili
+
+
+def _kapak_alanlarini_guncelle(reels_state, hook_state, kapak_basliklari, ilk_uc_saniye=None):
+    reels = dict(_object_state_or_empty(reels_state))
+    secili = kapak_basliklari[0] if kapak_basliklari else {"ust": hook_state.get("kapak_metni", ""), "alt": ""}
+    reels["kapak_basliklari"] = [dict(x) for x in kapak_basliklari]
+    reels["hook_families"] = [{
+        "kapak_ana": secili.get("ust", ""),
+        "kapak_alt": secili.get("alt", ""),
+        "ilk_uc_saniye": hook_state.get("ilk_3_saniye_kanca", "") if ilk_uc_saniye is None else ilk_uc_saniye,
+    }]
+    return reels
+
+
+def _kapak_kurtarmayi_uygula(future, reels_state, baglam, log):
+    """Hook ajanı ilk denemede düştüyse Script/TTS ile paralel yapılan ikinci
+    denemenin sonucunu alır; başarılıysa şablon kapakları model kapaklarıyla
+    değiştirir. Seslendirmenin açılışı (ilk_uc_saniye) değişmez: o senaryo
+    zaten seslendirildi."""
+    if future is None:
+        return reels_state
+    try:
+        hook_state, basliklar, basarili = future.result()
+    except Exception as exc:
+        log(f"⚠️ Kapak kurtarma denemesi hata verdi; yerel kapak seti korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
+        return reels_state
+    if not basarili or not basliklar:
+        log("⚠️ Kapak kurtarma: Hook ajanı ikinci denemede de yanıt vermedi; yerel kapak seti korunuyor.")
+        return reels_state
+    baglam["hook_state"] = hook_state
+    baglam["hook_ajan_basarili"] = True
+    ilk = ((_object_state_or_empty(reels_state).get("hook_families") or [{}])[0] or {}).get("ilk_uc_saniye")
+    log("✅ Kapak kurtarma: Hook ajanı ikinci denemede yanıt verdi; kapak başlıkları model çıktısıyla güncellendi.")
+    return _kapak_alanlarini_guncelle(reels_state, hook_state, basliklar, ilk_uc_saniye=ilk)
 
 
 def kapaklari_yeniden_uret(router, reels_state, baglam, fact_state, editorial_state, log, qa_geri_bildirimi=""):
@@ -508,17 +583,17 @@ def kapaklari_yeniden_uret(router, reels_state, baglam, fact_state, editorial_st
     tekrar çalıştırılır. reels_state'in kapak alanları güncellenmiş kopyasını döndürür."""
     baglam = baglam if isinstance(baglam, dict) else {}
     detective_state = baglam.get("detective_state") or {}
-    hook_state, kapak_basliklari = _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=qa_geri_bildirimi)
+    hook_state, kapak_basliklari, basarili = _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=qa_geri_bildirimi)
+    onceki = _object_state_or_empty(reels_state).get("kapak_basliklari")
+    if not basarili and onceki and baglam.get("hook_ajan_basarili", True):
+        # Yenileme düştü: modelin önceki kapak seti yerel şablonla EZİLMEZ.
+        log("⚠️ Kapak yenilemesi: Hook ajanı yanıt vermedi; önceki model kapak seti korunuyor.")
+        return reels_state
     baglam["hook_state"] = hook_state
-    reels = dict(_object_state_or_empty(reels_state))
-    secili = kapak_basliklari[0] if kapak_basliklari else {"ust": hook_state.get("kapak_metni", ""), "alt": ""}
-    reels["kapak_basliklari"] = [dict(x) for x in kapak_basliklari]
-    reels["hook_families"] = [{
-        "kapak_ana": secili.get("ust", ""),
-        "kapak_alt": secili.get("alt", ""),
-        "ilk_uc_saniye": hook_state.get("ilk_3_saniye_kanca", ""),
-    }]
-    return reels
+    baglam["hook_ajan_basarili"] = basarili
+    # Seslendirme değişmediği için açılış kancası (ilk_uc_saniye) korunur.
+    ilk = ((_object_state_or_empty(reels_state).get("hook_families") or [{}])[0] or {}).get("ilk_uc_saniye")
+    return _kapak_alanlarini_guncelle(reels_state, hook_state, kapak_basliklari, ilk_uc_saniye=ilk)
 
 
 def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None, baglam=None, qa_geri_bildirimi=""):
@@ -530,8 +605,8 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
     baglam: (isteğe bağlı, giriş/çıkış) dict. Detective/Hook çıktıları buraya
       yazılır; QA yenilemesinde yeniden kullanılır (aynı veriyle tekrar
       çağrılmaz). baglam["hook_yenile"] True ise Hook yeniden üretilir.
-    qa_geri_bildirimi: Final QA'nın reddetme gerekçeleri; Script Writer'a
-      verilir. Bu durumda Critic atlanır (hakem zaten QA).
+    qa_geri_bildirimi: Final QA'nın reddetme gerekçeleri; Script Writer'a ve
+      Critic'e verilir (Critic QA düzeltmelerini denetler, geri aldırmaz).
 
     Dönüş (9'luplü):
       (reels_state, model, duo_plan, duo_script, ses_basarili,
@@ -543,11 +618,13 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 
     # 1. Detective (veri değişmez; QA yenilemesinde bağlamdan yeniden kullanılır,
     # API yoğunsa atlanır)
-    if "detective_state" in baglam:
+    # Yalnız BAŞARILI Detective çıktısı yeniden kullanılır; ilk turda düştüyse
+    # (boş varsayılan) QA yenilemesinde yeniden denenir.
+    if "detective_state" in baglam and baglam.get("detective_basarili", True):
         detective_state = _object_state_or_empty(baglam.get("detective_state"))
         log("♻️ Detective çıktısı önceki turdan yeniden kullanılıyor (API çağrısı yok).")
     else:
-        detective_state, _ = _istege_bagli_ajan(
+        detective_state, detective_model = _istege_bagli_ajan(
             log, "🕵️ Detective Ajan",
             lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log),
             {},
@@ -555,20 +632,42 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             atlanabilir=True,
         )
         baglam["detective_state"] = detective_state
+        baglam["detective_basarili"] = detective_model not in ("hata", "atlandi")
 
-    # 2. Hook Gen — kapak seti burada üretilir (QA yenilemesinde yalnız
-    # COVER_FAIL varsa yeniden üretilir).
-    if baglam.get("hook_state") and not baglam.get("hook_yenile"):
-        hook_state = dict(baglam["hook_state"])
+    # 2. Hook Gen — kapak seti burada üretilir. QA yenilemesinde başarılı Hook
+    # yeniden kullanılır; ancak QA kanca/kapak/gerçeklik sorunu bildirdiyse
+    # (hook_yenile) ya da önceki Hook yerel yedekten geldiyse yeniden üretilir.
+    kapak_kurtarma = None
+    onceki_hook = baglam.get("hook_state")
+    onceki_hook_basarili = baglam.get("hook_ajan_basarili", True)
+    if onceki_hook and not baglam.get("hook_yenile") and onceki_hook_basarili:
+        hook_state = dict(onceki_hook)
         kapak_basliklari = [dict(x) for x in (hook_state.get("kapak_basliklari") or []) if isinstance(x, dict)]
         log("♻️ Hook/kapak seti önceki turdan yeniden kullanılıyor (API çağrısı yok).")
     else:
-        hook_state, kapak_basliklari = _hook_uret(
+        hook_geri_bildirimi = qa_geri_bildirimi if baglam.get("hook_yenile") else ""
+        hook_state, kapak_basliklari, hook_basarili = _hook_uret(
             router, detective_state, fact_state, editorial_state, log,
-            geri_bildirim=qa_geri_bildirimi if baglam.get("hook_yenile") else "",
+            geri_bildirim=hook_geri_bildirimi,
         )
+        if not hook_basarili and onceki_hook and onceki_hook_basarili:
+            # Yenileme düştü: modelin önceki kancası yerel şablondan iyidir.
+            log("⚠️ Hook yenilemesi yanıt vermedi; önceki model kancası/kapak seti korunuyor.")
+            hook_state = dict(onceki_hook)
+            kapak_basliklari = [dict(x) for x in (hook_state.get("kapak_basliklari") or []) if isinstance(x, dict)]
+            hook_basarili = True
         baglam["hook_state"] = hook_state
+        baglam["hook_ajan_basarili"] = hook_basarili
         baglam["hook_yenile"] = False
+        if not hook_basarili:
+            # Kapak başlıkları seslendirmeye gömülü değil: Hook ajanı Script +
+            # Critic + TTS ile PARALEL bir kez daha denenir; yanıt verirse şablon
+            # kapaklar model kapaklarıyla değiştirilir (kritik yolda bekleme yok).
+            log("🪝 Kapak kurtarma: Hook ajanı Script/TTS ile paralel olarak yeniden deneniyor...")
+            kapak_kurtarma = _arka_plan_baslat(
+                lambda: _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=hook_geri_bildirimi),
+                "kapak-kurtarma",
+            )
 
     # Anlatım modu (arka planda hesaplanıyorsa burada sonucu beklenir).
     mod = _mod_coz(mod_karari)
@@ -592,20 +691,16 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         script_state = _object_state_or_empty(script_state)
         son_model = model_script
 
-        # 4. Critic (isteğe bağlı: düşerse/atlanırsa senaryo onaylı sayılır).
-        # QA yenilemesinde hakem Final QA'dır; Critic + revize turu (~1-2 dk)
-        # tekrar edilmez.
-        if qa_geri_bildirimi:
-            log("⏭️ 🔥 Critic Ajan atlandı: QA geri bildirimiyle yeniden yazım; son hakem Final QA.")
-            critic_state = {"score": 10, "approved": True, "feedback": ""}
-        else:
-            critic_state, _ = _istege_bagli_ajan(
-                log, "🔥 Critic Ajan",
-                lambda: _critic_calistir(router, script_state, hook_state, log),
-                {"score": 10, "approved": True, "feedback": ""},
-                router=router,
-                atlanabilir=True,
-            )
+        # 4. Critic (isteğe bağlı: düşerse senaryo onaylı sayılır). QA
+        # yenilemesinde de çalışır: izleyici gözüyle etkileşim kalitesini Final
+        # QA ölçmez; Critic QA gerekçelerini bilerek değerlendirir.
+        critic_state, _ = _istege_bagli_ajan(
+            log, "🔥 Critic Ajan",
+            lambda: _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=qa_geri_bildirimi),
+            {"score": 10, "approved": True, "feedback": ""},
+            router=router,
+            atlanabilir=True,
+        )
 
         # Critic Döngüsü (MAX 1 Revize)
         if not _critic_onayladi_mi(critic_state):
@@ -742,6 +837,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             # Başarılı TTS ve Süre. Paralel üretilen metadata alınır ve döngüden çıkılır.
             metadata_state = _metadata_sonucu_al(metadata_future, log)
             reels_state["metadata"] = metadata_state
+            reels_state = _kapak_kurtarmayi_uygula(kapak_kurtarma, reels_state, baglam, log)
 
             return reels_state, "agentic", duo_plan, duo_script, True, info, mod_tts, ses_dosyasi, metadata_state
 

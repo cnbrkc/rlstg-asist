@@ -96,16 +96,92 @@ class QaFactFailTests(unittest.TestCase):
         self.assertFalse(result[14])
         self.assertEqual(len(calls), 2)
 
-    def test_social_only_leftover_is_nonblocking(self):
+    def test_social_only_leftover_gets_extra_round_then_nonblocking(self):
         qa_fail = {"overall": "FAIL", "regeneration_targets": ["CAPTION_FAIL", "THREADS_FAIL"],
                    "caption_check": "FAIL: 600 karakter altında"}
-        with patch("core.pipeline._caption_calistir", return_value=({"reels_aciklamasi": "c2", "reels_hashtagleri": ["#a"]}, "m")):
-            result, calls, _ = self._run([qa_fail, qa_fail])
+        with patch("core.pipeline._caption_calistir", return_value=({"reels_aciklamasi": "c2", "reels_hashtagleri": ["#a"]}, "m")) as cap:
+            result, calls, logs = self._run([qa_fail, qa_fail, qa_fail])
         qa_state, qa_pass = result[10], result[14]
         self.assertTrue(qa_pass)
+        self.assertEqual(result[11], 2, "sosyal katman için ek bir düzeltme turu yapılır")
+        self.assertEqual(cap.call_count, 2)
+        self.assertIn("600 karakter", cap.call_args.kwargs["qa_geri_bildirimi"])
         self.assertEqual(qa_state["nonblocking_targets"], ["CAPTION_FAIL", "THREADS_FAIL"])
         self.assertTrue(qa_state["social_nonblocking_fallback"])
         self.assertEqual(len(calls), 1, "caption/threads için seslendirme yeniden üretilmez")
+        self.assertTrue(any("ek bir düzeltme turu" in line for line in logs))
+
+    def test_social_extra_round_can_fix_and_pass(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["CAPTION_FAIL"], "caption_check": "FAIL: hashtag eksik"}
+        qa_ok = {"overall": "PASS", "regeneration_targets": []}
+        with patch("core.pipeline._caption_calistir", return_value=({"reels_aciklamasi": "c2", "reels_hashtagleri": ["#a"]}, "m")):
+            result, calls, _ = self._run([qa_fail, qa_fail, qa_ok])
+        self.assertTrue(result[14])
+        self.assertNotIn("nonblocking_targets", result[10])
+
+    def test_voice_regen_after_voice_fail_is_not_given_extra_round(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["VOICEOVER_FAIL"], "tone_check": "FAIL: robotik"}
+        result, calls, _ = self._run([qa_fail, qa_fail])
+        self.assertFalse(result[14])
+        self.assertEqual(len(calls), 2)
+
+    def test_fact_fail_regenerates_hook_too(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["FACT_FAIL"], "fact_check": "FAIL: seslendirmede uydurma rakam"}
+        qa_ok = {"overall": "PASS", "regeneration_targets": []}
+        hook_flags = []
+
+        def fake_agentic(*args, **kwargs):
+            hook_flags.append(bool(kwargs.get("baglam", {}).get("hook_yenile")))
+            return _agentic_ret(self._wav)
+
+        self._wav = _make_wav()
+        result, calls, _ = self._run([qa_fail, qa_ok], agentic_side=fake_agentic)
+        self.assertTrue(result[14])
+        self.assertEqual(hook_flags, [False, True], "gerçeklik hatasında Hook da QA geri bildirimiyle yenilenir")
+
+    def test_tone_fail_reuses_hook(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["VOICEOVER_FAIL"], "tone_check": "FAIL: robotik"}
+        qa_ok = {"overall": "PASS", "regeneration_targets": []}
+        hook_flags = []
+
+        def fake_agentic(*args, **kwargs):
+            hook_flags.append(bool(kwargs.get("baglam", {}).get("hook_yenile")))
+            return _agentic_ret(self._wav)
+
+        self._wav = _make_wav()
+        self._run([qa_fail, qa_ok], agentic_side=fake_agentic)
+        self.assertEqual(hook_flags, [False, False])
+
+    def test_hook_fail_regenerates_hook(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["HOOK_FAIL"], "hook_check": "FAIL: ilk 3 saniye zayıf"}
+        qa_ok = {"overall": "PASS", "regeneration_targets": []}
+        hook_flags = []
+
+        def fake_agentic(*args, **kwargs):
+            hook_flags.append(bool(kwargs.get("baglam", {}).get("hook_yenile")))
+            return _agentic_ret(self._wav)
+
+        self._wav = _make_wav()
+        self._run([qa_fail, qa_ok], agentic_side=fake_agentic)
+        self.assertEqual(hook_flags, [False, True])
+
+    def test_caption_fail_with_voice_regen_uses_caption_agent_with_feedback(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["VOICEOVER_FAIL", "CAPTION_FAIL"],
+                   "tone_check": "FAIL: robotik", "caption_check": "FAIL: çok kısa"}
+        qa_ok = {"overall": "PASS", "regeneration_targets": []}
+        with patch("core.pipeline._caption_calistir", return_value=({"reels_aciklamasi": "yeni caption", "reels_hashtagleri": ["#a"]}, "m-cap")) as cap:
+            result, calls, _ = self._run([qa_fail, qa_ok])
+        self.assertTrue(result[14])
+        cap.assert_called_once()
+        self.assertIn("çok kısa", cap.call_args.kwargs["qa_geri_bildirimi"])
+        self.assertEqual(result[8]["reels_aciklamasi"], "yeni caption")
+
+    def test_failed_caption_regen_keeps_previous_model_caption(self):
+        qa_fail = {"overall": "FAIL", "regeneration_targets": ["CAPTION_FAIL"], "caption_check": "FAIL: kısa"}
+        qa_ok = {"overall": "PASS", "regeneration_targets": []}
+        with patch("core.pipeline._caption_calistir", return_value=({"reels_aciklamasi": "şablon", "reels_hashtagleri": ["#a"]}, "local-fallback")):
+            result, calls, _ = self._run([qa_fail, qa_ok])
+        self.assertEqual(result[8]["reels_aciklamasi"], "caption", "model caption'ı şablonla ezilmez")
 
     def test_cover_only_regenerates_hook_without_new_tts(self):
         qa_fail = {"overall": "FAIL", "regeneration_targets": ["COVER_FAIL"], "cover_check": "FAIL: kapak ilk cümleyle aynı"}
@@ -118,6 +194,26 @@ class QaFactFailTests(unittest.TestCase):
         kapak.assert_called_once()
         self.assertIn("kapak ilk cümleyle aynı", kapak.call_args.kwargs["qa_geri_bildirimi"])
         self.assertEqual(result[0]["kapak_basliklari"][0]["ust"], "YENİ KAPAK")
+
+
+class LengthOverrideTests(unittest.TestCase):
+    def test_length_override_requires_strict_range(self):
+        from core.pipeline import _uzunluk_uygun_mu
+        # 30 sn → hedef 85, sıkı aralık 76-94.
+        self.assertTrue(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30))
+        # ±%20 toleransta ama sıkı aralık dışında → QA itirazı bastırılmaz.
+        self.assertFalse(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 100}, 30))
+
+    def test_length_override_checks_real_tts_duration(self):
+        from core.pipeline import _uzunluk_uygun_mu
+        wav = _make_wav()
+        try:
+            with patch("core.agentic._ses_suresini_al", return_value=40.0):
+                self.assertFalse(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30, wav))
+            with patch("core.agentic._ses_suresini_al", return_value=30.0):
+                self.assertTrue(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30, wav))
+        finally:
+            os.remove(wav)
 
 
 class QaSonucCozTests(unittest.TestCase):

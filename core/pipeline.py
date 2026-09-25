@@ -19,10 +19,9 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 
 from core.agentic import (
-    VOICE_WORD_TOLERANCE_RATIO,
-    _beklenen_gercek_mod, _coerce_positive_float, _hizli_basarislik,
-    _istek_profili, _kelime_sayisi, _reels_kelime_ayarlarini_hazirla,
-    _run_timed, _yakin_zamanda_asiri_yuk,
+    _asiri_yukte_atla_mi, _istek_profili, _beklenen_gercek_mod, _coerce_positive_float,
+    _istege_bagli_router_baglami, _kelime_sayisi, _reels_kelime_ayarlarini_hazirla,
+    _run_timed, _ses_sure_uyumlu_mu,
     _object_state_or_empty,
     agentic_icerik_uretimi, kapaklari_yeniden_uret,
 )
@@ -49,6 +48,11 @@ from core.social_fallbacks import (
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
 MAX_QA_REGEN = 1
+# Seslendirme/video yenilemesinden sonra kalan hatalar YALNIZ sosyal katmandaysa
+# (caption / threads / kapak metni — videoyu değiştirmeyen, ucuz çağrılar) QA
+# geri bildirimiyle bir ek yenileme turu daha yapılır; kalite teslim edilmeden
+# önce düzeltilmeye çalışılır.
+SOCIAL_QA_EXTRA_REGEN = 1
 SOCIAL_REGEN_MAX = 1
 
 QA_REGEN_TARGETS = {
@@ -274,21 +278,32 @@ def _editorial_calistir(router, video_state, fact_state, notes, log, ton=None):
     return _editorial_oncelik_denetimi(result, log), model
 
 
-def _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton=None):
+def _qa_duzeltme_talimati(katman, qa_geri_bildirimi):
+    if not qa_geri_bildirimi:
+        return ""
+    return (
+        f"\n\n🚨 FINAL QA BU {katman} METNİNİN ÖNCEKİ SÜRÜMÜNÜ REDDETTİ. Aşağıdaki sorunların HEPSİNİ düzelt; "
+        "Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia, rakam veya özellik kullanma:\n"
+        f"{qa_geri_bildirimi}"
+    )
+
+
+def _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
     content = girdi_birlestir(durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('VIDEO', video_state))
+    prompt = caption_promptunu_olustur(ton) + _qa_duzeltme_talimati("CAPTION", qa_geri_bildirimi)
     result, model = _run_timed(
         log, "Caption + Hashtag (Gemini)",
-        lambda: router.metin_uret(content, caption_promptunu_olustur(ton), CAPTION_SCHEMA, log, arama_kullan=False),
+        lambda: router.metin_uret(content, prompt, CAPTION_SCHEMA, log, arama_kullan=False),
     )
     return _caption_state_normalize(result), model
 
 
-def _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton=None):
+def _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
     """Sosyal korumalı caption: boş/artifact çıktı kabul edilmez; tek kontrollü
     yeniden üretim + Fact Lock tabanlı güvenli fallback."""
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton)
+            state, model = _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi)
         except Exception as exc:
             log(f"⚠️ Caption üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"reels_aciklamasi": "", "reels_hashtagleri": []}, "hata"
@@ -304,21 +319,22 @@ def _caption_calistir(router, reels_state, fact_state, editorial_state, video_st
     return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, "local-fallback"
 
 
-def _threads_model(router, video_state, fact_state, editorial_state, log, ton=None):
+def _threads_model(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi=""):
     content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state))
+    prompt = threads_promptunu_olustur(ton) + _qa_duzeltme_talimati("THREADS", qa_geri_bildirimi)
     result, model = _run_timed(
         log, "Threads (Gemini)",
-        lambda: router.metin_uret(content, threads_promptunu_olustur(ton), THREADS_SCHEMA, log, arama_kullan=False),
+        lambda: router.metin_uret(content, prompt, THREADS_SCHEMA, log, arama_kullan=False),
     )
     return _threads_state_normalize(result), model
 
 
-def _threads_calistir(router, video_state, fact_state, editorial_state, log, ton=None):
+def _threads_calistir(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi=""):
     """Sosyal korumalı threads: boş/artifact çıktı kabul edilmez; tek kontrollü
     yeniden üretim + Fact Lock tabanlı güvenli fallback."""
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _threads_model(router, video_state, fact_state, editorial_state, log, ton)
+            state, model = _threads_model(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi)
         except Exception as exc:
             log(f"⚠️ Threads üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"threads_aciklamasi": ""}, "hata"
@@ -378,12 +394,13 @@ def _anlatim_modu_karari_ekle(router, video_state, fact_state, editorial_state, 
     if _explicit_voice_mode_from_notes(notes):
         log('🎚️ Kullanıcı notunda açık ses modu talebi var; AI mod kararı atlandı.')
         return editorial
-    if _yakin_zamanda_asiri_yuk(router):
-        # Karar verilemezse pipeline zaten varsayılan DUO ile ilerliyor; yoğunlukta
-        # bu isteğe bağlı çağrı hiç yapılmaz.
+    if _asiri_yukte_atla_mi(router):
+        # Yalnız ISTEGE_BAGLI_ASIRI_YUK_ATLA=1 iken (hız-öncelikli operasyon modu).
         log('⏭️ Anlatım modu kararı atlandı: API yakın zamanda tam tur aşırı yük verdi; varsayılan mod kullanılacak.')
         return editorial
-    with _hizli_basarislik(router), _istek_profili(router, "istege_bagli"):
+    # Karar arka planda (Detective/Hook ile paralel) çalıştığı için aşırı-yük
+    # tekrar denemesi kritik yolu uzatmaz; kalite için açık tutulur.
+    with _istege_bagli_router_baglami(router):
         karar = _run_timed(
             log, "Anlatım modu kararı (Gemini)",
             lambda: anlatim_modu_karar_ver(router, video_state, fact_state, editorial, sure_saniye, ton, log),
@@ -474,20 +491,30 @@ def _fact_kapsami(gerekceler):
     return hedefler
 
 
-def _uzunluk_uygun_mu(reels_state, sure_saniye):
+def _uzunluk_uygun_mu(reels_state, sure_saniye, ses_dosyasi=None):
+    """QA'nın length_check FAIL'i yalnız deterministik ölçümler KESİN uygunluk
+    gösteriyorsa yok sayılır: kelime sayısı Script Writer'a verilen SIKI aralıkta
+    (hedef ±%10) VE — ses dosyası varsa — gerçek TTS/video süre oranı 0.85-1.15
+    içinde. Gevşek tolerans (±%20) burada kullanılmaz; aksi hâlde QA'nın haklı
+    uzunluk itirazı bastırılabilirdi."""
     try:
-        hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
+        _hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     except Exception:
         return False
     adet = _kelime_sayisi(_object_state_or_empty(reels_state).get("seslendirme_metni", ""))
-    if adet <= 0:
+    if adet <= 0 or not (minimum <= adet <= maksimum):
         return False
-    if minimum <= adet <= maksimum:
-        return True
-    return abs(adet - hedef) / float(hedef or 1) <= VOICE_WORD_TOLERANCE_RATIO
+    if ses_dosyasi and os.path.exists(ses_dosyasi):
+        try:
+            uyumlu, ses_suresi, _oran = _ses_sure_uyumlu_mu(ses_dosyasi, sure_saniye)
+        except Exception:
+            return False
+        if ses_suresi > 0 and not uyumlu:
+            return False
+    return True
 
 
-def _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log):
+def _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log, ses_dosyasi=None):
     """QA çıktısını (overall, desteklenen hedefler, FAIL kontrolleri) üçlüsüne indirger.
 
     * overall 'PASS: ...' / 'FAIL - ...' gibi serbest yazımlarda da doğru okunur.
@@ -495,13 +522,13 @@ def _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log):
       hedeflerine eşlenir (FACT kapsamı gerekçeden çözülür).
     * overall FAIL ama hedef listesi boş/tanınmıyorsa tekil kontrol alanlarından
       (fact_check: 'FAIL: ...') hedef türetilir.
-    * length_check FAIL deterministik kelime sayımıyla çelişiyorsa (tolerans
-      içinde) yok sayılır; yalnız bunun için pahalı yeniden üretim yapılmaz.
+    * length_check FAIL, deterministik ölçüm (sıkı kelime aralığı + gerçek TTS
+      süresi) uzunluğun kesin uygun olduğunu gösteriyorsa yok sayılır.
     """
     overall = _qa_overall_coz(qa_state)
     failing = {k: str(v) for k, v in qa_state.items() if k in QA_CHECK_TARGETS and _qa_check_fail_mi(v)}
-    if "length_check" in failing and _uzunluk_uygun_mu(reels_state, sure_saniye):
-        log("📏 QA length_check FAIL dedi ama gerçek kelime sayısı tolerans içinde; bu kontrol yok sayıldı.")
+    if "length_check" in failing and _uzunluk_uygun_mu(reels_state, sure_saniye, ses_dosyasi):
+        log("📏 QA length_check FAIL dedi ama kelime sayısı hedef aralıkta ve gerçek TTS süresi videoya uygun; bu kontrol yok sayıldı.")
         failing.pop("length_check")
         qa_state["length_check_override"] = True
 
@@ -717,14 +744,18 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
     # Threads (paralel koldan)
     threads_state, model_threads = _threads_future_sonucu(threads_future, router, video_state, fact_state, editorial_state, log, ton)
 
-    for qa_round in range(MAX_QA_REGEN + 1):
+    for qa_round in range(MAX_QA_REGEN + SOCIAL_QA_EXTRA_REGEN + 1):
         qa_rounds = qa_round
         qa_state, _ = _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan, duo_script, ton)
         if not isinstance(qa_state, dict):
             qa_state = _object_state_or_empty(qa_state)
         qa_state = dict(qa_state)
 
-        overall, supported_targets, failing_checks = _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log)
+        targets_ham = qa_state.get('regeneration_targets') or []
+        if isinstance(targets_ham, str):
+            targets_ham = re.split(r"[,\s]+", targets_ham)
+        targets_ham = {str(x).strip().upper().replace(" ", "_") for x in targets_ham if str(x).strip()} if isinstance(targets_ham, list) else set()
+        overall, supported_targets, failing_checks = _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log, ses_dosyasi)
         qa_state["regeneration_targets"] = list(supported_targets)
 
         expected_mode = _beklenen_gercek_mod(duo_plan, duo_script)
@@ -748,21 +779,33 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
         if not supported_targets:
             log("❌ QA FAIL döndü ama yenilenebilir hedef çıkarılamadı; render güvenli biçimde durduruluyor.")
             break
-        if qa_round >= MAX_QA_REGEN:
-            break
-
         target_set = set(supported_targets)
+        if qa_round >= MAX_QA_REGEN:
+            sosyal_ek_tur = qa_round < MAX_QA_REGEN + SOCIAL_QA_EXTRA_REGEN and target_set <= QA_SOCIAL_NONBLOCKING_TARGETS
+            if not sosyal_ek_tur:
+                break
+            log(f"♻️ Kalan QA hataları yalnız sosyal katmanda ({', '.join(supported_targets)}); video yeniden üretilmeden ek bir düzeltme turu yapılıyor.")
+
         voice_needed = bool(target_set & {'VOICEOVER_FAIL', 'DUO_SCRIPT_FAIL'})
         cover_needed = 'COVER_FAIL' in target_set
         downstream_threads = 'THREADS_FAIL' in target_set
-        caption_only = 'CAPTION_FAIL' in target_set and not voice_needed
+        caption_needed = 'CAPTION_FAIL' in target_set
         geri_bildirim = _qa_geri_bildirimi_olustur(failing_checks, supported_targets)
+        # Kanca (ilk 3 sn) Hook ajanından gelir ve Script Writer'a girdi olur:
+        # QA kancayı ya da gerçekliği (Hook'taki doğrulanmamış iddia senaryoya
+        # geri taşınmasın) işaretlediyse Hook da QA geri bildirimiyle yenilenir.
+        hook_sorunu = (
+            "hook_check" in failing_checks
+            or "HOOK_FAIL" in targets_ham
+            or any(k in failing_checks for k in QA_FACT_CHECKS)
+            or any(QA_TARGET_ALIASES.get(t) == "FACT" for t in targets_ham)
+        )
 
         log(f"⚠️ QA başarısız bulundu ({', '.join(supported_targets)}). İlgili agentic katmanlar QA geri bildirimiyle yeniden üretiliyor...")
 
         if voice_needed:
             onceki = (reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli, ses_modu, ses_dosyasi, caption_state, model_caption)
-            baglam["hook_yenile"] = cover_needed
+            baglam["hook_yenile"] = cover_needed or hook_sorunu
             try:
                 reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli, ses_modu, ses_dosyasi, metadata_state = agentic_icerik_uretimi(
                     router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log,
@@ -772,7 +815,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
                     # Yeni tur ses üretemediyse elde kalan geçerli üretim çöpe atılmaz.
                     log("⚠️ QA yenilemesi geçerli TTS üretemedi; önceki agentic çıktı korunuyor.")
                     reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli, ses_modu, ses_dosyasi, caption_state, model_caption = onceki
-                else:
+                elif not caption_needed:
                     caption_state = _caption_state_normalize(metadata_state)
                     model_caption = "agentic"
                     caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton)
@@ -788,18 +831,31 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
             except Exception as exc:
                 log(f"⚠️ Kapak yenilemesi üretilemedi; önceki kapak seti korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
 
-        if caption_only:
+        # Caption QA tarafından işaretlendiyse (seslendirme yenilense de) Caption
+        # ajanı QA gerekçeleriyle ve GÜNCEL seslendirmeyle yeniden yazar; Metadata
+        # ajanının geri bildirimsiz caption'ı kullanılmaz.
+        if caption_needed:
+            onceki_caption = (caption_state, model_caption)
             try:
-                caption_state, model_caption = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton)
+                caption_state, model_caption = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi=geri_bildirim)
             except Exception:
-                pass
+                caption_state, model_caption = onceki_caption
+            if model_caption == "local-fallback" and onceki_caption[1] not in ("local-fallback", "hata"):
+                # Yenileme modeli yanıt vermedi: modelin önceki caption'ı güvenli
+                # şablondan iyidir.
+                log("⚠️ Caption yenilemesi yanıt vermedi; önceki model caption'ı korunuyor.")
+                caption_state, model_caption = onceki_caption
             caption_state = _caption_state_normalize(caption_state)
 
         if downstream_threads:
+            onceki_threads = (threads_state, model_threads)
             try:
-                threads_state, model_threads = _threads_calistir(router, video_state, fact_state, editorial_state, log, ton)
+                threads_state, model_threads = _threads_calistir(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi=geri_bildirim)
             except Exception:
-                threads_state = {"threads_aciklamasi": ""}
+                threads_state, model_threads = onceki_threads
+            if model_threads == "local-fallback" and onceki_threads[1] not in ("local-fallback", "hata"):
+                log("⚠️ Threads yenilemesi yanıt vermedi; önceki model Threads metni korunuyor.")
+                threads_state, model_threads = onceki_threads
             threads_state = _threads_state_normalize(threads_state)
 
     # Yenileme bitti ama QA yalnızca videoyu DEĞİŞTİRMEYEN katmanları işaretledi

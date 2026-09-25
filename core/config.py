@@ -73,9 +73,15 @@ ISTEK_ZAMAN_ASIMI_MS = {
 }
 # Güvenli varsayılanı olan isteğe bağlı ajanlar (Detective / Hook / Critic /
 # Metadata / anlatım modu) için istek başına toplam süre bütçesi (sn).
-ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE = _env_int("ROUTER_OPTIONAL_BUDGET_SECONDS", 60)
+# 60 sn'lik bütçe tek bir aşırı-yük bekleme turuna bile yetmiyordu; isteğe bağlı
+# ajanlar yoğunlukta pratikte hiç ikinci şans alamıyor ve kalite (Detective /
+# Critic / Hook çıktısı) varsayılana düşüyordu. 120 sn: tam tur + 15/30 sn
+# bekleme + tekrar tur sığar; asılı kalan istekler için güvenlik sınırı korunur.
+ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE = _env_int("ROUTER_OPTIONAL_BUDGET_SECONDS", 120)
 # Router bu kadar saniye içinde "tam tur aşırı yük" gördüyse atlanabilir ajanlar
 # (Detective / Critic / anlatım modu) hiç denenmeden güvenli varsayılanla geçilir.
+# KALİTE: Bu atlama artık varsayılan olarak KAPALI (ISTEGE_BAGLI_ASIRI_YUK_ATLA=1
+# ile açılır); ajanlar her zaman denenir.
 ASIRI_YUK_ATLAMA_PENCERESI_SANIYE = _env_int("ROUTER_OVERLOAD_SKIP_WINDOW", 90)
 
 SES_MODELLERI = [
@@ -116,3 +122,19 @@ PIPELINE_ADIMLARI = [
 
 def model_arama_destekliyor_mu(model_adi: str) -> bool:
     return model_adi in ARAMA_MODELLERI
+
+
+def _env_bool(ad, varsayilan=False):
+    deger = os.getenv(ad)
+    if deger is None or not str(deger).strip():
+        return varsayilan
+    return str(deger).strip().lower() in {"1", "true", "yes", "evet", "on"}
+
+
+# Hız-öncelikli operasyon anahtarları (varsayılan KAPALI = kalite öncelikli).
+#   ISTEGE_BAGLI_HIZLI_BASARISIZLIK=1 : isteğe bağlı ajanlar aşırı yükte beklemeden
+#                                       tek tam turla vazgeçer.
+#   ISTEGE_BAGLI_ASIRI_YUK_ATLA=1     : yakın zamanda tam-tur aşırı yük varsa
+#                                       isteğe bağlı ajanlar hiç denenmez.
+ISTEGE_BAGLI_HIZLI_BASARISIZLIK = _env_bool("ISTEGE_BAGLI_HIZLI_BASARISIZLIK", False)
+ISTEGE_BAGLI_ASIRI_YUK_ATLA = _env_bool("ISTEGE_BAGLI_ASIRI_YUK_ATLA", False)

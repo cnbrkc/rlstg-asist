@@ -38,7 +38,7 @@ Telegram → cloudflare/telegram-webhook.js (pending kuyruk + ton butonları)
 | `core/duo_audio.py` | ~65 | Karakter→voice haritası (Autonoe/Charon) + tek çağrı multi-speaker TTS (fail-closed) | `CHARACTER_VOICES`, `voice_for_character`, `duo_ses_uret`, `_duo_transcript` |
 | `core/social_fallbacks.py` | ~95 | Artifact tanıma + Fact Lock tabanlı güvenli caption/threads metinleri | `looks_like_artifact`, `sanitize_hashtags`, `caption_fallback`, `threads_fallback`, `text`, `first_fact`, `model_identity`, `DEFAULT_HASHTAGS` |
 | `core/media.py` | ~235 | FFmpeg/ffprobe: WAV yazma, atempo hızlandırma, süre/probe, video+TTS render | `video_ve_sesi_birlestir`, `sesi_hizlandir`, `wav_yaz`, `gecici_dosya_yolu`, `gecici_ses_yolu`, `temp_dosya_temizle`, `medya_raporu`, `video_suresini_al`, `_parse_ffmpeg_stderr` |
-| `core/web_search.py` | ~185 | DuckDuckGo (`ddgs`) çoklu sorgu — sorgular **paralel** (`WEB_SEARCH_PARALLEL`, varsayılan 3), sonuç sırası korunur; thread+process izolasyonlu timeout | `web_arastirma_yap`, `arastirma_sorgulari_olustur`, `duckduckgo_sorgu` |
+| `core/web_search.py` | ~185 | DuckDuckGo (`ddgs`) çoklu sorgu — sorgular **paralel** (`WEB_SEARCH_PARALLEL`, varsayılan 3), sonuç sırası korunur; paralel aşamada hata/hız sınırı/zaman aşımı alan sorgular **seri olarak bir kez daha** denenir (kapsam daralmaz); thread+process izolasyonlu timeout | `web_arastirma_yap`, `arastirma_sorgulari_olustur`, `duckduckgo_sorgu` |
 | `telegram/telegram_pipeline_worker.py` | ~495 | Production giriş: Telegram mesaj/video gönderimi, ilerleme barı (`_LoadingEditor`: edit'ler arka planda, birleştirilerek; pipeline'ı bloklamaz), QA bulguları raporu, timing log, `pipeline_result.json`, teslimat öncesi son sosyal tamamlama | `main()`, `process(path)`, `process_text(text)` |
 | `telegram/telegram_webhook_intake.py` | ~78 | Video modu: videoyu runner'a indirir. **stdlib-only** (workflow'ta `pip install` ÖNCE çalışmaz) | `main()`, `_safe_filename` |
 | `cloudflare/telegram-webhook.js` | ~90 | Webhook: girdiyi `data/pending/<update_id>.json` yazar (GitHub Contents API), inline ton butonları, callback→`workflow_dispatch`, 24s stale cleanup | — |
@@ -56,7 +56,7 @@ gerekli davranışlar yukarıdaki dosyalara native taşındı).
 | 1 | Forensic video analizi | `VIDEO_ANALYSIS_SCHEMA` | `video` (120s) | **Zorunlu** — exception pipeline'ı durdurur |
 | 2 | Research/Fact Lock (DDGS + Gemini, `arama_kullan=False`; DDGS katmanı `web_search.py` içinde) | `FACT_LOCK_SCHEMA` | `uzun_metin` (60s) | **Fallback:** yalnız OBSERVED gerçeklerle Fact Lock (`forensic-fallback`); yeni iddia üretilmez |
 | 3 | Editorial Brain (+ `_runtime_priority_audit`: seçilen index vs en yüksek `toplam_oncelik` → `aligned`/`review`) | `EDITORIAL_SCHEMA` | `uzun_metin` | **Zorunlu** |
-| 4a | Anlatım modu kararı (isteğe bağlı; kullanıcı notunda açık mod varsa atlanır; yakın zamanda tam-tur aşırı yük varsa hiç denenmez). **Arka planda** çalışır (`_anlatim_modu_arka_planda`); Detective/Hook onunla paralel ilerler, mod yalnız Script Writer'dan hemen önce beklenir | `ANLATIM_MODU_SCHEMA` | `istege_bagli` (30s + 60s bütçe) | {} → mod varsayılan DUO |
+| 4a | Anlatım modu kararı (isteğe bağlı; kullanıcı notunda açık mod varsa atlanır; aşırı yükte de denenir, router tekrarlarıyla). **Arka planda** çalışır (`_anlatim_modu_arka_planda`); Detective/Hook onunla paralel ilerler, mod yalnız Script Writer'dan hemen önce beklenir | `ANLATIM_MODU_SCHEMA` | `istege_bagli` (30s + 60s bütçe) | {} → mod varsayılan DUO |
 | 4b | **Agentic döngü** (bkz. §3) | — | — | Script Writer zorunlu; diğerleri güvenli varsayılanla |
 | 4c | Metadata→Caption eşleme (Metadata ajanı TTS ile **paralel** çalışır) + eksikse Caption ajanı (sosyal korumalı, §6) | `METADATA_GEN_SCHEMA`/`CAPTION_SCHEMA` | `metin` | Fallback: Fact Lock caption + `DEFAULT_HASHTAGS` |
 | 4d | Threads (sosyal korumalı, §6) — agentic döngü ile **paralel** arka planda başlar | `THREADS_SCHEMA` | `metin` | Fallback: Fact Lock threads |
@@ -79,20 +79,33 @@ qa_result, qa_pass, content_tone, pipeline_state{...}, input_media?, output_medi
     `VOICEOVER_FAIL`; `HASHTAG_FAIL` → `CAPTION_FAIL`; `VISUAL_MATCH_FAIL` → `COVER_FAIL`.
   - `overall=FAIL` ama hedef listesi boş/tanınmıyorsa FAIL veren tekil `*_check`
     alanlarından türetilir (`QA_CHECK_TARGETS`).
-  - `length_check` FAIL, deterministik kelime sayımı toleranstaysa yok sayılır
-    (`length_check_override`); yalnız bunun için yeniden üretim yapılmaz.
+  - `length_check` FAIL yalnız deterministik ölçüm KESİN uygunluk gösterirse yok
+    sayılır (`length_check_override`): kelime sayısı SIKI aralıkta (hedef ±%10) VE
+    gerçek TTS/video oranı 0.85–1.15. Gevşek ±%20 tolerans burada kullanılmaz.
   - Loga yalnız FAIL veren kontrol **adları** yazılır (gerekçe metni değil, §10).
     Gerekçeler Script Writer'a `qa_geri_bildirimi` olarak ve Telegram raporuna gider.
   - Hiç hedef çıkarılamazsa bu açıkça loglanır ve render durdurulur (sessiz FAIL yok).
-- Maks **1** kontrollü yenileme. Hedef→etki: `VOICEOVER_FAIL|DUO_SCRIPT_FAIL` → Script
-  Writer + TTS (+ paralel Metadata) QA geri bildirimiyle yeniden; Detective/Hook önceki
-  turdan **yeniden kullanılır** (`baglam`), Critic atlanır (son hakem QA); `COVER_FAIL`
-  da varsa Hook yenilenir. **Yalnız `COVER_FAIL`** → `kapaklari_yeniden_uret` (Script/TTS
-  yok). `CAPTION_FAIL` → yalnız caption; `THREADS_FAIL` → yalnız threads. Yenileme
-  düşerse/TTS üretemezse önceki geçerli çıktı korunur.
+- Maks **1** seslendirme/video yenilemesi (`MAX_QA_REGEN`). Hedef→etki:
+  - `VOICEOVER_FAIL|DUO_SCRIPT_FAIL` → Script Writer + **Critic** + TTS (+ paralel
+    Metadata) QA geri bildirimiyle yeniden. Critic QA gerekçelerini bilir, düzeltmeleri
+    geri aldırmaz. **Başarılı** Detective/Hook önceki turdan yeniden kullanılır
+    (`baglam`); ilk turda düşmüş olanlar yeniden denenir.
+  - Hook, QA şunlardan birini işaretlediyse geri bildirimle **yeniden üretilir**:
+    `COVER_FAIL`, `hook_check`/`HOOK_FAIL` ya da herhangi bir gerçeklik hatası
+    (`FACT_FAIL`, `fact_check`…). Sebep: kanca Script Writer'a girdi olur ve
+    doğrulanmamış iddiayı senaryoya geri taşıyabilir.
+  - **Yalnız `COVER_FAIL`** → `kapaklari_yeniden_uret` (Script/TTS yok; açılış kancası korunur).
+  - `CAPTION_FAIL` → Caption ajanı QA gerekçeleri + güncel seslendirmeyle yeniden yazar
+    (seslendirme yenilense de Metadata'nın geri bildirimsiz caption'ı kullanılmaz).
+    `THREADS_FAIL` → Threads QA gerekçeleriyle.
+  - Yenileme düşerse (API/TTS) önceki **model** çıktısı korunur; model çıktısı
+    yerel şablon/fallback ile ezilmez (Hook, kapak, caption, threads, TTS).
+- **Sosyal ek tur (`SOCIAL_QA_EXTRA_REGEN=1`):** yenileme sonrası kalan hedefler
+  yalnız sosyal katmansa (caption/threads/kapak) video yeniden üretilmeden bir
+  düzeltme turu + QA daha yapılır.
 - **DUO fail-closed:** `expected_mode == DUO` iken `ses_modu != DUO` veya WAV yoksa
   PASS bile olsa `DUO_SCRIPT_FAIL` → FAIL.
-- **Non-blocking (`_nonblocking_qa_mi`):** yenileme sonrası kalan hedefler yalnız
+- **Non-blocking (`_nonblocking_qa_mi`):** sosyal ek turdan sonra da kalan hedefler yalnız
   videoyu değiştirmeyen katmanlarsa (`CAPTION_FAIL`/`THREADS_FAIL`/`COVER_FAIL`) ve/veya
   `DUO_SCRIPT_FAIL` + geçerli **DUO** WAV ise → `qa_pass=True`, `nonblocking_targets`
   (+ `social_nonblocking_fallback` / `duo_nonblocking_fallback`) işaretlenir; worker
@@ -107,16 +120,22 @@ qa_result, qa_pass, content_tone, pipeline_state{...}, input_media?, output_medi
 
 Sıra: **Detective → Hook → [mod kararı beklenir] → Script Writer → Critic → TTS ∥ Metadata**
 (tek `for deneme in range(VOICE_REGEN_MAX+1)` döngüsü içinde; Detective/Hook döngü başında
-bir kez). `baglam` sözlüğü Detective/Hook çıktısını QA yenilemesi için saklar;
-`qa_geri_bildirimi` verildiğinde Critic atlanır. Dönüş 9'lu tuple (son öğe metadata).
+bir kez). `baglam` sözlüğü Detective/Hook çıktısını ve başarı bayraklarını
+(`detective_basarili`, `hook_ajan_basarili`, `hook_yenile`) QA yenilemesi için saklar.
+`qa_geri_bildirimi` Script Writer'a ve Critic'e verilir. Dönüş 9'lu tuple (son öğe metadata).
+
+**Kapak kurtarma:** Hook ajanı (router tekrarlarına rağmen) düşerse kapaklar yerel
+setle hazırlanır. Hook ajanı Script + Critic + TTS ile **paralel** bir kez daha denenir;
+yanıt verirse kapak başlıkları model çıktısıyla değiştirilir. Seslendirme açılışı
+değişmez; kritik yolda bekleme olmaz.
 
 | Ajan | Şema | Zorunluluk | Düşerse |
 |---|---|---|---|
-| Detective | `DETECTIVE_SCHEMA` | isteğe bağlı, **atlanabilir** (aşıyı-yük penceresinde hiç denenmez) | `{}` |
-| Hook Gen | `HOOK_GEN_SCHEMA` (+`KAPAK_FORMAT_KURALI`) | isteğe bağlı | `_hook_fallback(editorial)` (territories/core_story'den) |
+| Detective | `DETECTIVE_SCHEMA` | isteğe bağlı (aşırı yükte de denenir) | `{}` (QA yenilemesinde yeniden denenir) |
+| Hook Gen | `HOOK_GEN_SCHEMA` (+`KAPAK_FORMAT_KURALI`) | isteğe bağlı | `_hook_fallback(editorial)` + paralel kapak kurtarma |
 | Script Writer | `SCRIPT_WRITER_SCHEMA` | **ZORUNLU** (router overload tekrarlarına rağmen düşerse exception yukarı) | — |
-| Critic | `CRITIC_SCHEMA` | isteğe bağlı, atlanabilir | onaylı sayılır; onay vermezse **1 revize** (boş revize eski scripti korur) |
-| Metadata | `METADATA_GEN_SCHEMA` | isteğe bağlı, atlanabilir | `{}` → caption Caption ajanıyla tamamlanır |
+| Critic | `CRITIC_SCHEMA` | isteğe bağlı (QA yenilemesinde de çalışır) | onaylı sayılır; onay vermezse **1 revize** (boş revize eski scripti korur) |
+| Metadata | `METADATA_GEN_SCHEMA` | isteğe bağlı | `{}` → caption Caption ajanıyla tamamlanır |
 
 **Kapak kuralı (istisnasız):** Hook çıktısı `kapak_basliklarini_normalize_et` ile
 doğrulanır; eksikse Editorial/Detective kanıtları + şablon havuzuyla **5'e tamamlanır**.
@@ -213,10 +232,17 @@ kesin Türkiye fiyatı/ÖTV UYDURMAZ; `turkiye_satis_durumu` mutlaka taşınır.
   tur ≤`OVERLOAD_RETRY_ROUNDS=2` kez. Toplam bekleme bütçesi 180sn; çalışma
   süresi + bekleme > 12dk ise beklenmez. `hizli_basarisizlik()` (takma ad
   `hizli_basarislik`) bloklarında bekleme YOK; bayrak thread-local'dir.
-- **Aşıri-yük atlama penceresi (90sn):** tam tur düşüşünden sonra atlanabilir ajanlar
-  (Detective/Critic/anlatım modu/Metadata) hiç denenmez → `yakin_zamanda_asiri_yuk_var_mi`.
+- **İsteğe bağlı ajanlar kalite önceliklidir (varsayılan):** her zaman denenir ve
+  aşırı-yük tekrarlarından yararlanır. Beklemeleri **ayrı havuzdan** düşülür
+  (`ROUTER_OPTIONAL_OVERLOAD_WAIT_BUDGET`, 120sn); zorunlu adımların 180sn bütçesi
+  korunur. Asılı istekler `istege_bagli` profiliyle sınırlıdır (30s timeout, 120s istek
+  bütçesi; bütçe bekleme sonrasına yetmiyorsa boşuna uyunmaz).
+- **Hız-öncelikli operasyon anahtarları (varsayılan KAPALI):**
+  `ISTEGE_BAGLI_HIZLI_BASARISIZLIK=1` → isteğe bağlı ajanlar beklemesiz tek turla
+  vazgeçer. `ISTEGE_BAGLI_ASIRI_YUK_ATLA=1` → 90sn aşırı-yük penceresinde
+  (`yakin_zamanda_asiri_yuk_var_mi`) hiç denenmez.
 - **İstek profilleri** (`istek_profili(...)`): `metin` 45s · `uzun_metin` 60s ·
-  `istege_bagli` 30s + 60sn toplam bütçe (dolunca kalan kombinasyonlar atlanır) ·
+  `istege_bagli` 30s + 120sn toplam bütçe (dolunca kalan kombinasyonlar atlanır) ·
   `video` 120s · `tts` 60s. Env ile ezilebilir (`ROUTER_*`).
 - **Research fallback rotası:** `metin_uret(arama_kullan=True)` JSON parse edemezse →
   Search'siz structured-output denemesi; o da düşerse `arama_kullan=False` fallback.

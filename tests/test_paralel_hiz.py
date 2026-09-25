@@ -120,7 +120,7 @@ class AgenticReuseTests(unittest.TestCase):
     @_kelime
     @_sure
     @_duo
-    def test_qa_regeneration_reuses_detective_and_hook_and_skips_critic(self, *_):
+    def test_qa_regeneration_reuses_detective_and_hook_but_runs_critic_with_qa_context(self, *_):
         router = _CountingRouter()
         baglam = {}
         agentic_icerik_uretimi(router, {}, {}, {}, 30, "dengeli", "Autonoe", lambda m: None,
@@ -131,14 +131,96 @@ class AgenticReuseTests(unittest.TestCase):
 
         router.schemas.clear()
         router.prompts.clear()
+        agentic_icerik_uretimi(router, {}, {}, {}, 30, "dengeli", "Autonoe", lambda m: None,
+                               mod_karari={"mode": "DUO"}, baglam=baglam,
+                               qa_geri_bildirimi="- tone_check: FAIL: fazla resmi")
+        # Detective/Hook yeniden kullanılır; Critic KALİTE için yine çalışır.
+        self.assertEqual(sorted(router.schemas), ["critic", "metadata", "script"])
+        script_prompt = next(p for p in router.prompts if "Sohbet Yazarı" in p)
+        self.assertIn("fazla resmi", script_prompt)
+        critic_prompt = next(p for p in router.prompts if "trol, şüpheci" in p)
+        self.assertIn("fazla resmi", critic_prompt)
+        self.assertIn("GERİ ALDIRMAMALI", critic_prompt)
+
+    @_kelime
+    @_sure
+    @_duo
+    def test_failed_detective_and_hook_are_retried_on_qa_regen_not_reused(self, *_):
+        router = _CountingRouter()
+        orijinal = router.metin_uret
+        dusur = {"detective", "hook"}
+
+        def metin_uret(content, prompt, schema, log, **kw):
+            props = schema.get("properties", {})
+            ad = "detective" if "kronik_sikayetler" in props else "hook" if "kapak_basliklari" in props else None
+            if ad in dusur:
+                raise Exception("503 UNAVAILABLE")
+            return orijinal(content, prompt, schema, log, **kw)
+
+        router.metin_uret = metin_uret
+        baglam = {}
         logs = []
         agentic_icerik_uretimi(router, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append,
-                               mod_karari={"mode": "DUO"}, baglam=baglam,
-                               qa_geri_bildirimi="- fact_check: FAIL: 250 hp uyduruldu")
-        self.assertEqual(sorted(router.schemas), ["metadata", "script"])
-        script_prompt = next(p for p in router.prompts if "Sohbet Yazarı" in p)
-        self.assertIn("250 hp uyduruldu", script_prompt)
-        self.assertTrue(any("Critic Ajan atlandı" in line for line in logs))
+                               mod_karari={"mode": "DUO"}, baglam=baglam)
+        self.assertFalse(baglam["detective_basarili"])
+        # Kapak kurtarma da düştü → yerel set korunur, hook yedekte kalır.
+        self.assertFalse(baglam["hook_ajan_basarili"])
+        self.assertTrue(any("Kapak kurtarma" in line for line in logs))
+
+        dusur.clear()
+        router.schemas.clear()
+        agentic_icerik_uretimi(router, {}, {}, {}, 30, "dengeli", "Autonoe", lambda m: None,
+                               mod_karari={"mode": "DUO"}, baglam=baglam, qa_geri_bildirimi="- tone_check: FAIL: x")
+        self.assertIn("detective", router.schemas)
+        self.assertIn("hook", router.schemas)
+        self.assertTrue(baglam["detective_basarili"])
+        self.assertTrue(baglam["hook_ajan_basarili"])
+
+    @_kelime
+    @_sure
+    @_duo
+    def test_hook_failure_recovers_cover_titles_in_parallel(self, *_):
+        router = _CountingRouter()
+        orijinal = router.metin_uret
+        hook_cagri = {"n": 0}
+
+        def metin_uret(content, prompt, schema, log, **kw):
+            if "kapak_basliklari" in schema.get("properties", {}):
+                hook_cagri["n"] += 1
+                if hook_cagri["n"] == 1:
+                    raise Exception("503 UNAVAILABLE")
+            return orijinal(content, prompt, schema, log, **kw)
+
+        router.metin_uret = metin_uret
+        baglam = {}
+        logs = []
+        reels, *_rest = agentic_icerik_uretimi(router, {}, {}, {"core_story": "Lexus kokpiti yeniledi"}, 30, "dengeli", "Autonoe", logs.append,
+                                               mod_karari={"mode": "DUO"}, baglam=baglam)
+        self.assertEqual(hook_cagri["n"], 2)
+        self.assertEqual(reels["kapak_basliklari"][0]["ust"], "BU SUV NORMAL DEĞİL")
+        self.assertTrue(baglam["hook_ajan_basarili"])
+        self.assertTrue(any("Kapak kurtarma: Hook ajanı ikinci denemede yanıt verdi" in line for line in logs))
+
+    @_kelime
+    @_sure
+    @_duo
+    def test_failed_hook_regeneration_keeps_previous_model_hook(self, *_):
+        router = _CountingRouter()
+        baglam = {}
+        agentic_icerik_uretimi(router, {}, {}, {}, 30, "dengeli", "Autonoe", lambda m: None,
+                               mod_karari={"mode": "DUO"}, baglam=baglam)
+        orijinal = router.metin_uret
+
+        def metin_uret(content, prompt, schema, log, **kw):
+            if "kapak_basliklari" in schema.get("properties", {}):
+                raise Exception("503 UNAVAILABLE")
+            return orijinal(content, prompt, schema, log, **kw)
+
+        router.metin_uret = metin_uret
+        baglam["hook_yenile"] = True
+        reels, *_rest = agentic_icerik_uretimi(router, {}, {}, {}, 30, "dengeli", "Autonoe", lambda m: None,
+                                               mod_karari={"mode": "DUO"}, baglam=baglam, qa_geri_bildirimi="- hook_check: FAIL: zayıf")
+        self.assertEqual(reels["kapak_basliklari"][0]["ust"], "BU SUV NORMAL DEĞİL", "model kapak seti şablonla ezilmez")
 
     @_kelime
     @_sure
@@ -209,7 +291,7 @@ class WebSearchParallelTests(unittest.TestCase):
         active = {"now": 0, "max": 0}
         lock = threading.Lock()
 
-        def fake_sorgu(sorgu, max_sonuc=4, log_ekle=None):
+        def fake_sorgu(sorgu, max_sonuc=4, log_ekle=None, hata_bildir=None):
             with lock:
                 active["now"] += 1
                 active["max"] = max(active["max"], active["now"])
@@ -224,6 +306,34 @@ class WebSearchParallelTests(unittest.TestCase):
         positions = [text.index(f"SORGU: {q}") for q in sorgular]
         self.assertEqual(positions, sorted(positions))
         self.assertGreater(active["max"], 1)
+
+
+    def test_failed_parallel_queries_are_retried_serially(self):
+        state = {"video_identity": {"brand": "Lexus", "exact_model": "ES 300h"},
+                 "viral_arastirma_ihtiyaclari": ["a", "b"]}
+        sorgular = web_search.arastirma_sorgulari_olustur(state)
+        cagri = {}
+        lock = threading.Lock()
+
+        def fake_sorgu(sorgu, max_sonuc=4, log_ekle=None, hata_bildir=None):
+            with lock:
+                cagri[sorgu] = cagri.get(sorgu, 0) + 1
+                ilk = cagri[sorgu] == 1
+            if sorgu == sorgular[0] and ilk:
+                hata_bildir()  # hız sınırı
+                return []
+            if sorgu == sorgular[1]:
+                return []  # gerçekten sonuçsuz: tekrar denenmez
+            return [{"baslik": sorgu, "icerik": "x", "kaynak": ""}]
+
+        logs = []
+        with patch.object(web_search, "duckduckgo_sorgu", side_effect=fake_sorgu), \
+             patch.dict(os.environ, {"WEB_SEARCH_RETRY_DELAY": "1"}), patch.object(web_search.time, "sleep"):
+            text = web_search.web_arastirma_yap(state, logs.append)
+        self.assertEqual(cagri[sorgular[0]], 2)
+        self.assertEqual(cagri[sorgular[1]], 1)
+        self.assertIn(f"SORGU: {sorgular[0]}", text)
+        self.assertTrue(any("seri olarak yeniden deneniyor" in line for line in logs))
 
 
 class CoverCropTests(unittest.TestCase):

@@ -92,6 +92,11 @@ OVERLOAD_WAIT_BUDGET_SECONDS = _env_int("ROUTER_OVERLOAD_WAIT_BUDGET", 180)
 # Router oluşturulduktan bu kadar saniye sonra yeni aşırı-yük beklemesi
 # başlatılmaz (job 30 dk; render + Telegram upload için pay bırakılır).
 OVERLOAD_RETRY_DEADLINE_SECONDS = _env_int("ROUTER_OVERLOAD_RETRY_DEADLINE", 12 * 60)
+# İsteğe bağlı ajanların (Detective / Hook / Critic / Metadata / anlatım modu)
+# aşırı-yük beklemeleri AYRI bir havuzdan düşülür: zenginleştirici ajanlar da
+# yoğunlukta tekrar deneme hakkı alır (kalite), ama zorunlu adımların
+# (Script Writer, Final QA, TTS...) bekleme bütçesini tüketmez.
+OVERLOAD_OPTIONAL_WAIT_BUDGET_SECONDS = _env_int("ROUTER_OPTIONAL_OVERLOAD_WAIT_BUDGET", 120)
 _sleep = time.sleep
 
 # ---
@@ -126,6 +131,7 @@ class SmartRouter:
         self.clients = {}
         self.request_counter = 0
         self._overload_wait_spent = 0.0
+        self._optional_overload_wait_spent = 0.0
         self._created_at = time.monotonic()
         # >0 iken aşırı-yük beklemesi yapılmaz (güvenli varsayılanı olan
         # isteğe bağlı adımlar bütçeyi zorunlu adımlara bırakır).
@@ -396,17 +402,25 @@ class SmartRouter:
             if butce_doldu or round_no >= max_rounds:
                 break
             wait_s = OVERLOAD_RETRY_WAITS[min(round_no - 1, len(OVERLOAD_RETRY_WAITS) - 1)]
-            spent = getattr(self, "_overload_wait_spent", 0.0)
-            remaining = OVERLOAD_WAIT_BUDGET_SECONDS - spent
+            istege_bagli_havuz = profil == "istege_bagli"
+            havuz_alani = "_optional_overload_wait_spent" if istege_bagli_havuz else "_overload_wait_spent"
+            havuz_butcesi = OVERLOAD_OPTIONAL_WAIT_BUDGET_SECONDS if istege_bagli_havuz else OVERLOAD_WAIT_BUDGET_SECONDS
+            spent = getattr(self, havuz_alani, 0.0)
+            remaining = havuz_butcesi - spent
             age = time.monotonic() - getattr(self, "_created_at", time.monotonic())
             if age + wait_s > OVERLOAD_RETRY_DEADLINE_SECONDS:
                 log_ekle(f"⏳ API #{request_id}: çalışma süresi {age/60:.1f} dk; job zaman sınırı için yeniden deneme beklemesi yapılmıyor.")
                 break
             if remaining <= 0:
-                log_ekle(f"⏳ API #{request_id}: aşırı-yük bekleme bütçesi ({OVERLOAD_WAIT_BUDGET_SECONDS}s) tükendi; yeniden deneme yapılmıyor.")
+                log_ekle(f"⏳ API #{request_id}: aşırı-yük bekleme bütçesi ({havuz_butcesi}s{', isteğe bağlı havuz' if istege_bagli_havuz else ''}) tükendi; yeniden deneme yapılmıyor.")
+                break
+            if butce_saniye and (time.perf_counter() - request_started) + wait_s >= butce_saniye:
+                # Bekleme bitince istek bütçesi zaten dolmuş olacak: boşuna uyuma.
+                log_ekle(f"⏱️ API #{request_id}: istek bütçesi ({butce_saniye}s) bekleme sonrasına yetmiyor; yeniden deneme yapılmıyor.")
                 break
             wait_s = min(wait_s, remaining)
-            self._overload_wait_spent = spent + wait_s
+            with self._request_counter_lock:
+                setattr(self, havuz_alani, getattr(self, havuz_alani, 0.0) + wait_s)
             log_ekle(
                 f"⏳ API #{request_id}: tüm model+key kombinasyonları geçici hata verdi (503/kota/timeout). "
                 f"{wait_s:.0f}s beklenip tam tur yeniden deneniyor ({round_no}/{OVERLOAD_RETRY_ROUNDS})."

@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 
 from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
-from core.pipeline import pipeline_calistir, metin_pipeline_calistir
+from core.pipeline import MAX_QA_REGEN, SOCIAL_QA_EXTRA_REGEN, pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
 from core.media import video_suresini_al
 from core.social_fallbacks import caption_fallback, threads_fallback, text as _text
@@ -179,7 +179,8 @@ def _final_report(step_status, warnings, errors, result, tone_key):
         f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
         f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
         "⚡ TTS hız: 1.20x",
-        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / 1",
+        f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / {MAX_QA_REGEN}"
+        + (f" (+{SOCIAL_QA_EXTRA_REGEN} sosyal)" if SOCIAL_QA_EXTRA_REGEN else ""),
         f"✅ QA final: {_qa_final_label(result)}",
         f"🎚️ Senkron: {result.get('sync_note') or 'TTS gerçek WAV süresi doğrulandı'}",
     ]
