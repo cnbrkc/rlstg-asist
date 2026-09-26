@@ -41,6 +41,15 @@ VOICE_DURATION_MAX_RATIO = 1.15
 # hızı) zaten kapatıyor; tam Script+Critic turu API yoğunluğunda pahalıdır.
 VOICE_WORD_TOLERANCE_RATIO = 0.20
 
+# --- Cümle-tabanlı uzunluk bütçesi (Eylül 2026, 2. tur) ----------------------
+# Flash serisi TOPLAM kelime sayısını tutturamaz (355 hedef → 155/150/160
+# üretti) ama liste elemanı / cümle SAYABİLİR. Hedef kelime, ortalama Türkçe
+# cümle uzunluğuna bölünüp "TAM N cümle yaz" olarak verilir; kod tarafındaki
+# deterministik kelime kontrolü nihai ölçü olmaya devam eder.
+CUMLE_KELIME_ORTALAMA = 11
+CUMLE_KELIME_MIN = 9
+CUMLE_KELIME_MAX = 13
+
 
 def _safe_result_summary(value):
     """Log model çıktısının içeriğini değil yalnızca güvenli yapısal özetini."""
@@ -193,46 +202,162 @@ def _senaryo_metni(script_state):
     return f"{metin} {soru}".strip()
 
 
-def _segment_butcesi_olustur(hedef, mod):
-    """Modelin 'kısaca özetle' refleksini kıran somut yapısal bütçe:
-    kaç replik, replik başına kaç kelime. Hedefe ulaşmanın yolu replik
-    SAYISINI artırmaktır; tek başına kelime hedefi flash-lite'ı durdurmaz."""
+def _segment_butcesi_olustur(hedef, minimum, maksimum, mod):
+    """Modelin 'kısaca özetle' refleksini kıran somut yapısal bütçe — CÜMLE TABANLI.
+    Kelime hedefini tek tek saymak flash serisinin yapamadığı iştir; cümle
+    sayabildiği için hedef kelime → cümle hedefine çevrilir (TAM N cümle +
+    cümle başına kelime aralığı). Replik sayısı cümle sayısından türetilir.
+    Nihai ölçü kod tarafındaki deterministik kelime kontrolüdür (değişmez)."""
     try:
         hedef = int(hedef or 0)
+        minimum = int(minimum or 0)
+        maksimum = int(maksimum or 0)
     except (TypeError, ValueError):
-        hedef = 0
-    if hedef <= 100:
-        n_min, n_max, b_min, b_max = 5, 9, 10, 18
-    elif hedef <= 260:
-        n_min, n_max, b_min, b_max = 7, 12, 15, 28
-    else:
-        n_min, n_max, b_min, b_max = 10, 16, 20, 35
-    sonu = " DUO modunda iki konuşmacının kelimeleri birlikte bu bütçeyi oluşturur." if mod == "DUO" else ""
+        hedef, minimum, maksimum = 0, 0, 0
+    if hedef <= 0:
+        hedef, minimum, maksimum = 60, 54, 66
+    hedef_cumle = max(4, round(hedef / CUMLE_KELIME_ORTALAMA))
+    # Kabul aralığı kelime aralığının cümle karşılığı: en uzun cümle varsayımı
+    # alt sınırı, en kısa cümle varsayımı üst sınırı verir.
+    cumle_min = max(3, round(minimum / (CUMLE_KELIME_MAX + 1)))
+    cumle_max = max(hedef_cumle, round(maksimum / CUMLE_KELIME_MIN))
+    replik_min = max(4, -(-hedef_cumle // 2))
+    replik_max = max(replik_min + 1, hedef_cumle)
+    sonu = " DUO modunda iki konuşmacının cümleleri BİRLİKTE bu bütçeyi oluşturur." if mod == "DUO" else ""
     return (
-        f"SEGMENT BÜTÇESİ: Senaryoyu {n_min}-{n_max} replikte kur; her replik ortalama {b_min}-{b_max} kelime olsun.{sonu} "
-        "Kısa boşluk cümleleri ('Evet', 'Doğru') hedefi aşındırır; her replik yeni bilgi, kanıt veya reaksiyon taşımalı. "
-        "Hedefe ulaşmak için replik sayısını artırmaktan çekinme."
+        f"🔢 SÜRE BÜTÇESİ (CÜMLE TABANLI): Seslendirme metnini TAM {hedef_cumle} CÜMLE yaz; kabul aralığı {cumle_min}-{cumle_max} cümle. "
+        f"Her cümle sohbet tempolu, {CUMLE_KELIME_MIN}-{CUMLE_KELIME_MAX} kelime; 18+ kelimelik cümle ve 'Evet', 'Doğru' gibi boşluk cümleleri YASAK. "
+        f"Cümleleri TEK TEK SAY (1, 2, 3, ...): hedefe ulaşmadan bitirmek YASAK. "
+        f"Cümleleri {replik_min}-{replik_max} repliğe böl; her replik 1-2 cümle ve her replik yeni bilgi, kanıt veya reaksiyon taşımalı.{sonu} "
+        "Kelime hedefi bu bütçeden doğar: cümle sayısını yakalarsan kelime hedefi kendiliğinden gelir."
     )
 
 
-def _uzatma_gecerli_mi(eski_metin, yeni_metin, eski_adet, yeni_adet):
+def _metni_normalizle(metin):
+    """Segment/soru karşılaştırma normalizasyonu: TTS etiketlerini atar,
+    boşlukları sıkıştırır, casefold eder ve uçlardaki noktalamayı temizler."""
+    m = re.sub(r"\[[^\]]*\]", " ", str(metin or ""))
+    m = re.sub(r"\s+", " ", m).strip().casefold()
+    return m.strip(" .,!?;:…-")
+
+
+def _uzatma_gecerli_mi(eski_metin, yeni_metin, eski_adet, yeni_adet, eski_parcalar=None):
     """Uzatma çıktısını kabul etme koşulları:
     1) Yeni metin eskisinden UZUN olmalı (uzatmanın tek işlevi kelime kazandırmak).
     2) Açılış korunmalı: eski senaryonun (TTS etiketsiz, normalizasyonlu) ilk
        60 karakteri yeni metinde aynen geçmeli. Model yalnızca ekteleri değil
-       TAM senaryoyu döndürmek zorunda; yoksa kapağa gömülü hook açılışı kaybolur."""
+       TAM senaryoyu döndürmek zorunda; yoksa kapağa gömülü hook açılışı kaybolur.
+    3) eski_parcalar verildiyse: eski repliklerin HER BİRİ (normalizasyonlu metniyle)
+       yeni metinde AYNI SIRADA yer almalı. Model açılışı korusa bile ortadaki
+       replikleri yeniden yazarak "kopuk ikinci senaryo" üretemez."""
     if yeni_adet <= eski_adet:
         return False
-
-    def _norm(m):
-        m = re.sub(r"\[[^\]]*\]", " ", str(m or ""))
-        return re.sub(r"\s+", " ", m).strip().casefold()
-
-    eski, yeni = _norm(eski_metin), _norm(yeni_metin)
+    eski, yeni = _metni_normalizle(eski_metin), _metni_normalizle(yeni_metin)
     if not eski:
         return True
     onecik = eski[:60].rstrip()
-    return bool(onecik) and onecik in yeni
+    if not onecik or onecik not in yeni:
+        return False
+    if eski_parcalar:
+        poz = 0
+        for parca in eski_parcalar:
+            p = _metni_normalizle(parca)
+            if not p:
+                continue
+            idx = yeni.find(p, poz)
+            if idx < 0:
+                return False
+            poz = idx + len(p)
+    return True
+
+
+# Dolgu edat/edek/kısaltmalar: token örtüşme hesabında anlam taşımaz; filtre
+# edilmezse kısa repliklerde sahte yüksek Jaccard verir.
+_TEKRAR_DURAK = frozenset({
+    "ve", "ile", "de", "da", "ki", "mi", "mı", "mu", "mü", "bir", "bu", "şu",
+    "o", "ise", "ama", "veya", "her", "ne", "çok", "daha", "en", "için",
+    "gibi", "şimdi", "aslında", "bence", "sana", "ben", "evet", "hayır",
+    "hala", "hâlâ", "diye", "yani", "böyle",
+})
+
+
+def _anlami_tokenlar(metin):
+    m = re.sub(r"\[[^\]]*\]", " ", str(metin or ""))
+    return {
+        t for t in re.findall(r"[0-9a-zçğıöşü]+", m.casefold())
+        if (len(t) > 2 or t.isdigit()) and t not in _TEKRAR_DURAK
+    }
+
+
+def _tekrarli_replik_var_mi(eski_segments, yeni_segments, esik=0.6):
+    """Yeni repliklerden biri eski repliklerden (veya diğer yeni repliklerden)
+    biriyle eşik kadar token paylaşıyorsa MÜKERRER ANLATICILIK (aynı fikrin
+    kelimeler değiştirilip tekrar anlatılması) sayılır. Flash modeller 'uzat'
+    derken mevcut replikleri cümle çevirerek tekrar ettirir; prompt uyarısı
+    bunu tam durduramaz → deterministik koruma. Token Jaccard kullanılır:
+    gerçek tekrar ~0.7+, 'aynı rakamı referans alma' (callback) ~0.2."""
+    yeniler = [
+        _anlami_tokenlar(seg.get("text"))
+        for seg in (yeni_segments or [])
+        if isinstance(seg, dict) and str(seg.get("text") or "").strip()
+    ]
+    eskiler = [
+        _anlami_tokenlar(seg.get("text"))
+        for seg in (eski_segments or [])
+        if isinstance(seg, dict) and str(seg.get("text") or "").strip()
+    ]
+    for i, t in enumerate(yeniler):
+        if not t:
+            continue
+        for esk in eskiler:
+            if esk and len(t & esk) / max(1, len(t | esk)) >= esik:
+                return True
+        for j in range(i + 1, len(yeniler)):
+            if yeniler[j] and len(t & yeniler[j]) / max(1, len(t | yeniler[j])) >= esik:
+                return True
+    return False
+
+
+def _ek_replikler_bul(eski_segments, yeni_segments):
+    """Tam senaryo çıktısındaki EKLENTİ replikler: eski repliklerin birebir
+    (normalizasyonlu) kopyaları düşüldükten sonra kalanlar. Mükerrerlik
+    kontrolü yalnız eklentilere uygulanır — korunan eski replikler 'kendisiyle
+    aynı' sayılır; bu hata değil, uzatma sözleşmesinin ta kendisidir."""
+    kalan = [seg for seg in (yeni_segments or []) if isinstance(seg, dict)]
+    for eski_seg in (eski_segments or []):
+        if not isinstance(eski_seg, dict):
+            continue
+        hedef = _metni_normalizle(eski_seg.get("text"))
+        if not hedef:
+            continue
+        for idx, seg in enumerate(kalan):
+            if _metni_normalizle(seg.get("text")) == hedef:
+                del kalan[idx]
+                break
+    return kalan
+
+
+def _kapanis_sorusunu_ayristir(script_state, log=None):
+    """Kapanış sorusu REPLİK olarak segments'te duruyorsa çıkarır.
+
+    Soru `yorum_tetikleyici_soru` alanındadır ve sistem seslendirme metninin
+    EN SONUNA ekler. Replik listesinde de duruyorsa (a) uzatmada yeni replikler
+    ondan sonra geldiği için soru metnin ORTASINA gömülür, (b) seslendirme soruyu
+    iki kez okur. Model bu alanı AYNEN korumaya zorlandığı için replik kopyası
+    güvenle atılabilir; akışta kapanış her zaman (tek sefer) soruyla biter."""
+    if not isinstance(script_state, dict) or not script_state:
+        return script_state or {}
+    soru = _metni_normalizle(script_state.get("yorum_tetikleyici_soru"))
+    if not soru:
+        return script_state
+    segments = [seg for seg in (script_state.get("segments") or []) if isinstance(seg, dict)]
+    if not segments or _metni_normalizle(segments[-1].get("text")) != soru:
+        return script_state
+    yeni = dict(script_state)
+    yeni["segments"] = segments[:-1]
+    if log:
+        log("🧹 Kapanış sorusu replik listesinden çıkarıldı; sistem soruyu seslendirmenin en sonuna ekleyecek.")
+    return yeni
 
 
 def _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani=None):
@@ -402,17 +527,20 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             satirlar.append(f"{i}. [{sp}] {tag} {metin}".rstrip())
         mevcut_metin = "\n".join(satirlar) or "(boş)"
         eksik = max(1, int(eksik_kelime or 0))
+        eksik_cumle = max(1, round(eksik / CUMLE_KELIME_ORTALAMA))
         prompt = (
             f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
             f"{diyalog_kurallari}\n"
             "🚨 GÖREV: SENARYO UZATMA — başka hiçbir işlevin yok.\n"
             f"Aşağıdaki mevcut senaryo {int(mevcut_kelime or 0)} kelime. Hedef TOPLAM {int(hedef_kelime or 0)} kelime ({hedef_kelime_bilgisi}).\n"
-            f"Yani yaklaşık {eksik} kelime YENİ replik üretmen gerekiyor.\n"
+            f"Yani yaklaşık {eksik_cumle} YENİ CÜMLE (≈{eksik} kelime) üretmen gerekiyor: cümleleri SAY, kelimeleri tek tek saymaya çalışma.\n"
             "KURALLAR:\n"
-            "1) MEVCUT REPLİKLERİ SİLME, KISAALTMA, ÖZETLEME VEYA DÜZELTME: çıktıdaki segments listesi önceki replikleri BİREBİR (aynı kelimeler, aynı sıra) içermek ZORUNDA.\n"
+            "1) MEVCUT REPLİKLERİ SİLME, KISAALTMA, ÖZETLEME VEYA DÜZELTME: çıktıdaki segments listesi önceki replikleri BİREBİR (aynı kelimeler, aynı sıra) içermek ZORUNDA; birini bile değiştirdiysen çıktı otomatik REDDEDİLİR.\n"
             "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; her yeni repliğe TTS etiketi ([vurgulu], [şaşırarak]...) ve doğru speaker ver.\n"
-            "3) Yeni replikler SADECE girdideki HOOK / DETECTIVE / FACT LOCK (yalnız OBSERVED-VERIFIED) / EDITORIAL verilerinden beslensin: yeni rakam, karşılaştırma, Türkiye maliyeti, kronik şikayet, gerçek kullanım senaryosu getir. Aynı fikri farklı cümlelerle yeniden anlatma.\n"
-            "4) Kapanış kuralı geçerli: senaryo hâlâ kışkırtıcı bir SORUyla biter; yorum_tetikleyici_soru alanını AYNEN koru.\n"
+            "3) Yeni replikler SADECE girdideki HOOK / DETECTIVE / FACT LOCK (yalnız OBSERVED-VERIFIED) / EDITORIAL verilerinden beslensin: yeni rakam, karşılaştırma, Türkiye maliyeti, kronik şikayet, gerçek kullanım senaryosu getir. "
+            "Aynı fikri farklı cümlelerle yeniden anlatmak MÜKERRETTİR ve çıktı otomatik REDDEDİLİR.\n"
+            "4) Kapanış sorusu REPLİK DEĞİLDİR: yorum_tetikleyici_soru alanını AYNEN koru ve segments'e soru cümlesi ekleme — sistem soruyu seslendirmenin EN SONUNA otomatik ekler. "
+            "Mevcut senaryonun son repliği bir soruysa bu repliği AYNEN KORU ve yeni replikleri ondan ÖNCE ekle; böylece kapanış yine soruyla biter.\n"
             "5) Çıktın TAM senaryo olsun: önceki replikler + yeni replikler.\n\n"
             f"MEVCUT SENARYO (birebir koru):\n{mevcut_metin}"
             + (f"\n\nYORUM SORUSU (aynen koru): {eski_soru}" if eski_soru else "")
@@ -423,7 +551,9 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
             f"{diyalog_kurallari}\n"
             "TTS ETİKETLERİ: Her repliğin başına veya içine duygu etiketi ekle. Örn: [gülerek], [şaşırarak], [vurgulu], ... (duraksama).\n"
-            "FİNAL: Senaryoyu kesin bir kararla bitirme. Son cümle, izleyicileri ikiye bölecek ve yorumlarda tartışmaya itecek kışkırtıcı bir SORU olmalı.\n"
+            "FİNAL: Senaryoyu kesin bir kararla bitirme. Kışkırtıcı SORU'yu YALNIZCA yorum_tetikleyici_soru alanına yaz: "
+            "izleyicileri ikiye bölecek, yorumlarda tartışmaya itecek o son soru. Segments listesine soru cümlesi KOYMA — "
+            "son replik o soruyu kışkırtan son bilgi/cümledir; sistem soruyu seslendirmenin en sonuna otomatik ekler.\n"
             f"🚨 SÜRE SÖZLEŞMESİ: Video {float(sure_saniye or 0):.0f} saniye. {hedef_kelime_bilgisi or 'Seslendirme video süresine uygun uzunlukta olmalı.'} "
             "Kısa senaryo YASAK: bu hedefin belirgin şekilde altında kalan senaryo otomatik REDDEDİLİR ve yeniden yazdırılır.\n"
             f"{segment_butcesi}\n"
@@ -780,7 +910,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
     son_duo_script = {}
     son_model = 'hata'
     turkiye_kancasi = _turkiye_ilgi_kancasi_getir(fact_state)
-    segment_butcesi = _segment_butcesi_olustur(hedef, mod)
+    segment_butcesi = _segment_butcesi_olustur(hedef, minimum, maksimum, mod)
 
     # TTS ve Kelime Güvenlik Döngüsü
     #
@@ -788,10 +918,18 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
     # 3 kez denemede 155/150/160 kelime üretti → 1.5x hızlandırmaya rağmen
     # videonun sonu ~25 sn sessiz): "sıfırdan daha uzun yaz" talimatı flash
     # serisinde işe yaramıyor. Kısa senaryo artık TAM YAZIM değil, somut UZATMA
-    # göreviyle düzeltiliyor: mevcut replikler birebir korunur, eksik kelime
-    # sayısı verilir, yeni replikler kanıt havuzundan (Fact Lock/Detective/
-    # Editorial) beslenir. Uzatma geçersizse (açılış kaybolmuş/kısalma) önceki
-    # senaryo korunur ve kalan denemede tekrar denenir.
+    # göreviyle düzeltiliyor: mevcut replikler birebir korunur, eksik miktar
+    # CÜMLE SAYISI olarak verilir (flash kelime sayamaz, cümle sayar), yeni
+    # replikler kanıt havuzundan (Fact Lock/Detective/Editorial) beslenir.
+    # Uzatma geçersizse (açılış kaybolmuş/kısalma, ortadaki replikler yeniden
+    # yazılmış = kopuk senaryo, veya mükerrer replik) önceki senaryo korunur
+    # ve kalan denemede tekrar denenir.
+    #
+    # KAPANIŞ SORUSU (2. tur): soru yalnız `yorum_tetikleyici_soru`
+    # alanındadır ve sistem onu seslendirmenin EN SONUNA ekler. Model soruyu
+    # son replik olarak da yazarsa `_kapanis_sorusunu_ayristir` replik
+    # kopyasını atar: uzatmada soru metnin ortasına gömülmez, seslendirme
+    # soruyu iki kez okumaz.
     script_state = {}
     strateji = "yaz"  # "yaz" = sıfırdan/yeniden yaz; "uzat" = mevcut senaryoyu eklemeyle uzat
     kritik_atla = False
@@ -802,7 +940,12 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         # 3. Script Writer (zorunlu ajan: router'ın aşırı-yük tekrarlarına rağmen
         # düşerse hata yukarı taşınır)
         if strateji == "uzat":
-            eski_script = dict(script_state)
+            # Kapanış sorusu replik değil: replik listesinde duruyorsa önce
+            # çıkar (sistem soruyu en sona ekler) — böylece modelin gördüğü
+            # "mevcut senaryo" gövdedir ve soru uzatmada metnin ortasına gömülmez.
+            eski_script = _kapanis_sorusunu_ayristir(dict(script_state), log)
+            eski_segments = [seg for seg in (eski_script.get("segments") or []) if isinstance(seg, dict) and str(seg.get("text") or "").strip()]
+            eski_parcalar = [str(seg.get("text") or "") for seg in eski_segments]
             onceki_metin = _senaryo_metni(eski_script)
             onceki_adet = _kelime_sayisi(onceki_metin)
             script_state, model_script = _script_writer_calistir(
@@ -812,9 +955,18 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 mevcut_script=eski_script, mevcut_kelime=onceki_adet, eksik_kelime=hedef - onceki_adet,
             )
             script_state = _object_state_or_empty(script_state)
+            # Model soruyu yeniden replik olarak eklediyse de replik kopyası
+            # atılır; kapanış tek sefer, en sonda, alan sorusuyla okunur.
+            script_state = _kapanis_sorusunu_ayristir(script_state, log)
+            yeni_segments = [seg for seg in (script_state.get("segments") or []) if isinstance(seg, dict) and str(seg.get("text") or "").strip()]
             yeni_metin = _senaryo_metni(script_state)
-            if not _uzatma_gecerli_mi(onceki_metin, yeni_metin, onceki_adet, _kelime_sayisi(yeni_metin)):
-                log("⚠️ Uzatma üretimi geçersiz (açılış korunmamış veya metin kısalma); önceki senaryo korunuyor.")
+            # Kabul: uzun + açılış korunmuş + TÜM eski replikler aynı sırada
+            # birebir (kopuk senaryo yok) + EKLENTİLER mükerrer değil (korunan
+            # eski replikler kontrol dışı — birebir kopya sözleşmedir).
+            ek_replikler = _ek_replikler_bul(eski_segments, yeni_segments)
+            if not _uzatma_gecerli_mi(onceki_metin, yeni_metin, onceki_adet, _kelime_sayisi(yeni_metin), eski_parcalar=eski_parcalar) \
+                    or _tekrarli_replik_var_mi(eski_segments, ek_replikler):
+                log("⚠️ Uzatma üretimi geçersiz (açılış/koruma ihlali, kopuk senaryo veya mükerrer replik); önceki senaryo korunuyor.")
                 script_state = eski_script
                 if deneme >= VOICE_REGEN_MAX:
                     log("⚠️ Kelime aralığı hala düzeltilemedi; en iyi mevcut senaryo ile devam ediliyor.")
@@ -828,6 +980,9 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef, segment_butcesi=segment_butcesi,
             )
             script_state = _object_state_or_empty(script_state)
+            # Soru son replik olarak yazıldıysa replik kopyası atılır (bknz.
+            # _kapanis_sorusunu_ayristir); seslendirme soruyu iki kez okumaz.
+            script_state = _kapanis_sorusunu_ayristir(script_state, log)
         son_model = model_script
 
         # 4. Critic (isteğe bağlı: düşerse senaryo onaylı sayılır). QA
@@ -858,17 +1013,19 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 )
                 revize_state = _object_state_or_empty(revize_state)
                 if revize_state.get("segments"):
+                    revize_state = _kapanis_sorusunu_ayristir(revize_state, log)
                     script_state, son_model = revize_state, revize_model
                 else:
                     log("⚠️ Revize senaryo boş döndü; ilk senaryo korunuyor.")
             except Exception as exc:
                 log(f"⚠️ Critic revizesi üretilemedi; ilk senaryo korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
 
-        # Reels State Emülasyonu
+        # Reels State Emülasyonu (seslendirme metni tek kaynaktan: segments +
+        # kapanış sorusu; replik kopyası yukarıda ayrıştırıldı, soru tam bir
+        # kez, en sonda durur.)
         segments = [seg for seg in (script_state.get("segments") or []) if isinstance(seg, dict)]
         soru = str(script_state.get("yorum_tetikleyici_soru") or "").strip()
-        full_text = " ".join(str(seg.get("text", "") or "").strip() for seg in segments)
-        full_text = f"{full_text} {soru}".strip()
+        full_text = _senaryo_metni(script_state)
         secili_kapak = kapak_basliklari[0] if kapak_basliklari else {"ust": hook_state.get("kapak_metni", ""), "alt": ""}
         reels_state = {
             "seslendirme_metni": full_text,
