@@ -63,6 +63,40 @@ def editorial_promptunu_olustur(icerik_tonu=None):
 def caption_promptunu_olustur(icerik_tonu=None):
     return _oku("caption_prompt.txt") + icerik_tonu_talimati(icerik_tonu, "Caption")
 
+# Caption promptunun JSON şema kuyruğu (metadata promptuna farklı şema ile
+# yeniden bağlanmak için ayrıştırma noktası).
+_CAPTION_SON_KESIM_NOKTASI = "Çıktın SADECE şu Caption şemasına uygun JSON olacak:"
+
+_METADATA_SON = (
+    "\n\n⸻\n\n"
+    "BAŞLIK (reels_baslik): 30-60 karakter. Ana anahtar kelime + tek güçlü kanca. "
+    "Kapak başlığını birebir KOPYALA YASAK; soru işareti ve ünlem sıralaması yok; abartılı süsleme yok.\n\n"
+    "reels_aciklama ve reels_hashtag alanlarını yukarıdaki CAPTION BİÇİMİ + HASHTAG KURALLARINA göre üret: "
+    "açıklama 700-850 karakter (900'ü ASLA aşma), hashtag TAM 5 adet (daha az ya da fazla YASAK).\n\n"
+    "Çıktın SADECE şu Metadata şemasına uygun JSON olacak:\n"
+    "{\n"
+    "  \"reels_baslik\": \"...\",\n"
+    "  \"reels_aciklama\": \"...\",\n"
+    "  \"reels_hashtag\": [\"...\", \"...\", \"...\", \"...\", \"...\"]\n"
+    "}\n"
+)
+
+def metadata_promptunu_olustur(icerik_tonu=None):
+    """Metadata (Başlık & Caption) ajanı promptu.
+
+    Kök neden (Eylül 2026): Telegram'a giden caption'ı üreten Metadata ajanının
+    promptu 2 satırlıktı — karakter hedefi, 5-hashtag kuralı, Fact Lock sınırları
+    hiç yoktu; detaylı caption_prompt.txt yalnız fallback Caption ajanına gidiyordu.
+    Caption kuralları tek kaynaktan (caption_prompt.txt) alınır; yalnız JSON şema
+    kuyruğu Metadata şemasıyla değiştirilir. Böylece iki ajan arasında kural
+    sapması tekrar oluşmaz.
+    """
+    base = _oku("caption_prompt.txt")
+    kesim = base.find(_CAPTION_SON_KESIM_NOKTASI)
+    if kesim != -1:
+        base = base[:kesim]
+    return base + _METADATA_SON + icerik_tonu_talimati(icerik_tonu, "Metadata")
+
 def threads_promptunu_olustur(icerik_tonu=None):
     return _oku("threads_promptu.txt") + icerik_tonu_talimati(icerik_tonu, "Threads")
 

@@ -48,6 +48,11 @@ from core.social_fallbacks import (
 
 TOPLAM_ADIM = len(PIPELINE_ADIMLARI)
 MAX_QA_REGEN = 1
+# Telegram video caption sınırı 1024 karakter; açıklama + 5 hashtag güvenli
+# biçimde sığmalı ki worker sonradan metni kesmek ZORUNDA KALMASIN
+# (caption_prompt.txt'taki 700-850 hedefinin kod tarafındaki sert tavanı).
+CAPTION_AZAM_KARAKTER = 900
+HASHTAG_AZAM_SAYI = 5
 # Seslendirme/video yenilemesinden sonra kalan hatalar YALNIZ sosyal katmandaysa
 # (caption / threads / kapak metni — videoyu değiştirmeyen, ucuz çağrılar) QA
 # geri bildirimiyle bir ek yenileme turu daha yapılır; kalite teslim edilmeden
@@ -89,21 +94,59 @@ def _json_object_or_none(value):
     return None
 
 
-def _caption_state_normalize(value):
+def _caption_kurallari_uygula(deger, hashtags):
+    """Deterministik sosyal kurallar — model sözünü tutmazsa KOD tutar:
+      * açıklama: CAPTION_AZAM_KARAKTER tavanı (kelime sınırında kesim, sarkık
+        noktalama temizliği) — Telegram 1024'lük video caption sınırına 5
+        hashtagle birlikte sığacak payı korur;
+      * hashtag: tekrarsız, HASHTAG_AZAM_SAYI tavanı (sıra korunur).
+    Prompt'taki '700-850 karakter, TAM 5 hashtag' kuralının kod tarafındaki
+    güvencesidir; kısa metin burada UZATILMAZ (QA caption_check + kontrollü
+    yenileme mekanizmasıyla işlenir)."""
+    deger = str(deger or "").strip()
+    if len(deger) > CAPTION_AZAM_KARAKTER:
+        kesim = deger[:CAPTION_AZAM_KARAKTER]
+        if " " in kesim:
+            kesim = kesim.rsplit(" ", 1)[0]
+        deger = kesim.rstrip(" ,;:.!?…-")
+    etiketler, gorulen = [], set()
+    for t in (hashtags or []):
+        t = str(t or "").strip()
+        if not t:
+            continue
+        anahtar = t.lstrip("#").casefold()
+        if not anahtar or anahtar in gorulen:
+            continue
+        gorulen.add(anahtar)
+        etiketler.append(t)
+        if len(etiketler) >= HASHTAG_AZAM_SAYI:
+            break
+    return deger, etiketler
+
+
+def _caption_state_normalize(value, log=None):
     """Metadata ajanı (`reels_aciklama`/`reels_hashtag`) ve Caption ajanı
-    (`reels_aciklamasi`/`reels_hashtagleri`) çıktıları aynı forma indirgenir."""
+    (`reels_aciklamasi`/`reels_hashtagleri`) çıktıları aynı forma indirgenir;
+    deterministic kurallar (900 karakter / 5 hashtag tavanı) uygulanır."""
     parsed = _json_object_or_none(value)
     if parsed is not None:
         aciklama = parsed.get("reels_aciklamasi") or parsed.get("reels_aciklama") or ""
         hashtags = parsed.get("reels_hashtagleri")
         if not isinstance(hashtags, list) or not hashtags:
             hashtags = parsed.get("reels_hashtag")
+        ham = hashtags if isinstance(hashtags, list) else []
+        ham_deger = str(aciklama or "").strip()
+        deger, etiketler = _caption_kurallari_uygula(aciklama, ham)
+        ham_adet = len([x for x in ham if str(x or "").strip()])
+        if callable(log) and (deger != ham_deger or len(etiketler) < ham_adet):
+            log(f"✂️ Caption kuralları uygulandı: açıklama {len(ham_deger)}→{len(deger)} karakter | hashtag {ham_adet}→{len(etiketler)} (tavan {CAPTION_AZAM_KARAKTER} karakter / {HASHTAG_AZAM_SAYI} etiket).")
         return {
-            "reels_aciklamasi": str(aciklama or ""),
-            "reels_hashtagleri": hashtags if isinstance(hashtags, list) else [],
+            "reels_aciklamasi": deger,
+            "reels_hashtagleri": etiketler,
         }
     if isinstance(value, str) and value.strip():
-        return {"reels_aciklamasi": value.strip(), "reels_hashtagleri": []}
+        deger, _ = _caption_kurallari_uygula(value, [])
+        return {"reels_aciklamasi": deger, "reels_hashtagleri": []}
     return {"reels_aciklamasi": "", "reels_hashtagleri": []}
 
 
@@ -295,7 +338,7 @@ def _caption_model(router, reels_state, fact_state, editorial_state, video_state
         log, "Caption + Hashtag (Gemini)",
         lambda: router.metin_uret(content, prompt, CAPTION_SCHEMA, log, arama_kullan=False),
     )
-    return _caption_state_normalize(result), model
+    return _caption_state_normalize(result, log), model
 
 
 def _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
@@ -635,7 +678,7 @@ def _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, 
 
 def _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton):
     """Metadata ajanı açıklama/hashtag vermediyse Caption ajanı ile tamamlar."""
-    caption_state = _caption_state_normalize(caption_state)
+    caption_state = _caption_state_normalize(caption_state, log)
     if caption_state.get("reels_aciklamasi") and caption_state.get("reels_hashtagleri"):
         return caption_state, model_caption
     log("⚠️ Metadata ajanı eksik caption/hashtag döndü; Caption ajanı ile tamamlanıyor.")
@@ -644,7 +687,7 @@ def _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, 
     except Exception as exc:
         log(f"⚠️ Caption tamamlama başarısız; worker sosyal fallback'i devreye girecek: {str(exc)[:160]}")
         return caption_state, model_caption
-    yeni = _caption_state_normalize(yeni)
+    yeni = _caption_state_normalize(yeni, log)
     return {
         "reels_aciklamasi": caption_state.get("reels_aciklamasi") or yeni.get("reels_aciklamasi", ""),
         "reels_hashtagleri": caption_state.get("reels_hashtagleri") or yeni.get("reels_hashtagleri", []),
@@ -737,7 +780,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
     mod_karari = _mod_karari_al(editorial_state)
 
     # Metadata'dan Caption'ı al
-    caption_state = _caption_state_normalize(metadata_state)
+    caption_state = _caption_state_normalize(metadata_state, log)
     model_caption = "agentic"
     caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton)
 
@@ -845,7 +888,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
                 # şablondan iyidir.
                 log("⚠️ Caption yenilemesi yanıt vermedi; önceki model caption'ı korunuyor.")
                 caption_state, model_caption = onceki_caption
-            caption_state = _caption_state_normalize(caption_state)
+            caption_state = _caption_state_normalize(caption_state, log)
 
         if downstream_threads:
             onceki_threads = (threads_state, model_threads)
@@ -984,7 +1027,7 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     editorial_state = mod_future.result()
     state['editorial_state'] = editorial_state; state['anlatim_modu_karari'] = _mod_karari_al(editorial_state)
     state['reels_state'] = reels_state; state['duo_plan'] = duo_plan; state['duo_script'] = duo_script; state['ses_modu'] = ses_modu; state['qa_regeneration_rounds'] = qa_rounds; state['qa_pass'] = qa_pass
-    state['caption_state'] = _caption_state_normalize(caption_state); state['threads_state'] = _threads_state_normalize(threads_state); state['qa_state_final'] = qa_state
+    state['caption_state'] = _caption_state_normalize(caption_state, log_ekle); state['threads_state'] = _threads_state_normalize(threads_state); state['qa_state_final'] = qa_state
     _ilerleme(ilerlemeyi_guncelle, 5, '📝 Caption + hashtag'); _ilerleme(ilerlemeyi_guncelle, 6, '🧵 Threads'); _ilerleme(ilerlemeyi_guncelle, 7, '🔍 QA')
     _ilerleme(ilerlemeyi_guncelle, 8, '🎧 Ses üretiliyor...')
     if not qa_pass:

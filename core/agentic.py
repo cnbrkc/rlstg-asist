@@ -21,7 +21,7 @@ from core.schemas import (
     DETECTIVE_SCHEMA, HOOK_GEN_SCHEMA, SCRIPT_WRITER_SCHEMA,
     CRITIC_SCHEMA, METADATA_GEN_SCHEMA,
 )
-from core.prompts import durumu_metne_donustur, girdi_birlestir
+from core.prompts import durumu_metne_donustur, girdi_birlestir, metadata_promptunu_olustur
 from core.media import (
     _ses_suresini_al, gecici_ses_yolu, temp_dosya_temizle,
 )
@@ -185,6 +185,56 @@ def _kelime_sayisi(metin):
     return len(re.findall(r"\b[\wÇĞİÖŞÜçğıöşüÀ-ÿ]+(?:[-'][\wÇĞİÖŞÜçğıöşüÀ-ÿ]+)*\b", str(metin or ""), re.UNICODE))
 
 
+def _senaryo_metni(script_state):
+    """Senaryonun seslendirilecek tamamı: tüm segment metinleri + kapanış sorusu."""
+    segments = [seg for seg in ((script_state or {}).get("segments") or []) if isinstance(seg, dict)]
+    metin = " ".join(str(seg.get("text", "") or "").strip() for seg in segments)
+    soru = str((script_state or {}).get("yorum_tetikleyici_soru") or "").strip()
+    return f"{metin} {soru}".strip()
+
+
+def _segment_butcesi_olustur(hedef, mod):
+    """Modelin 'kısaca özetle' refleksini kıran somut yapısal bütçe:
+    kaç replik, replik başına kaç kelime. Hedefe ulaşmanın yolu replik
+    SAYISINI artırmaktır; tek başına kelime hedefi flash-lite'ı durdurmaz."""
+    try:
+        hedef = int(hedef or 0)
+    except (TypeError, ValueError):
+        hedef = 0
+    if hedef <= 100:
+        n_min, n_max, b_min, b_max = 5, 9, 10, 18
+    elif hedef <= 260:
+        n_min, n_max, b_min, b_max = 7, 12, 15, 28
+    else:
+        n_min, n_max, b_min, b_max = 10, 16, 20, 35
+    sonu = " DUO modunda iki konuşmacının kelimeleri birlikte bu bütçeyi oluşturur." if mod == "DUO" else ""
+    return (
+        f"SEGMENT BÜTÇESİ: Senaryoyu {n_min}-{n_max} replikte kur; her replik ortalama {b_min}-{b_max} kelime olsun.{sonu} "
+        "Kısa boşluk cümleleri ('Evet', 'Doğru') hedefi aşındırır; her replik yeni bilgi, kanıt veya reaksiyon taşımalı. "
+        "Hedefe ulaşmak için replik sayısını artırmaktan çekinme."
+    )
+
+
+def _uzatma_gecerli_mi(eski_metin, yeni_metin, eski_adet, yeni_adet):
+    """Uzatma çıktısını kabul etme koşulları:
+    1) Yeni metin eskisinden UZUN olmalı (uzatmanın tek işlevi kelime kazandırmak).
+    2) Açılış korunmalı: eski senaryonun (TTS etiketsiz, normalizasyonlu) ilk
+       60 karakteri yeni metinde aynen geçmeli. Model yalnızca ekteleri değil
+       TAM senaryoyu döndürmek zorunda; yoksa kapağa gömülü hook açılışı kaybolur."""
+    if yeni_adet <= eski_adet:
+        return False
+
+    def _norm(m):
+        m = re.sub(r"\[[^\]]*\]", " ", str(m or ""))
+        return re.sub(r"\s+", " ", m).strip().casefold()
+
+    eski, yeni = _norm(eski_metin), _norm(yeni_metin)
+    if not eski:
+        return True
+    onecik = eski[:60].rstrip()
+    return bool(onecik) and onecik in yeni
+
+
 def _reels_kelime_ayarlarini_hazirla(sure_saniye, kelime_hizi_orani=None):
     """Hedef/minimum/maksimum kelime + oran + yuvarlama birimlerini hesaplar."""
     oran = float(kelime_hizi_orani or KELIME_HIZI_ORANI)
@@ -278,14 +328,35 @@ KAPAK_FORMAT_KURALI = (
     "Örnek: ust='BU SUV NORMAL DEĞİL' / alt='Aile arabası gibi duruyor ama değil'."
 )
 
+# Kalite çubuğu (Eylül 2026: şablon odaklı prompt genel geçer, somutsuz başlık
+# üretiyordu: 'ARTIK HİÇBİR ŞEY AYNI' / 'Tüm dengeler değişiyor'). Somut dayanak
+# zorunlu; genel geçer formüller yasak.
+KAPAK_KALITE_KURALI = (
+    "🚨 [Kural: Kapak Başlığı Kalite Çubuğu] — İSTİSNASIZ:\n"
+    "- SOMUT DAYANAK ZORUNLU: En az 3 alternatiften biri (tercihen 1. sıra) Fact Lock / Detective verisindeki "
+    "SOMUT bir unsuru içersin: rakam, fiyat, model adı, ÖTV/vergi, pazar, nesil, ölçülebilir fark. "
+    "Somut isimsiz 'şok/devrim/krallık/denge değişti' dili YASAK.\n"
+    "- GENEL GEÇER KALİPLER YASAK: 'ARTIK HİÇBİR ŞEY AYNI', 'TAMAMEN DEVRİM', 'BÜYÜK ŞOK', 'HERKES YANILIYOR' "
+    "gibi boş iddialar; alt başlıkta bile 'tüm dengeler değişiyor' gibi hiçbir şey söylemeyen cümleler yazma.\n"
+    "- HER ALT BAŞLIK BİR SEBEP VERSİN: 'Neden izleyeceksin' sorusuna somut ipucu ver (cevabı değil); "
+    "kurmaca süsleme ve abartılı sıfat yığını (devasa, tarihin, efsanevi) kullanma.\n"
+    "- 1. SIRA KULLANILACAK KAPAKTIR: 5 alternatifin EN GÜÇLÜ ve EN SOMUT olanı 1. sıraya yazılmalı; "
+    "kalitesi düşen alternatifleri son sıraya koy.\n"
+    "- ÖRNEK (iyi): ust='ALMAN TEKELİ BİTİYOR' / alt='Lüks sedana 10 yıldır ilk ciddi hamle' — somut pazar + ölçülebilir iddia.\n"
+    "- ÖRNEK (kötü): ust='ARTIK HİÇBİR ŞEY AYNI' / alt='Tüm dengeler değişiyor' — somut dayanak yok, kullanılamaz."
+)
+
 
 def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim=""):
     prompt = (
         "Sen otoXtra'nın Kışkırtıcı Kanca Üreticisisin. Dedektifin bulduğu malzemeyi kullanarak "
         "ilk 3 saniyede izleyiciyi şok edecek bir kanca üreteceksin.\n"
         "Şablonlardan birini seç: Efsane_Curutme, Ters_Kose, Negatif_Uyari.\n"
+        "Şablon FORMÜLDÜR; metin somut dayanakla (rakam, model, pazar, vergi) doldurulur — formülün kendisini basma.\n"
         "Kapak metni ve ilk 3 saniye kancası ultra viral ve iddialı olmalı; ilk 3 saniye kancası kapak başlığını birebir tekrar etmemeli.\n\n"
         + KAPAK_FORMAT_KURALI
+        + "\n\n"
+        + KAPAK_KALITE_KURALI
     )
     if geri_bildirim:
         prompt += f"\n\n🚨 FINAL QA GERİ BİLDİRİMİ (kapak/kancayı buna göre düzelt): {geri_bildirim}"
@@ -300,7 +371,7 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
     )
 
 
-def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO", qa_geri_bildirimi=""):
+def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO", qa_geri_bildirimi="", hedef_kelime=0, segment_butcesi="", mevcut_script=None, mevcut_kelime=0, eksik_kelime=0):
     if mod == "DUO":
         karakter_bilgisi = "Karakterler: Autonoe (şüpheci, zeki kadın), Charon (iddialı, kanıtlayan erkek). İki kişilik doğal muhabbet."
         diyalog_kurallari = (
@@ -316,16 +387,47 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
         karakter_bilgisi = "Karakter: Sadece Charon (iddialı, kanıtlayan erkek). Tek kişilik monolog."
         diyalog_kurallari = "Akış: hook → bilgi → dönüş → callback. Diyalog kalıbı, ikinci karaktere hitap veya soru-cevap boşluğu YASAK."
 
-    prompt = (
-        f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
-        "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
-        f"{diyalog_kurallari}\n"
-        "TTS ETİKETLERİ: Her repliğin başına veya içine duygu etiketi ekle. Örn: [gülerek], [şaşırarak], [vurgulu], ... (duraksama).\n"
-        "FİNAL: Senaryoyu kesin bir kararla bitirme. Son cümle, izleyicileri ikiye bölecek ve yorumlarda tartışmaya itecek kışkırtıcı bir SORU olmalı.\n"
-        "Hedef kelime sayısı ve süre: video süresine uygun doğal konuşma hızı."
-    )
-    if hedef_kelime_bilgisi:
-        prompt += f"\n\n🚨 KELİME LİMİTİ: {hedef_kelime_bilgisi}"
+    if mevcut_script is not None:
+        # UZATMA MODU: model sıfırdan "daha uzun yaz" derken kısacık senaryo
+        # üretmeye devam ediyordu (155→150→160 kelime). Uzatma yerel ve somut
+        # bir görevdir: mevcut metni birebir koru, eksik kelimeleri yeni replik
+        # olarak ekle. (Eylül 2026 üretim logundaki kök neden.)
+        eski_segments = [s for s in (mevcut_script.get("segments") or []) if isinstance(s, dict) and str(s.get("text", "") or "").strip()]
+        eski_soru = str(mevcut_script.get("yorum_tetikleyici_soru") or "").strip()
+        satirlar = []
+        for i, seg in enumerate(eski_segments, 1):
+            sp = str(seg.get("speaker") or "?").strip()
+            tag = str(seg.get("tts_tag") or "").strip()
+            metin = str(seg.get("text") or "").strip()
+            satirlar.append(f"{i}. [{sp}] {tag} {metin}".rstrip())
+        mevcut_metin = "\n".join(satirlar) or "(boş)"
+        eksik = max(1, int(eksik_kelime or 0))
+        prompt = (
+            f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
+            f"{diyalog_kurallari}\n"
+            "🚨 GÖREV: SENARYO UZATMA — başka hiçbir işlevin yok.\n"
+            f"Aşağıdaki mevcut senaryo {int(mevcut_kelime or 0)} kelime. Hedef TOPLAM {int(hedef_kelime or 0)} kelime ({hedef_kelime_bilgisi}).\n"
+            f"Yani yaklaşık {eksik} kelime YENİ replik üretmen gerekiyor.\n"
+            "KURALLAR:\n"
+            "1) MEVCUT REPLİKLERİ SİLME, KISAALTMA, ÖZETLEME VEYA DÜZELTME: çıktıdaki segments listesi önceki replikleri BİREBİR (aynı kelimeler, aynı sıra) içermek ZORUNDA.\n"
+            "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; her yeni repliğe TTS etiketi ([vurgulu], [şaşırarak]...) ve doğru speaker ver.\n"
+            "3) Yeni replikler SADECE girdideki HOOK / DETECTIVE / FACT LOCK (yalnız OBSERVED-VERIFIED) / EDITORIAL verilerinden beslensin: yeni rakam, karşılaştırma, Türkiye maliyeti, kronik şikayet, gerçek kullanım senaryosu getir. Aynı fikri farklı cümlelerle yeniden anlatma.\n"
+            "4) Kapanış kuralı geçerli: senaryo hâlâ kışkırtıcı bir SORUyla biter; yorum_tetikleyici_soru alanını AYNEN koru.\n"
+            "5) Çıktın TAM senaryo olsun: önceki replikler + yeni replikler.\n\n"
+            f"MEVCUT SENARYO (birebir koru):\n{mevcut_metin}"
+            + (f"\n\nYORUM SORUSU (aynen koru): {eski_soru}" if eski_soru else "")
+        )
+    else:
+        prompt = (
+            f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
+            "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
+            f"{diyalog_kurallari}\n"
+            "TTS ETİKETLERİ: Her repliğin başına veya içine duygu etiketi ekle. Örn: [gülerek], [şaşırarak], [vurgulu], ... (duraksama).\n"
+            "FİNAL: Senaryoyu kesin bir kararla bitirme. Son cümle, izleyicileri ikiye bölecek ve yorumlarda tartışmaya itecek kışkırtıcı bir SORU olmalı.\n"
+            f"🚨 SÜRE SÖZLEŞMESİ: Video {float(sure_saniye or 0):.0f} saniye. {hedef_kelime_bilgisi or 'Seslendirme video süresine uygun uzunlukta olmalı.'} "
+            "Kısa senaryo YASAK: bu hedefin belirgin şekilde altında kalan senaryo otomatik REDDEDİLİR ve yeniden yazdırılır.\n"
+            f"{segment_butcesi}\n"
+        )
     if feedback:
         prompt += f"\n\n🚨 ELEŞTİRMEN GERİ BİLDİRİMİ (Revize Et): {feedback}"
     if qa_geri_bildirimi:
@@ -344,7 +446,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
         f"VIDEO SÜRESİ: {sure_saniye} saniye"
     )
     return _run_timed(
-        log, "📝 Script Writer Ajan (Senaryo Yazımı)",
+        log, "📝 Script Writer Ajan (Senaryo Yazımı)" if mevcut_script is None else "📝 Script Writer Ajan (Senaryo Uzatma)",
         lambda: router.metin_uret(content, prompt, SCRIPT_WRITER_SCHEMA, log, arama_kullan=False),
     )
 
@@ -374,11 +476,12 @@ def _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=""
     )
 
 
-def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log):
-    prompt = (
-        "Sen otoXtra'nın Viral Metadata Ajanısın. En tartışmalı cümleyi cımbızla ve Instagram/TikTok algoritmasını besleyecek "
-        "başlık, açıklama ve hashtag'leri üret. Yorum ve kaydetme odaklı ol."
-    )
+def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, ton=None):
+    # Caption + hashtag kuralları caption_prompt.txt'teki TEK KAYNAK prompttan
+    # gelir (700-850 karakter, TAM 5 hashtag, Fact Lock sınırları, artifact yasağı)
+    # + reels_baslik talimatı. Eski 2 satırlık prompt kuralsız çıktı ürettiği
+    # için kaldırıldı (Eylül 2026: kısa caption + 7 hashtag).
+    prompt = metadata_promptunu_olustur(ton)
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
         durumu_metne_donustur('SCRIPT', script_state),
@@ -490,11 +593,11 @@ def _arka_plan_baslat(fn, ad):
     return future
 
 
-def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log):
+def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log, ton=None):
     def _calistir():
         return _istege_bagli_ajan(
             log, "🏷️ Metadata Generator Ajan",
-            lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log),
+            lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, ton=ton),
             {},
             router=router,
             atlanabilir=True,
@@ -677,30 +780,71 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
     son_duo_script = {}
     son_model = 'hata'
     turkiye_kancasi = _turkiye_ilgi_kancasi_getir(fact_state)
+    segment_butcesi = _segment_butcesi_olustur(hedef, mod)
 
     # TTS ve Kelime Güvenlik Döngüsü
+    #
+    # UZATMA STRATEJİSİ (Eylül 2026: 123 sn video, 355 kelime hedef, model
+    # 3 kez denemede 155/150/160 kelime üretti → 1.5x hızlandırmaya rağmen
+    # videonun sonu ~25 sn sessiz): "sıfırdan daha uzun yaz" talimatı flash
+    # serisinde işe yaramıyor. Kısa senaryo artık TAM YAZIM değil, somut UZATMA
+    # göreviyle düzeltiliyor: mevcut replikler birebir korunur, eksik kelime
+    # sayısı verilir, yeni replikler kanıt havuzundan (Fact Lock/Detective/
+    # Editorial) beslenir. Uzatma geçersizse (açılış kaybolmuş/kısalma) önceki
+    # senaryo korunur ve kalan denemede tekrar denenir.
+    script_state = {}
+    strateji = "yaz"  # "yaz" = sıfırdan/yeniden yaz; "uzat" = mevcut senaryoyu eklemeyle uzat
+    kritik_atla = False
+
     for deneme in range(VOICE_REGEN_MAX + 1):
+        kritik_atla = False
 
         # 3. Script Writer (zorunlu ajan: router'ın aşırı-yük tekrarlarına rağmen
         # düşerse hata yukarı taşınır)
-        script_state, model_script = _script_writer_calistir(
-            router, hook_state, detective_state, fact_state, editorial_state,
-            video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
-            qa_geri_bildirimi=qa_geri_bildirimi,
-        )
-        script_state = _object_state_or_empty(script_state)
+        if strateji == "uzat":
+            eski_script = dict(script_state)
+            onceki_metin = _senaryo_metni(eski_script)
+            onceki_adet = _kelime_sayisi(onceki_metin)
+            script_state, model_script = _script_writer_calistir(
+                router, hook_state, detective_state, fact_state, editorial_state,
+                video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
+                qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef,
+                mevcut_script=eski_script, mevcut_kelime=onceki_adet, eksik_kelime=hedef - onceki_adet,
+            )
+            script_state = _object_state_or_empty(script_state)
+            yeni_metin = _senaryo_metni(script_state)
+            if not _uzatma_gecerli_mi(onceki_metin, yeni_metin, onceki_adet, _kelime_sayisi(yeni_metin)):
+                log("⚠️ Uzatma üretimi geçersiz (açılış korunmamış veya metin kısalma); önceki senaryo korunuyor.")
+                script_state = eski_script
+                if deneme >= VOICE_REGEN_MAX:
+                    log("⚠️ Kelime aralığı hala düzeltilemedi; en iyi mevcut senaryo ile devam ediliyor.")
+                    kritik_atla = True
+                else:
+                    continue
+        else:
+            script_state, model_script = _script_writer_calistir(
+                router, hook_state, detective_state, fact_state, editorial_state,
+                video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
+                qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef, segment_butcesi=segment_butcesi,
+            )
+            script_state = _object_state_or_empty(script_state)
         son_model = model_script
 
         # 4. Critic (isteğe bağlı: düşerse senaryo onaylı sayılır). QA
         # yenilemesinde de çalışır: izleyici gözüyle etkileşim kalitesini Final
         # QA ölçmez; Critic QA gerekçelerini bilerek değerlendirir.
-        critic_state, _ = _istege_bagli_ajan(
-            log, "🔥 Critic Ajan",
-            lambda: _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=qa_geri_bildirimi),
-            {"score": 10, "approved": True, "feedback": ""},
-            router=router,
-            atlanabilir=True,
-        )
+        # (Geçersiz uzatma sonrası son denemede senaryo DEĞİŞMEDİĞİ için
+        #  tekrar eleştirtilmez; kelime kontrolüne doğrudan geçilir.)
+        if kritik_atla:
+            critic_state = {"score": 10, "approved": True, "feedback": ""}
+        else:
+            critic_state, _ = _istege_bagli_ajan(
+                log, "🔥 Critic Ajan",
+                lambda: _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=qa_geri_bildirimi),
+                {"score": 10, "approved": True, "feedback": ""},
+                router=router,
+                atlanabilir=True,
+            )
 
         # Critic Döngüsü (MAX 1 Revize)
         if not _critic_onayladi_mi(critic_state):
@@ -782,6 +926,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 
         if not tts_segments:
             if deneme < VOICE_REGEN_MAX:
+                strateji = "yaz"
                 hedef_kelime_bilgisi = f"Önceki üretimde konuşma segmenti yoktu. Hedef {hedef}, izin verilen {minimum}-{maksimum} kelime; segments alanını mutlaka doldur."
                 log(f'⚠️ Script Writer boş senaryo döndürdü; yeniden yazılıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
                 continue
@@ -797,8 +942,16 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             if sapma <= VOICE_WORD_TOLERANCE_RATIO:
                 log(f'🎚️ Kelime sayısı aralık dışında ama tolerans içinde (sapma %{sapma*100:.0f} ≤ %{VOICE_WORD_TOLERANCE_RATIO*100:.0f}); yeniden yazım atlandı, video senkron katmanı dengeleyecek.')
             elif deneme < VOICE_REGEN_MAX:
-                hedef_kelime_bilgisi = f"Önceki üretim {adet} kelimeydi. Hedef {hedef}, izin verilen {minimum}-{maksimum}. Bu kez metni mutlaka bu aralıkta tut."
-                log(f'⚠️ Kelime aralığı dışında (sapma %{sapma*100:.0f}); Script Writer yeniden yazıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
+                if adet < minimum:
+                    # Kısa senaryo: sıfırdan yeniden yazım aynı kısa metni geri
+                    # getiriyordu; yerine mevcut senaryoyu koruyan UZATMA görevi.
+                    strateji = "uzat"
+                    hedef_kelime_bilgisi = f"Hedef {hedef} kelime. Kesin aralık {minimum}-{maksimum} kelime."
+                    log(f'⚠️ Kelime aralığı dışında (sapma %{sapma*100:.0f}, {adet}<{minimum}); mevcut senaryo KORUNARAK yeni repliklerle uzatılıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
+                else:
+                    strateji = "yaz"
+                    hedef_kelime_bilgisi = f"Önceki üretim {adet} kelimeydi — ÇOK UZUN. Hedef {hedef}, izin verilen {minimum}-{maksimum}; metni bu aralığa KISALT (gereksiz tekrar ve dolgu repliklerini çıkar)."
+                    log(f'⚠️ Kelime aralığı dışında (sapma %{sapma*100:.0f}, {adet}>{maksimum}); Script Writer yeniden yazıyor ({deneme+1}/{VOICE_REGEN_MAX}).')
                 continue
             else:
                 log('⚠️ Kelime aralığı hala düzeltilemedi, devam ediliyor.')
@@ -807,7 +960,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 
         # Metadata yalnız senaryoya bağlıdır (TTS'e değil): TTS (~45 sn) ile
         # EŞZAMANLI başlatılır; seri çalıştırmada ~15 sn ek bekleme yaratıyordu.
-        metadata_future = _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log)
+        metadata_future = _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log, ton=ton)
 
         # TTS Üretimi
         ses_dosyasi = gecici_ses_yolu()
@@ -818,6 +971,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             metadata_future.cancel()
             temp_dosya_temizle(ses_dosyasi)
             if deneme < VOICE_REGEN_MAX:
+                strateji = "yaz"
                 hedef_kelime_bilgisi = "TTS üretimi başarısız oldu. Daha doğal ve okunabilir bir metin yaz."
                 if mod == "DUO":
                     hedef_kelime_bilgisi += " DUO modunda hem female hem male konuşmacı mutlaka yer almalı."
