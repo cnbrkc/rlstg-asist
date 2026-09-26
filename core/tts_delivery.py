@@ -43,6 +43,18 @@ _STIL = (
      "a short thoughtful beat before the line, then natural pace"),
     (("kabul ederek", "anlayarak", "farkina vararak"),
      "the realization lands, then the line is said plainly"),
+    (("tepki", "tepkiyle", "aninda tepki"),
+     "instant genuine reaction to the previous line — a quick laugh, scoff or beat of surprise as the words imply — then speak only the transcript words"),
+    (("onaylayarak", "tasdikle", "sicak onay"),
+     "warm quick approval, a nod in the voice, then the line"),
+    (("umursamaz", "kayitsiz", "bosvererek", "ilgisizce"),
+     "dry, dismissive, unimpressed; let the indifference color the whole line"),
+    (("abartarak", "abartiyla", "abartili"),
+     "playful exaggeration for comic effect, still credible"),
+    (("israrla", "ustune giderek", "baski kurarak"),
+     "pressing and insistent, leaning into the point without yelling"),
+    (("eglenerek", "keyifle", "eglenceli"),
+     "clearly amused, smiling warmth in the voice"),
 )
 
 _STIL_HARITASI = {anahtar: stil for anahtarlar, stil in _STIL for anahtar in anahtarlar}

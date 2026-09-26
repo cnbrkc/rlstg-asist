@@ -146,7 +146,12 @@ modelden gelen kırpık sonlar (`_kirpik_sonu_temizle`) temizlenir.
 
 **DUO diyalog kuralları** (Script Writer promptu içinde, QA `duo_check` bunları denetler):
 HOOK→FRICTION→PROOF→REVERSAL→PAYOFF/CALLBACK omurgası, 2. turdan itibaren lexical
-uptake, asimetrik ritim (eşit uzunluk/mechanik salınım yasak), callback kapanış.
+uptake, asimetrik ritim (eşit uzunluk/mekanik salınım yasak), callback kapanış.
+**Atışma + kışkırtma + konuşma tepkileri (Eylül 2026 monotonluk düzeltmesi):**
+karşılıklı atışma/iğneleme, arada seyirciyi kışkırtan iddialı cümleler, kısa tepki
+replikleri ('Oha!', 'Bir saniye ya!') ve bazen aynı konuşmacının 2-3 tur üst üste
+konuşması SERBEST ve istenen; cümle bütçesi ortalama 9-13 kelime + 1-5 kelimelik
+kısa tepki cümleleri karışımı. Her yazılan repliğe `tts_tag` zorunlu (boş bırakma).
 SOLO'da: hook→bilgi→dönüş→callback; diyalog kalıbı yasak.
 
 **TTS segment üretimi:** `segments[].text` yalnız duyulacak sözlerdir.

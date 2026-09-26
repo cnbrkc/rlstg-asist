@@ -241,10 +241,16 @@ def _segment_butcesi_olustur(hedef, minimum, maksimum, mod):
     sonu = " DUO modunda iki konuşmacının cümleleri BİRLİKTE bu bütçeyi oluşturur." if mod == "DUO" else ""
     return (
         f"🔢 SÜRE BÜTÇESİ (CÜMLE TABANLI): Seslendirme metnini TAM {hedef_cumle} CÜMLE yaz; kabul aralığı {cumle_min}-{cumle_max} cümle. "
-        f"Her cümle sohbet tempolu, {CUMLE_KELIME_MIN}-{CUMLE_KELIME_MAX} kelime; 18+ kelimelik cümle ve 'Evet', 'Doğru' gibi boşluk cümleleri YASAK. "
+        f"Cümleler ORTALAMA {CUMLE_KELIME_MIN}-{CUMLE_KELIME_MAX} kelimelik sohbet cümleleri olsun; 18+ kelimelik cümle YASAK. "
+        f"RİTİM ÇEŞİTLİLİĞİ ZORUNLU: aralara 1-5 kelimelik KISA TEPKİ cümleleri serpiştir ('Oha!', 'Yok artık!', 'Hah, iyiymiş!', 'Bir saniye ya!') — "
+        f"bunlar ritmi kıran gerçek konuşma tepkileridir, boşluk değildir; her cümleyi {CUMLE_KELIME_MIN}-{CUMLE_KELIME_MAX} kelimeye doldurma. "
+        f"Yalnız kelime doldurmak için yazılmış, anlam taşımayan 'Evet.', 'Doğru.', 'Yani.' doldurmaları YASAK; "
+        f"'Evet ama...' gibi tepki + karşı argüman taşıyan turlar SERBEST. "
         f"Cümleleri TEK TEK SAY (1, 2, 3, ...): hedefe ulaşmadan bitirmek YASAK. "
-        f"Cümleleri {replik_min}-{replik_max} repliğe böl; her replik 1-2 cümle ve her replik yeni bilgi, kanıt veya reaksiyon taşımalı.{sonu} "
-        "Kelime hedefi bu bütçeden doğar: cümle sayısını yakalarsan kelime hedefi kendiliğinden gelir."
+        f"Replikleri {replik_min}-{replik_max} tura böl; her tur 1-3 cümle — kısa tepki replikleri tek başına bir turdur ve her tur yeni bilgi, kanıt veya tepki taşımalı. "
+        f"Tur sahibi değişken olsun: bazen aynı konuşmacı 2-3 tur üst üste devam eder, bazen turlar 1-2 kelimelik hızlı tepkilerle el değiştirir; "
+        f"cümleleri kadın-erkek-kadın-erkek mekanik salınımına DİZME.{sonu} "
+        "Kelime hedefi bu bütçeden doğar: cümle sayısını yakalarsan kelime aralığına zaten yaklaşırsın."
     )
 
 
@@ -526,7 +532,15 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
         diyalog_kurallari = (
             "DUO DİYALOG OMURGASI: HOOK → FRICTION → PROOF → REVERSAL → PAYOFF/CALLBACK kur; ilk iki tur mümkünse farklı konuşmacılardan gelsin.\n"
             "LEXİCAL UPTAKE: 2. turdan itibaren repliklerin çoğu önceki replikteki somut bir iddia, rakam veya kelimeyi yakalasın.\n"
-            "ASİMETRİK RİTİM: Replik uzunlukları eşit olmasın; mekanik kadın-erkek-kadın salınımı, röportaj tipi soru-cevap ve aynı fikrin tekrarı YASAK.\n"
+            "ATIŞMA VE KIŞKIRTMA: Bu bir sunum değil, karşılıklı atışma. Karakterler birbirinin sözünü hafif iğneleme, alay ve ukala dokundurmalarla geri çevirsin; "
+            "arada seyirciyi kışkırtan, ikiye bölen iddialı cümleler kurulsun (\"Bu paraya bunu alana kim 'dur' diyecek?\"). "
+            "Karakterler metni sırayla okuyormuş gibi değil, gerçekten muhabbet edip kendi istediklerini söylüyor gibi dursun.\n"
+            "KONUŞMA TEPKİLERİ (can damarı): Şaşkınlık, onay, itiraz, gülme, 'Bir saniye ya!', 'Yok artık!', 'Hah!' gibi kısa tepki replikleri senaryonun "
+            "can damarıdır; bunları YASAKLAMA, SERBEST BIRAK ve kullan. Tepki repliklerine de uygun tts_tag ver.\n"
+            "ASİMETRİK RİTİM: Replik uzunlukları eşit olmasın; bazen aynı konuşmacı 2-3 replik üst üste konuşsun, bazen turlar 1-2 kelimelik hızlı tepkilerle el değiştirsin. "
+            "Mekanik kadın-erkek-kadın salınımı, röportaj tipi soru-cevap ve aynı fikrin tekrarı YASAK.\n"
+            "TTS ETİKETİ: YAZDIĞIN her repliğe uygun bir duygu/tepki etiketi ver (tts_tag; boş bırakma) ve etiketleri tekdüze yapma: "
+            "[şaşırarak], [gülerek], [alaycı], [kızgin], [vurgulu], [meraklı], [heyecanlı] gibi etiketleri dönüşümlü kullan.\n"
             "Kapanışta açılıştaki kelime/fikre callback yap; iki bağımsız monolog veya şarkıcı düeti hissi olmasın."
         )
     elif mod == "SOLO_FEMALE":
@@ -560,7 +574,8 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             f"Yani yaklaşık {eksik_cumle} YENİ CÜMLE (≈{eksik} kelime) üretmen gerekiyor: cümleleri SAY, kelimeleri tek tek saymaya çalışma.\n"
             "KURALLAR:\n"
             "1) MEVCUT REPLİKLERİ SİLME, KISAALTMA, ÖZETLEME VEYA DÜZELTME: çıktıdaki segments listesi önceki replikleri BİREBİR (aynı kelimeler, aynı sıra) içermek ZORUNDA; birini bile değiştirdiysen çıktı otomatik REDDEDİLİR.\n"
-            "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; TTS etiketini YALNIZCA tts_tag alanına yaz ([vurgulu], [alaycı], [savunarak], [şaşırarak]), text alanına veya cümlenin içine ASLA yazma. Doğru speaker ver.\n"
+            "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; TTS etiketini YALNIZCA tts_tag alanına yaz ([vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek], [meraklı], [heyecanlı]), text alanına veya cümlenin içine ASLA yazma. "
+            "Yeni repliklerin HER BİRİNE uygun bir tts_tag yaz (boş bırakma, etiketleri tekdüze yapma). Doğru speaker ver; yeni repliklere kısa tepki girişiyle başlamak (\"Hah, peki şuna bakın...\") SERBESTTİR ve doğaldır.\n"
             "3) Yeni replikler SADECE girdideki HOOK / DETECTIVE / FACT LOCK (yalnız OBSERVED-VERIFIED) / EDITORIAL verilerinden beslensin: yeni rakam, karşılaştırma, Türkiye maliyeti, kronik şikayet, gerçek kullanım senaryosu getir. "
             "Aynı fikri farklı cümlelerle yeniden anlatmak MÜKERRETTİR ve çıktı otomatik REDDEDİLİR.\n"
             "4) Kapanış sorusu REPLİK DEĞİLDİR: yorum_tetikleyici_soru alanını AYNEN koru ve segments'e soru cümlesi ekleme — sistem soruyu seslendirmenin EN SONUNA otomatik ekler. "
@@ -574,7 +589,8 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
             "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
             f"{diyalog_kurallari}\n"
-            "TTS ETİKETLERİ: Duygu/vurgu bilgisini YALNIZCA tts_tag alanına yaz. Örnek: [vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek]. "
+            "TTS ETİKETLERİ: Duygu/vurgu bilgisini YALNIZCA tts_tag alanına yaz. Örnek: [vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek], [meraklı], [heyecanlı], [kızgin], [fısıldayarak], [duraksayarak]. "
+            "Her repliğe uygun bir etiket yaz, boş bırakma; etiketleri tekdüze yapma — arka arkaya aynı etiketi kullanma. "
             "Bu etiketler seslendirme talimatıdır; TTS onları kelime olarak OKUMAZ, prosodiye çevirir. "
             "text alanına, cümle başına veya cümlenin içine etiket, parantez içi sahne yönergesi veya 'vurgulu/alaycı/savunarak' kelimesini yönerge diye YAZMA. "
             "text'te yalnız izleyicinin duyması gereken kelimeler olsun.\n"
@@ -613,6 +629,8 @@ def _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=""
     prompt = (
         "Sen trol, şüpheci ve zor beğenen bir Türk izleyicisisin. Bu senaryoyu oku.\n"
         "Robotik mi? Sıkıcı mı? Sonundaki soru yorum yaptıracak kadar kışkırtıcı mı?\n"
+        "Karakterler metni sırayla okuyormuş gibi mi (cümleler tek tek, kadın-erkek-kadın mekanik salınımında), yoksa gerçekten atışıp kendi istediklerini söylüyorlar gibi mi? "
+        "Kısa tepki replikleri (şaşkınlık, gülme, itiraz) ve doğal konuşma tepkileri var mı, yoksa her replik aynı düz tonda mı?\n"
         "Eğer 10 üzerinden 7 veya üzeriyse approved: true yap.\n"
         "Değilse approved: false yap ve SADECE NET BİR REVİZE TALİMATI (feedback) ver. Uzatma."
     )
