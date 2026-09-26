@@ -191,8 +191,6 @@ def otv_ek_arastirma(video_state: Dict[str, Any], log_ekle) -> str:
     model = str(kimlik.get("exact_model") or "").strip()
     if not marka or marka.upper() == "UNKNOWN" or not model or model.upper() == "UNKNOWN":
         return ""
-    variant = str(kimlik.get("variant") or "").strip()
-    tam = f"{marka} {model} {variant}".strip()
     yil = datetime.now(ZoneInfo("Europe/Istanbul")).year
     sorgular = [
         f"\"{marka} {model}\" motor hacmi cc elektrik motor kW hibrit",
