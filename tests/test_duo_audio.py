@@ -60,6 +60,23 @@ class DuoAudioTests(unittest.TestCase):
         self.assertEqual(_duo_transcript([]), "")
         self.assertEqual(_duo_transcript(None), "")
 
+    def test_transcript_strips_performance_tags_but_keeps_words(self):
+        segments = [
+            {"speaker": "female", "text": "[vurgulu] Bu fiyat gerçek mi?", "tts_tag": "[alaycı]"},
+            {"speaker": "male", "text": "Savunarak söylüyorum, vergi dilimi bu.", "style": "defensive but calm"},
+        ]
+        transcript = _duo_transcript(segments)
+        self.assertEqual(
+            [
+                "Autonoe: Bu fiyat gerçek mi?",
+                "Charon: Savunarak söylüyorum, vergi dilimi bu.",
+            ],
+            transcript.split("\n"),
+        )
+        self.assertNotIn("vurgulu", transcript.casefold())
+        self.assertNotIn("alaycı", transcript.casefold())
+        self.assertNotIn("[", transcript)
+
 
 if __name__ == "__main__":
     unittest.main()

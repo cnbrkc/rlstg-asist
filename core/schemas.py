@@ -146,7 +146,7 @@ SCRIPT_WRITER_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "speaker": {"type": "string", "enum": ["female", "male"]},
-                    "tts_tag": {"type": "string", "description": "Örn: [gülerek], [şaşırarak], [vurgulu], ..."},
+                    "tts_tag": {"type": "string", "description": "Yalnızca bu alan. Konuşulan text'e yazma. Örn: [vurgulu], [alaycı], [savunarak], [şaşırarak]. TTS bu kelimeleri okumaz."},
                     "text": {"type": "string"}
                 },
                 "required": ["speaker", "tts_tag", "text"]

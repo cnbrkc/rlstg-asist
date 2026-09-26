@@ -18,7 +18,7 @@ class _Router:
         self.calls += 1
         return response, f"fake-model-{self.calls}"
 
-    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
+    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0, **kwargs):
         Path(output).write_bytes(b"fake-audio-data")
         return True, "fake-tts-model"
 

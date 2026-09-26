@@ -133,7 +133,7 @@ def duckduckgo_sorgu(sorgu: str, max_sonuc: int = 5, log_ekle=None, hata_bildir=
         temiz = []
         for r in ham or []:
             title = _temizle_metin(r.get("title", ""), 150)
-            body = _temizle_metin(r.get("body", ""), 500)
+            body = _temizle_metin(r.get("body", ""), 800)
             href = str(r.get("href", "")).strip()
             if title and body:
                 temiz.append({"baslik": title, "icerik": body, "kaynak": href})
@@ -163,17 +163,54 @@ def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
     # 1. Kimlik ve Teknik (yıl: sorgu her zaman güncel kalır)
     yil = datetime.now(ZoneInfo("Europe/Istanbul")).year
     sorgular.append(f"{tam_ad} özellikleri teknik {yil}")
+    # ÖTV dilimi motor hacmi + elektrik motoru kW olmadan seçilemez. Genel
+    # "ÖTV" araması tablonun bütün satırlarını (%70/%170/%220) döndürür.
+    sorgular.append(f"{tam_ad} motor silindir hacmi cc elektrik motor gücü kW")
     # 2. Çelişki ve Şikayet (Agentic fark yaratan sorgu)
     sorgular.append(f"{tam_ad} kullanıcı şikayet sorun gizli kusur")
-    # 3. Türkiye Pazarı
-    sorgular.append(f"{tam_ad} Türkiye fiyat satış ÖTV")
+    # 3. Türkiye Pazarı — modele özel oran, genel tablo değil
+    sorgular.append(f"{tam_ad} Türkiye ÖTV oranı vergi dilimi {yil}")
+    sorgular.append(f"{tam_ad} Türkiye fiyat satış")
     # 4. Viral Araştırma İhtiyaçları (Forensic'ten gelen dinamik sorular)
     for soru in (video_state.get("viral_arastirma_ihtiyaclari") or [])[:2]:
         soru_metni = _temizle_metin(soru, 120)
         if soru_metni:
             sorgular.append(f"{tam_ad} {soru_metni}")
 
-    return sorgular[:6]
+    return sorgular[:7]
+
+
+def otv_ek_arastirma(video_state: Dict[str, Any], log_ekle) -> str:
+    """İlk tur tek ÖTV oranı kilitleyemediyse modele özel teknik + vergi sorgusu.
+
+    Genel tablo snippet'i 500-800 karakterde %70 ve %170'i bir arada gösterir;
+    bu ikinci tur motor hacmi / kW veya modele yazılmış oranı arar.
+    """
+    kimlik = (video_state or {}).get("video_identity") or {}
+    marka = str(kimlik.get("brand") or "").strip()
+    model = str(kimlik.get("exact_model") or "").strip()
+    if not marka or marka.upper() == "UNKNOWN" or not model or model.upper() == "UNKNOWN":
+        return ""
+    variant = str(kimlik.get("variant") or "").strip()
+    tam = f"{marka} {model} {variant}".strip()
+    yil = datetime.now(ZoneInfo("Europe/Istanbul")).year
+    sorgular = [
+        f"\"{marka} {model}\" motor hacmi cc elektrik motor kW hibrit",
+        f"\"{marka} {model}\" Türkiye ÖTV yüzde {yil}",
+    ]
+    bloklar = []
+    for sorgu in sorgular:
+        sonuclar = duckduckgo_sorgu(sorgu, max_sonuc=4, log_ekle=log_ekle)
+        if not sonuclar:
+            continue
+        satirlar = [f"SORGU: {sorgu}"]
+        for i, s in enumerate(sonuclar, 1):
+            satirlar.append(f"  [{i}] {s['baslik']}")
+            satirlar.append(f"      {s['icerik']}")
+        bloklar.append("\n".join(satirlar))
+    if bloklar and callable(log_ekle):
+        log_ekle(f"🔒 ÖTV kilidi için ek teknik/vergi araması: {len(bloklar)} sorgu.")
+    return "\n\n".join(bloklar)
 
 
 def web_arastirma_yap(video_state: Dict[str, Any], log_ekle) -> str:

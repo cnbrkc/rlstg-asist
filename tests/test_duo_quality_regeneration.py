@@ -20,7 +20,7 @@ class _Router:
         self.calls += 1
         return response, f"fake-model-{self.calls}"
 
-    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
+    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0, **kwargs):
         Path(output).write_bytes(b"fake-audio-data")
         return True, "fake-tts-model"
 
@@ -102,8 +102,10 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
         )
 
         self.assertEqual("ready", script["status"])
-        # TTS duygu etiketi segment metninin başında korunur (bkz. test_tts_tags_preserved_in_segments).
-        self.assertEqual("[şaşırarak] Kapıyı bırak, şu fiyata bak.", script["segments"][0]["text"])
+        # Etiket konuşulan metne yazılmaz; prosodi style alanındadır.
+        self.assertEqual("Kapıyı bırak, şu fiyata bak.", script["segments"][0]["text"])
+        self.assertNotIn("şaşırarak", script["segments"][0]["text"].casefold())
+        self.assertIn("surprise", script["segments"][0].get("style", "").casefold())
         self.assertTrue(any("Revize başlatılıyor" in line for line in logs))
 
     @_ses_sure_patch
@@ -134,7 +136,7 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
     @_kelime_patch
     @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
     def test_tts_tags_preserved_in_segments(self, mock_tts, mock_kelime, mock_ses):
-        """TTS etiketleri segmentlerde korunmalı."""
+        """TTS etiketleri konuşulan metne sızmaz; style alanında teslimat notu olarak kalır."""
         script_data = _script([
             {"speaker": "female", "tts_tag": "[şaşırarak]", "text": "Bu fiyat gerçek mi?"},
             {"speaker": "male", "tts_tag": "[gülerek]", "text": "Maalesef gerçek."}
@@ -152,7 +154,8 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
         )
 
         self.assertEqual("ready", script["status"])
-        self.assertTrue(any("[şaşırarak]" in seg.get("text", "") for seg in script["segments"]))
+        self.assertTrue(any("surprise" in seg.get("style", "") for seg in script["segments"]))
+        self.assertFalse(any("şaşırarak" in seg.get("text", "").casefold() or "[" in seg.get("text", "") for seg in script["segments"]))
 
     @_ses_sure_patch
     @_kelime_patch
@@ -177,7 +180,9 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
         self.assertEqual("ready", script["status"])
         last_segment = script["segments"][-1]
         self.assertIn("Bu fiyat normal mi sizce?", last_segment.get("text", ""))
-        self.assertIn("[vurgulu]", last_segment.get("text", ""))
+        self.assertNotIn("vurgulu", last_segment.get("text", "").casefold())
+        self.assertNotIn("[", last_segment.get("text", ""))
+        self.assertIn("stress", last_segment.get("style", "").casefold())
 
     @_ses_sure_patch
     @_kelime_patch

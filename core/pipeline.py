@@ -25,7 +25,15 @@ from core.agentic import (
     _object_state_or_empty,
     agentic_icerik_uretimi, kapaklari_yeniden_uret,
 )
-from core.web_search import web_arastirma_yap
+from core.web_search import otv_ek_arastirma, web_arastirma_yap
+from core.otv_kilidi import (
+    kapaklari_otv_kilidine_cek,
+    otv_kilidi_hesapla,
+    otv_tutarlilik_sorunlari,
+    sosyal_metni_otv_kilidine_cek,
+    vergi_kilidi_talimati,
+    vergi_kilidini_uygula,
+)
 from core.config import KELIME_HIZI_ORANI, PIPELINE_ADIMLARI
 from core.schemas import (
     VIDEO_ANALYSIS_SCHEMA, FACT_LOCK_SCHEMA, EDITORIAL_SCHEMA,
@@ -259,12 +267,22 @@ def _research_calistir(router, video_state, log):
     )
     try:
         with _istek_profili(router, "uzun_metin"):
-            return _run_timed(
+            result, model = _run_timed(
                 log, "Research / Fact Lock (Agentic Web + Gemini Analiz)",
                 lambda: router.metin_uret(content, research_promptunu_olustur(), FACT_LOCK_SCHEMA, log, arama_kullan=False),
             )
     except Exception as exc:
-        return _research_observed_fallback(video_state, exc, log), "forensic-fallback"
+        result, model = _research_observed_fallback(video_state, exc, log), "forensic-fallback"
+        return vergi_kilidini_uygula(result, otv_kilidi_hesapla(result, web_sonuclari, video_state), log), model
+
+    result = _object_state_or_empty(result)
+    kilit = otv_kilidi_hesapla(result, web_sonuclari, video_state)
+    if kilit.get("durum") != "KESIN":
+        ek = otv_ek_arastirma(video_state, log)
+        if ek:
+            web_sonuclari = f"{web_sonuclari}\n\n{ek}".strip()
+            kilit = otv_kilidi_hesapla(result, web_sonuclari, video_state)
+    return vergi_kilidini_uygula(result, kilit, log), model
 
 
 def _editorial_oncelik_denetimi(editorial_state, log):
@@ -312,7 +330,7 @@ def _editorial_oncelik_denetimi(editorial_state, log):
 
 
 def _editorial_calistir(router, video_state, fact_state, notes, log, ton=None):
-    content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE', video_state), durumu_metne_donustur('FACT LOCK', fact_state), notes or '')
+    content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE', video_state), durumu_metne_donustur('FACT LOCK', fact_state), notes or '', vergi_kilidi_talimati(fact_state))
     with _istek_profili(router, "uzun_metin"):
         result, model = _run_timed(
             log, "Editorial Brain (Gemini)",
@@ -333,7 +351,7 @@ def _qa_duzeltme_talimati(katman, qa_geri_bildirimi):
 
 def _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
     content = girdi_birlestir(durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('VIDEO', video_state))
-    prompt = caption_promptunu_olustur(ton) + _qa_duzeltme_talimati("CAPTION", qa_geri_bildirimi)
+    prompt = caption_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state) + _qa_duzeltme_talimati("CAPTION", qa_geri_bildirimi)
     result, model = _run_timed(
         log, "Caption + Hashtag (Gemini)",
         lambda: router.metin_uret(content, prompt, CAPTION_SCHEMA, log, arama_kullan=False),
@@ -363,7 +381,7 @@ def _caption_calistir(router, reels_state, fact_state, editorial_state, video_st
 
 
 def _threads_model(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi=""):
-    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state))
+    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), vergi_kilidi_talimati(fact_state))
     prompt = threads_promptunu_olustur(ton) + _qa_duzeltme_talimati("THREADS", qa_geri_bildirimi)
     result, model = _run_timed(
         log, "Threads (Gemini)",
@@ -656,8 +674,47 @@ def _nonblocking_qa_mi(kalan, ses_basarili, ses_modu, ses_dosyasi, duo_plan, duo
     return True
 
 
+def _otv_sosyal_kilitle(reels_state, caption_state, threads_state, fact_state, log):
+    """Açıklama, Threads ve kapak metnini ÖTV kilidine çeker. Ses dosyası çoktan
+    üretildiyse seslendirme metnine burada dokunulmaz; uyuşmazlık QA yenilemesine kalır."""
+    if isinstance(reels_state, dict):
+        reels_state["kapak_basliklari"] = kapaklari_otv_kilidine_cek(
+            reels_state.get("kapak_basliklari") or [], fact_state, log,
+        )
+    caption_state = sosyal_metni_otv_kilidine_cek(
+        caption_state, ("reels_aciklamasi", "reels_aciklama"), fact_state, log, "aciklama",
+    )
+    threads_state = sosyal_metni_otv_kilidine_cek(
+        threads_state, ("threads_aciklamasi",), fact_state, log, "threads",
+    )
+    return caption_state, threads_state
+
+
+def _otv_qa_zorla(qa_state, reels_state, caption_state, threads_state, fact_state, log):
+    sorunlar = otv_tutarlilik_sorunlari(reels_state, caption_state, threads_state, fact_state)
+    if not sorunlar:
+        return qa_state
+    if callable(log):
+        log("⚠️ ÖTV tutarlılık kilidi: " + "; ".join(sorunlar)[:280])
+    qa_state = dict(qa_state or {})
+    qa_state["overall"] = "FAIL"
+    qa_state["fact_check"] = ("FAIL: " + "; ".join(sorunlar))[:500]
+    hedefler = [str(x) for x in (qa_state.get("regeneration_targets") or []) if str(x).strip()]
+    metin = " ".join(sorunlar)
+    if "seslendirme" in metin or "kanallar" in metin:
+        hedefler.append("VOICEOVER_FAIL")
+    if "aciklama" in metin or "kapak" in metin or "kanallar" in metin:
+        hedefler.append("CAPTION_FAIL")
+    if "threads" in metin or "kanallar" in metin:
+        hedefler.append("THREADS_FAIL")
+    if not any(h in {"VOICEOVER_FAIL", "CAPTION_FAIL", "THREADS_FAIL"} for h in hedefler):
+        hedefler.extend(["VOICEOVER_FAIL", "CAPTION_FAIL"])
+    qa_state["regeneration_targets"] = hedefler
+    return qa_state
+
+
 def _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan=None, duo_script=None, ton=None):
-    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('DUO PLAN', duo_plan or {}), durumu_metne_donustur('DUO SCRIPT', duo_script or {}), durumu_metne_donustur('CAPTION', caption_state), durumu_metne_donustur('THREADS', threads_state), f'VIDEO SÜRESİ: {sure_saniye}', f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}')
+    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('DUO PLAN', duo_plan or {}), durumu_metne_donustur('DUO SCRIPT', duo_script or {}), durumu_metne_donustur('CAPTION', caption_state), durumu_metne_donustur('THREADS', threads_state), f'VIDEO SÜRESİ: {sure_saniye}', f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}', vergi_kilidi_talimati(fact_state))
     try:
         with _istek_profili(router, "uzun_metin"):
             result, model = _run_timed(
@@ -789,7 +846,9 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
 
     for qa_round in range(MAX_QA_REGEN + SOCIAL_QA_EXTRA_REGEN + 1):
         qa_rounds = qa_round
+        caption_state, threads_state = _otv_sosyal_kilitle(reels_state, caption_state, threads_state, fact_state, log)
         qa_state, _ = _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan, duo_script, ton)
+        qa_state = _otv_qa_zorla(qa_state, reels_state, caption_state, threads_state, fact_state, log)
         if not isinstance(qa_state, dict):
             qa_state = _object_state_or_empty(qa_state)
         qa_state = dict(qa_state)

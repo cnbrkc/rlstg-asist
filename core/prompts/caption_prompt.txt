@@ -79,6 +79,7 @@ FACT LOCK / GERÇEKLİK:
 - Fact Lock dışı bilgi uydurma.
 - UNKNOWN bilgiyi gerçek gibi yazma.
 - OBSERVED / VERIFIED bilgileri kullan.
+- SAYISAL TUTARLILIK: Seslendirmede geçen fiyat, ÖTV/vergi yüzdesi, beygir veya menzil caption'da da geçiyorsa BİREBİR aynı rakam olmalı. Caption ekstra bilgi verebilir ama aynı olguyu farklı rakamla yazamaz. ÖTV tablosundan seslendirmenin kullanmadığı başka bir satırı "ekstra değer" diye eklemek YASAK. Fact Lock'ta `vergi_kilidi` varsa yalnız o kilit geçerlidir.
 - Kullanıcı tarafından authoritative olarak verilen marka/model/variant notunu video görselinin tahminiyle değiştirme.
 - Caption, videodaki seslendirmeyi birebir tekrar etmesin; ekstra değer sağlamaya devam etsin.
 

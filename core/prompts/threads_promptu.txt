@@ -17,6 +17,7 @@ KURALLAR:
 - BİTİŞ CÜMLESİ: Doğrudan bir iddiayla bitir. Soru değil, net bir kapanış olsun.
 - TEKNİK SINIRLAR: Max 500 karakter. Hiçbir hashtag (#) kullanılmamalı.
 - Sadece Fact Lock'ta OBSERVED/VERIFIED olan bilgilere dayan; UNKNOWN bilgiyi kesin gerçek gibi kullanma.
+- ÖTV/vergi yüzdesi, fiyat ve teknik rakam Fact Lock `vergi_kilidi` ve VERIFIED olgularla aynı olmalı. Tablodan başka bir satır seçmek veya seslendirme/caption ile çelişen yüzde yazmak yasak.
 - Marka sahibine doğrudan saldırma.
 
 ⸻

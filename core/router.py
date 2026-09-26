@@ -24,6 +24,7 @@ from core.config import (
     model_arama_destekliyor_mu,
 )
 from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
+from core.tts_delivery import teslimatlari_birlestir, transkripti_ayikla
 
 # İstemci düzeyi varsayılan zaman aşımı (ms). Her istek ayrıca kendi profiline
 # göre daha kısa bir zaman aşımı taşır (bkz. ISTEK_PROFILLERI).
@@ -593,19 +594,35 @@ class SmartRouter:
         )
         return guvenli_json_yukle(getattr(response, "text", "")), info
 
-    def _tts_performans_promptu_olustur(self, metin: str, ses_adi: str) -> str:
+    def _tts_performans_promptu_olustur(self, metin: str, ses_adi: str, teslimat: str = "") -> str:
+        not_bloku = ""
+        if str(teslimat or "").strip():
+            not_bloku = (
+                "\n# LINE DELIVERY\n"
+                "Apply each note only as prosody. These notes are not words. Do not speak them.\n"
+                f"{teslimat.strip()}\n"
+            )
         return (
             f"Perform this Turkish automotive voiceover with the configured voice {ses_adi}. "
             "Natural human delivery, not a newsreader and not robotic. Use conversational intonation, "
             "sentence-level emphasis, subtle dynamic energy, and short natural breaths/pauses at punctuation. "
             "Let excitement, curiosity, surprise, seriousness or amusement follow the meaning of each line. "
-            "Do not flatten the whole performance into one emotional register. Keep the transcript exactly as provided; "
-            "add no words, omit no words, and do not read formatting instructions aloud.\n\n"
-            f"TRANSCRIPT:\n{metin}"
+            "Do not flatten the whole performance into one emotional register. "
+            "Speak only the lines under #### TRANSCRIPT. Add no words, omit no words, and do not read "
+            "formatting instructions or delivery notes aloud.\n"
+            f"{not_bloku}\n"
+            f"#### TRANSCRIPT\n{metin}"
         )
 
-    def _tts_coklu_promptu_olustur(self, metin: str, speaker_names) -> str:
+    def _tts_coklu_promptu_olustur(self, metin: str, speaker_names, teslimat: str = "") -> str:
         names = ", ".join(speaker_names)
+        not_bloku = ""
+        if str(teslimat or "").strip():
+            not_bloku = (
+                "\n# LINE DELIVERY\n"
+                "Apply each note only to that turn's prosody. These notes are not words. Do not speak them.\n"
+                f"{teslimat.strip()}\n"
+            )
         return (
             "# AUDIO PROFILE\n"
             f"A real Turkish couple/partner conversation between {names} while watching an automotive clip together. "
@@ -624,9 +641,11 @@ class SmartRouter:
             "evidence lines may breathe slightly; the reversal lands with a tiny thought beat; the callback ends with momentum, not an outro.\n"
             "Dynamics: Keep emotional changes subtle and content-led. No alternating 'excited/serious/amazed' pattern, exaggerated gasps, "
             "radio smile, theatrical projection or overacting. Distinct personalities, shared acoustic space.\n"
-            "Integrity: Keep every spoken word exactly as provided, in order. Add no fillers, laughter or sound effects; omit no words. "
-            "Do not read speaker labels or these directions aloud.\n\n"
-            f"# TRANSCRIPT BETWEEN {names}\n{metin}"
+            "Integrity: Speak every word under #### TRANSCRIPT exactly, in order. Add no words and omit no words. "
+            "Do not speak speaker labels, line-delivery notes, or anything above #### TRANSCRIPT. "
+            "A delivery note may change stress, pace, or a short non-speech reaction; never turn that note into spoken words.\n"
+            f"{not_bloku}\n"
+            f"#### TRANSCRIPT\n{metin}"
         )
 
     def _tts_response_audio_bytes(self, response):
@@ -658,6 +677,7 @@ class SmartRouter:
         cikti_dosyasi: str,
         log_ekle,
         hiz_carpani: float = 1.0,
+        teslimat: str = "",
     ) -> Tuple[bool, Optional[str]]:
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
@@ -668,10 +688,12 @@ class SmartRouter:
             ),
         )
         try:
+            temiz, cikarilan = transkripti_ayikla(metin)
+            teslimat = teslimatlari_birlestir(teslimat, cikarilan)
             with self.istek_profili("tts"):
                 response, info = self._make_request(
                     SES_MODELLERI,
-                    self._tts_performans_promptu_olustur(metin, ses_adi),
+                    self._tts_performans_promptu_olustur(temiz or metin, ses_adi, teslimat),
                     config,
                     log_ekle,
                 )
@@ -689,6 +711,7 @@ class SmartRouter:
         cikti_dosyasi: str,
         log_ekle,
         hiz_carpani: float = 1.0,
+        teslimat: str = "",
     ) -> Tuple[bool, Optional[str]]:
         # Gemini multi-speaker TTS tam olarak iki speaker config ister. Tek
         # speaker veya yinelenen etiket kabul edilirse istek başarılı görünse
@@ -735,7 +758,9 @@ class SmartRouter:
                 response_modalities=["AUDIO"],
                 speech_config=speech_config,
             )
-            prompt = self._tts_coklu_promptu_olustur(metin, names)
+            temiz, cikarilan = transkripti_ayikla(metin)
+            teslimat = teslimatlari_birlestir(teslimat, cikarilan)
+            prompt = self._tts_coklu_promptu_olustur(temiz or metin, names, teslimat)
             log_ekle(
                 "🔐 Multi-speaker API config doğrulandı: "
                 + " + ".join(f"{speaker}={voice}" for speaker, voice in zip(names, voices))
