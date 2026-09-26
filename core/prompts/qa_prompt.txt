@@ -4,7 +4,7 @@ GİRDİ: Fact Lock + Editorial Brief + final seslendirme metni + Duo planı + Du
 
 Aşağıdaki her kontrolü ayrı ayrı yap ve her biri için "PASS: ..." veya "FAIL: <sebep>" formatında kısa bir sonuç yaz:
 
-- fact_check: Final içerikte (seslendirme+Duo script+caption+threads) Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia var mı? Varsa FAIL.
+- fact_check: Final içerikte (seslendirme+Duo script+caption+threads) Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia var mı? Varsa FAIL. Seslendirme, caption, Threads ve kapak aynı olgu için farklı yüzde/fiyat söylüyorsa FAIL. ÖTV/vergi yüzdesi özellikle: Fact Lock `vergi_kilidi` KESIN ise kilit dışı her yüzde FAIL; kilit yoksa veya tek oran yasaksa uydurulmuş tek yüzde FAIL. Seslendirme %70 deyip açıklama %170 demek, ikisi de tabloda geçse bile FAIL.
 - model_check: Başka bir modelin/versiyonun verisi bu modele karışmış mı?
 - video_check: Videoda gerçekte olmayan bir olay/özellik anlatılmış mı?
 - current_data_check: Fiyat/tarih/satış durumu gibi zamana duyarlı bilgiler Fact Lock ile uyumlu mu?

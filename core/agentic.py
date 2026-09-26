@@ -31,6 +31,21 @@ from core.cover_titles import (
     kapak_basliklarini_metne_dok,
 )
 from core.duo_audio import duo_ses_uret
+from core.tts_delivery import replik_tts_hazirla, script_metnini_konusmaya_cek, segment_konusma, teslimat_blogu
+from core.otv_kilidi import (
+    kapaklari_otv_kilidine_cek,
+    metni_otv_kilidine_cek,
+    senaryoyu_otv_kilidine_cek,
+    sosyal_metni_otv_kilidine_cek,
+    vergi_kilidi_talimati,
+)
+
+
+def _metni_kilide_cek(metin, fact_state):
+    kilit = (fact_state or {}).get("vergi_kilidi") if isinstance(fact_state, dict) else None
+    if not isinstance(kilit, dict):
+        return str(metin or "")
+    return metni_otv_kilidine_cek(metin, kilit, "")
 
 # --- TTS / kelime güvenli limitleri -----------------------------------------
 VOICE_REGEN_MAX = 2
@@ -404,9 +419,16 @@ def _duo_ses_veya_legacy_uret(router, duo_script, legacy_text, legacy_voice, log
         log("❌ DUO TTS üretilemedi; DUO modunda legacy fallback kapalı.")
         return False, None, "DUO"
 
+    parcalar = []
+    for seg in (duo_script or {}).get("segments") or []:
+        konusma, _stil = segment_konusma(seg)
+        if konusma:
+            parcalar.append(konusma)
+    metin = " ".join(parcalar) or legacy_text
+    teslimat = teslimat_blogu((duo_script or {}).get("segments") or [])
     ok, info = _run_timed(
         log, "Legacy tek ses TTS + WAV hazırlama",
-        lambda: router.ses_uret(legacy_text, effective_legacy_voice, output_path, log, hiz_carpani=SES_HIZ_CARPANI),
+        lambda: router.ses_uret(metin, effective_legacy_voice, output_path, log, hiz_carpani=SES_HIZ_CARPANI, teslimat=teslimat),
     )
     return ok, info, mode
 
@@ -428,6 +450,7 @@ def _detective_calistir(router, video_state, fact_state, editorial_state, log):
         "Sen otoXtra'nın Dedektif Ajanısın. Görevin: İzleyicinin sinir uçlarına dokunacak kronik şikayetleri, "
         "Türkiye'ye özel vergi/maliyet mağduriyetlerini ve en kışkırtıcı ham bilgiyi bulmak.\n"
         "Aşağıdaki video, fact lock ve editorial brief'e dayanarak sadece JSON şemasına uygun çıktı ver."
+        + vergi_kilidi_talimati(fact_state)
     )
     content = girdi_birlestir(
         durumu_metne_donustur('VIDEO', video_state),
@@ -482,6 +505,7 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
         + KAPAK_FORMAT_KURALI
         + "\n\n"
         + KAPAK_KALITE_KURALI
+        + vergi_kilidi_talimati(fact_state)
     )
     if geri_bildirim:
         prompt += f"\n\n🚨 FINAL QA GERİ BİLDİRİMİ (kapak/kancayı buna göre düzelt): {geri_bildirim}"
@@ -536,7 +560,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             f"Yani yaklaşık {eksik_cumle} YENİ CÜMLE (≈{eksik} kelime) üretmen gerekiyor: cümleleri SAY, kelimeleri tek tek saymaya çalışma.\n"
             "KURALLAR:\n"
             "1) MEVCUT REPLİKLERİ SİLME, KISAALTMA, ÖZETLEME VEYA DÜZELTME: çıktıdaki segments listesi önceki replikleri BİREBİR (aynı kelimeler, aynı sıra) içermek ZORUNDA; birini bile değiştirdiysen çıktı otomatik REDDEDİLİR.\n"
-            "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; her yeni repliğe TTS etiketi ([vurgulu], [şaşırarak]...) ve doğru speaker ver.\n"
+            "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; TTS etiketini YALNIZCA tts_tag alanına yaz ([vurgulu], [alaycı], [savunarak], [şaşırarak]), text alanına veya cümlenin içine ASLA yazma. Doğru speaker ver.\n"
             "3) Yeni replikler SADECE girdideki HOOK / DETECTIVE / FACT LOCK (yalnız OBSERVED-VERIFIED) / EDITORIAL verilerinden beslensin: yeni rakam, karşılaştırma, Türkiye maliyeti, kronik şikayet, gerçek kullanım senaryosu getir. "
             "Aynı fikri farklı cümlelerle yeniden anlatmak MÜKERRETTİR ve çıktı otomatik REDDEDİLİR.\n"
             "4) Kapanış sorusu REPLİK DEĞİLDİR: yorum_tetikleyici_soru alanını AYNEN koru ve segments'e soru cümlesi ekleme — sistem soruyu seslendirmenin EN SONUNA otomatik ekler. "
@@ -550,7 +574,10 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             f"Sen otoXtra'nın Sohbet Yazarısın. {karakter_bilgisi}\n"
             "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
             f"{diyalog_kurallari}\n"
-            "TTS ETİKETLERİ: Her repliğin başına veya içine duygu etiketi ekle. Örn: [gülerek], [şaşırarak], [vurgulu], ... (duraksama).\n"
+            "TTS ETİKETLERİ: Duygu/vurgu bilgisini YALNIZCA tts_tag alanına yaz. Örnek: [vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek]. "
+            "Bu etiketler seslendirme talimatıdır; TTS onları kelime olarak OKUMAZ, prosodiye çevirir. "
+            "text alanına, cümle başına veya cümlenin içine etiket, parantez içi sahne yönergesi veya 'vurgulu/alaycı/savunarak' kelimesini yönerge diye YAZMA. "
+            "text'te yalnız izleyicinin duyması gereken kelimeler olsun.\n"
             "FİNAL: Senaryoyu kesin bir kararla bitirme. Kışkırtıcı SORU'yu YALNIZCA yorum_tetikleyici_soru alanına yaz: "
             "izleyicileri ikiye bölecek, yorumlarda tartışmaya itecek o son soru. Segments listesine soru cümlesi KOYMA — "
             "son replik o soruyu kışkırtan son bilgi/cümledir; sistem soruyu seslendirmenin en sonuna otomatik ekler.\n"
@@ -566,6 +593,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             "Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia, rakam veya özellik kullanma, emin olmadığın bilgiyi çıkar:\n"
             f"{qa_geri_bildirimi}"
         )
+    prompt += vergi_kilidi_talimati(fact_state)
 
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
@@ -611,7 +639,7 @@ def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, to
     # gelir (700-850 karakter, TAM 5 hashtag, Fact Lock sınırları, artifact yasağı)
     # + reels_baslik talimatı. Eski 2 satırlık prompt kuralsız çıktı ürettiği
     # için kaldırıldı (Eylül 2026: kısa caption + 7 hashtag).
-    prompt = metadata_promptunu_olustur(ton)
+    prompt = metadata_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state)
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
         durumu_metne_donustur('SCRIPT', script_state),
@@ -1020,12 +1048,18 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             except Exception as exc:
                 log(f"⚠️ Critic revizesi üretilemedi; ilk senaryo korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
 
+        # Sahne yönergesi konuşulan metinden çıkar; ÖTV kilidi TTS'ten ÖNCE uygulanır
+        # ki ses, yanlış tablo satırını okumasın. Etiket tts_tag'de kalır.
+        script_state = script_metnini_konusmaya_cek(script_state)
+        script_state = senaryoyu_otv_kilidine_cek(script_state, fact_state, log)
+
         # Reels State Emülasyonu (seslendirme metni tek kaynaktan: segments +
         # kapanış sorusu; replik kopyası yukarıda ayrıştırıldı, soru tam bir
         # kez, en sonda durur.)
         segments = [seg for seg in (script_state.get("segments") or []) if isinstance(seg, dict)]
         soru = str(script_state.get("yorum_tetikleyici_soru") or "").strip()
         full_text = _senaryo_metni(script_state)
+        kapak_basliklari = kapaklari_otv_kilidine_cek(kapak_basliklari, fact_state, log)
         secili_kapak = kapak_basliklari[0] if kapak_basliklari else {"ust": hook_state.get("kapak_metni", ""), "alt": ""}
         reels_state = {
             "seslendirme_metni": full_text,
@@ -1036,39 +1070,44 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             "hook_families": [{
                 "kapak_ana": secili_kapak.get("ust", ""),
                 "kapak_alt": secili_kapak.get("alt", ""),
-                "ilk_uc_saniye": hook_state.get("ilk_3_saniye_kanca", ""),
+                "ilk_uc_saniye": _metni_kilide_cek(hook_state.get("ilk_3_saniye_kanca", ""), fact_state),
             }],
-            "turkiye_ilgi_kancasi": turkiye_kancasi,
+            "turkiye_ilgi_kancasi": _metni_kilide_cek(turkiye_kancasi, fact_state),
             "metadata": {}
         }
 
-        # TTS Segmentlerini Hazırlama (Duygu Etiketli)
+        # TTS segmenti: text = yalnız duyulacak sözler. Vurgu `style` alanındadır;
+        # `[vurgulu]` transkripte yazılmaz (2.5 TTS etiketi kelime diye okur).
         tts_segments = []
         for seg in segments:
-            tag = str(seg.get('tts_tag', '') or '').strip()
-            text = str(seg.get('text', '') or '').strip()
+            text = str(seg.get("text", "") or "").strip()
             if not text:
                 continue
-            tts_text = f"{tag} {text}".strip() if tag else text
-
+            _konusma, stil = replik_tts_hazirla(text, seg.get("tts_tag"))
+            text = _konusma or text
             if mod == "SOLO_FEMALE":
-                tts_segments.append({"speaker": "female", "text": tts_text})
+                speaker = "female"
             elif mod == "SOLO_MALE":
-                tts_segments.append({"speaker": "male", "text": tts_text})
+                speaker = "male"
             else:
                 speaker = str(seg.get("speaker") or "female").strip().lower()
-                tts_segments.append({"speaker": speaker if speaker in {"female", "male"} else "female", "text": tts_text})
+                speaker = speaker if speaker in {"female", "male"} else "female"
+            tts_segments.append({"speaker": speaker, "text": text, "style": stil, "tts_tag": str(seg.get("tts_tag") or "")})
 
         if soru:
             last_speaker = tts_segments[-1].get("speaker", "female") if tts_segments else "female"
             final_speaker = "male" if last_speaker == "female" else "female"
-
             if mod == "SOLO_FEMALE":
                 final_speaker = "female"
             elif mod == "SOLO_MALE":
                 final_speaker = "male"
-
-            tts_segments.append({"speaker": final_speaker, "text": f"[vurgulu] {soru}"})
+            soru_metin, soru_stil = replik_tts_hazirla(soru, "[vurgulu]")
+            tts_segments.append({
+                "speaker": final_speaker,
+                "text": soru_metin or soru,
+                "style": soru_stil,
+                "tts_tag": "[vurgulu]",
+            })
 
         duo_script = {
             "status": "ready" if tts_segments else "fallback",
@@ -1147,6 +1186,9 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 
             # Başarılı TTS ve Süre. Paralel üretilen metadata alınır ve döngüden çıkılır.
             metadata_state = _metadata_sonucu_al(metadata_future, log)
+            metadata_state = sosyal_metni_otv_kilidine_cek(
+                metadata_state, ("reels_aciklama", "reels_aciklamasi"), fact_state, log, kanal="aciklama",
+            )
             reels_state["metadata"] = metadata_state
             reels_state = _kapak_kurtarmayi_uygula(kapak_kurtarma, reels_state, baglam, log)
 

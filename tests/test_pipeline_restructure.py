@@ -80,7 +80,7 @@ class _AgenticRouter:
             return {"score": 8, "approved": True, "feedback": ""}, "m"
         return {"reels_baslik": "T", "reels_aciklama": "açıklama", "reels_hashtag": ["#oto"]}, "m"
 
-    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
+    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0, **kwargs):
         _make_wav(output)
         return True, "fake-tts"
 
@@ -155,11 +155,16 @@ class ResearchFallbackTests(unittest.TestCase):
             "observed_facts": ["650 km menzil yazısı ekranda görülüyor"],
         }
         router = _FakeRouter({}, raise_exc=RuntimeError("503 UNAVAILABLE"))
-        with patch("core.pipeline.web_arastirma_yap", return_value=""):
+        with patch("core.pipeline.web_arastirma_yap", return_value=""), \
+             patch("core.pipeline.otv_ek_arastirma") as ek_arastirma:
             state, model = _research_calistir(router, video_state, lambda m: None)
+        ek_arastirma.assert_not_called()
         self.assertEqual(model, "forensic-fallback")
         self.assertTrue(any(f["fact"].startswith("Videoda tanımlanan araç: BYD Great Tang") for f in state["facts"]))
-        self.assertTrue(all(f["status"] == "OBSERVED" for f in state["facts"]))
+        gozlenen = [f for f in state["facts"] if not f.get("_otv_kilidi")]
+        self.assertTrue(gozlenen)
+        self.assertTrue(all(f["status"] == "OBSERVED" for f in gozlenen))
+        self.assertEqual(state["vergi_kilidi"]["durum"], "YASAK")
         self.assertEqual(state["turkiye_satis_durumu"], "BILINMIYOR")
 
 

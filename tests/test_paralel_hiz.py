@@ -106,7 +106,7 @@ class _CountingRouter:
             self.schemas.append(name)
         return value, "m"
 
-    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0):
+    def ses_uret(self, text, voice, output, log, hiz_carpani=1.0, **kwargs):
         Path(output).write_bytes(b"fake-solo-audio")
         return True, "fake-tts"
 

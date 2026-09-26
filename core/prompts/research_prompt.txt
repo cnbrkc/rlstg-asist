@@ -34,6 +34,8 @@ FACT LOCK KONTRATI — HER BİLGİ ŞU KATEGORİLERDEN BİRİNE GİRER:
 
 Özellikle şu bilgileri UYDURMAK KESİNLİKLE YASAK: fiyat, beygir, motor hacmi, menzil, ÖTV, MTV, satış durumu, lansman tarihi, teknik özellik. Web sonuçlarında bulamıyorsan status="UNKNOWN" yaz, gerçek gibi sunma.
 
+ÖTV SATIR KARIŞTIRMA YASAĞI: Hibrit ve binek ÖTV tablolarında %45, %70, %80, %150, %170, %220 aynı sayfada durur. Bunlar FARKLI teknik şartların oranlarıdır, aynı aracın alternatif gerçekleri değildir. Motor silindir hacmi (cc), elektrik motoru gücü (kW; toplam sistem gücü değil), hibrit tipi (HEV / PHEV / MHEV / ICE / BEV) ve varsa matrah bu araca uymadan bir satırı VERIFIED yapma. Şart uymuyorsa veya birden fazla satır mümkünse tek yüzde YAZMA; status="UNKNOWN" ve "tek oran kilitlenemedi" de. facts içine motor hacmini cc, elektrik motoru kW ve hibrit tipini ayrı olgular olarak yaz; bulamazsan UNKNOWN.
+
 Her VERIFIED bilgi için mümkünse source, source_type (official/manufacturer/industry/news/forum/other) ve confidence (high/medium/low) doldur.
 
 Güven sırası: 1) Resmi Türkiye kaynağı 2) Resmi üretici 3) Güvenilir sektör kaynağı 4) Güvenilir haber 5) Forum/kullanıcı deneyimi 6) Diğer.

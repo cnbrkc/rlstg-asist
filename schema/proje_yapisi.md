@@ -149,10 +149,14 @@ HOOK→FRICTION→PROOF→REVERSAL→PAYOFF/CALLBACK omurgası, 2. turdan itibar
 uptake, asimetrik ritim (eşit uzunluk/mechanik salınım yasak), callback kapanış.
 SOLO'da: hook→bilgi→dönüş→callback; diyalog kalıbı yasak.
 
-**TTS segment üretimi:** `segments[].tts_tag` + `text` → `"{tag} {text}"`;
-`yorum_tetikleyici_soru` sona `"[vurgulu] {soru}"` olarak eklenir (DUO'da son
+**TTS segment üretimi:** `segments[].text` yalnız duyulacak sözlerdir.
+`tts_tag` (`[vurgulu]`, `[alaycı]`, `[savunarak]`...) transkripte yazılmaz;
+`core/tts_delivery.py` onu İngilizce prosodi notuna çevirir ve router bu notu
+`#### TRANSCRIPT` sınırının üstünde gönderir. `gemini-2.5-flash-preview-tts`
+köşeli etiketi kelime diye okuduğu için etiket metne eklenmez.
+`yorum_tetikleyici_soru` sona vurgu stiliyle, etiketsiz eklenir (DUO'da son
 konuşmacının karşıtı, SOLO'da tek speaker). `duo_script = {status: ready|fallback,
-segments, contract:{mode}, conversation_design:{}, model:"agentic"}`.
+segments:[{speaker,text,style}], contract:{mode}, conversation_design:{}, model:"agentic"}`.
 
 **Güvenlik duvarları (döngü içi):**
 - Boş segment → yeniden yazım (≤`VOICE_REGEN_MAX=2`).

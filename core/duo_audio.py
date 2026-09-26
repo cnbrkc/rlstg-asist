@@ -7,6 +7,7 @@ bu haritadaki tek voice'a iner.
 from typing import Dict, List
 
 from core.config import SES_HIZ_CARPANI
+from core.tts_delivery import segment_konusma, teslimat_blogu
 
 # Karakter kimliği → Gemini prebuilt voice (tek gerçek kaynak).
 CHARACTER_VOICES = {
@@ -24,11 +25,12 @@ def voice_for_character(character: str) -> str:
 
 
 def _duo_transcript(segments: List[Dict[str, str]]) -> str:
+    """Konuşmacı etiketli, yönergesiz transkript. `[vurgulu]` gibi etiketler okunmaz."""
     lines = []
     for segment in segments or []:
         if not isinstance(segment, dict):
             continue
-        text = str(segment.get("text", "")).strip()
+        text, _stil = segment_konusma(segment)
         speaker = str(segment.get("speaker", "")).strip().lower()
         if not text or speaker not in ("female", "male"):
             continue
@@ -55,9 +57,16 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     transcript = _duo_transcript(valid)
     if not transcript:
         return False, None
-
-    log_ekle(f"🎙️ DUO TTS tek çağrı: {len(valid)} segment | doğal sahne yönetimi + etiketsiz akış")
-    ok, info = router.coklu_ses_uret(transcript, speakers_present, output_path, log_ekle, hiz_carpani=hiz_carpani)
+    teslimat = teslimat_blogu(valid)
+    not_sayisi = teslimat.count("\n") + 1 if teslimat else 0
+    log_ekle(
+        f"🎙️ DUO TTS tek çağrı: {len(valid)} segment | konuşma metni etiketsiz | "
+        f"{not_sayisi} teslimat notu (okunmaz, yalnız prosodi)"
+    )
+    ok, info = router.coklu_ses_uret(
+        transcript, speakers_present, output_path, log_ekle,
+        hiz_carpani=hiz_carpani, teslimat=teslimat,
+    )
     if not ok:
         log_ekle("❌ Tek çağrı DUO TTS başarısız; tek sesli fallback engellendi.")
         return False, None
