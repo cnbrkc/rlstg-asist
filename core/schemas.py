@@ -146,7 +146,7 @@ SCRIPT_WRITER_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "speaker": {"type": "string", "enum": ["female", "male"]},
-                    "tts_tag": {"type": "string", "description": "Yalnızca bu alan. Konuşulan text'e yazma. Örn: [vurgulu], [alaycı], [savunarak], [şaşırarak]. TTS bu kelimeleri okumaz."},
+                    "tts_tag": {"type": "string", "description": "Yalnızca bu alan; HER repliğe uygun bir duygu/tepki etiketi yaz, boş bırakma. Örn: [vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek], [meraklı], [heyecanlı], [kızgin], [fısıldayarak], [duraksayarak]. Etiketleri tekdüze yapma. Konuşulan text'e yazma; TTS bu kelimeleri okumaz, prosodiye çevirir."},
                     "text": {"type": "string"}
                 },
                 "required": ["speaker", "tts_tag", "text"]
