@@ -83,6 +83,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# google-genai SDK'sı TEK generate_content çağrısını DAHİLİ olarak 5 denemeye
+# kadar tekrarlıyor (408/429/500/502/503/504'te devreye giren ~1→60 sn üstel
+# backoff). Router'ın kendi model×key×tur tekrarlarının ÜSTÜNE binince her
+# "deneme" 2-55 sn'e çıkıyordu: 2026-09-28 503 dalgasında 22 deneme 456 sn sürdü,
+# video bütçesi (420 sn) TEK turda erdi ve tasarlanan bekle+tekrar turları hiç
+# çalışamadı. SDK içi retry 2 denemeye (1 çağrı + ~1 sn arayla 1 hızlı retry)
+# indirilir; asıl tekrar stratejisi (key rotasyonu, model sırası, tam-tur
+# beklemeleri) router'a aittir. ROUTER_SDK_RETRY_ATTEMPTS=1 → SDK içi retry kapalı.
+SDK_RETRY_ATTEMPTS = _env_int("ROUTER_SDK_RETRY_ATTEMPTS", 2)
+SDK_RETRY_MAX_DELAY_S = 8.0
+
+
 OVERLOAD_RETRY_ROUNDS = _env_int("ROUTER_OVERLOAD_RETRY_ROUNDS", 2)
 # Eski 20/40/60 sn beklemeler tek bir Editorial isteğini 4+ dakikaya taşıyordu;
 # 503 dalgaları genelde saniyeler içinde açılıyor, kısa bekleme + hızlı tam tur yeter.
@@ -149,7 +161,17 @@ class SmartRouter:
             if api_key and api_key.strip():
                 self.clients[mail] = genai.Client(
                     api_key=api_key.strip(),
-                    http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+                    http_options=types.HttpOptions(
+                        timeout=REQUEST_TIMEOUT_MS,
+                        # SDK içi retry'ı sınırla: varsayılan 5 deneme + üstel
+                        # backoff, router'ın kendi tekrarlarıyla çakışıp istek
+                        # bütçelerini eritiyordu (bkz. SDK_RETRY_ATTEMPTS).
+                        retry_options=types.HttpRetryOptions(
+                            attempts=SDK_RETRY_ATTEMPTS,
+                            initial_delay=1.0,
+                            max_delay=SDK_RETRY_MAX_DELAY_S,
+                        ),
+                    ),
                 )
 
     # --- İş parçacığına özel bağlam -------------------------------------
