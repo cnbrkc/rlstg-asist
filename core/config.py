@@ -78,6 +78,18 @@ ISTEK_ZAMAN_ASIMI_MS = {
 # Critic / Hook çıktısı) varsayılana düşüyordu. 120 sn: tam tur + 15/30 sn
 # bekleme + tekrar tur sığar; asılı kalan istekler için güvenlik sınırı korunur.
 ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE = _env_int("ROUTER_OPTIONAL_BUDGET_SECONDS", 120)
+# Her zorunlu Router isteği için üst süre sınırı. Timeout model×key denemesi
+# başına uygulandığından bu toplam bütçeler tek isteğin bütün fallback/retry
+# turlarını sınırlar; 30 dakikalık GitHub Actions job'unu tek API çağrısına
+# kaptırmaz. Operasyonel olarak ROUTER_*_BUDGET_SECONDS ile ayarlanabilir;
+# 0 verilirse ilgili profile toplam süre sınırı uygulanmaz.
+ISTEK_BUTCELERI_SANIYE = {
+    "metin": _env_int("ROUTER_TEXT_BUDGET_SECONDS", 180),
+    "uzun_metin": _env_int("ROUTER_LONG_TEXT_BUDGET_SECONDS", 240),
+    "istege_bagli": ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE,
+    "video": _env_int("ROUTER_VIDEO_BUDGET_SECONDS", 420),
+    "tts": _env_int("ROUTER_TTS_BUDGET_SECONDS", 240),
+}
 # Router bu kadar saniye içinde "tam tur aşırı yük" gördüyse atlanabilir ajanlar
 # (Detective / Critic / anlatım modu) hiç denenmeden güvenli varsayılanla geçilir.
 # KALİTE: Bu atlama artık varsayılan olarak KAPALI (ISTEGE_BAGLI_ASIRI_YUK_ATLA=1

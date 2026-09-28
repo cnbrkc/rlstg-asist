@@ -3,3 +3,4 @@ imageio-ffmpeg
 requests>=2.31.0
 ddgs>=9.0.0
 jsonschema>=4.20,<5.0
+tzdata>=2024.1

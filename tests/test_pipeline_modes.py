@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("GEMINI_API_KEY", "test")
 
-from core.pipeline import _explicit_voice_mode_from_notes
+from core.pipeline import _anlatim_modu_karari_ekle, _explicit_voice_mode_from_notes
 from core.agentic import agentic_icerik_uretimi
 
 
@@ -74,9 +74,37 @@ def test_explicit_solo_and_duo_note_detection():
     assert _explicit_voice_mode_from_notes("Yalnızca kadın sesi kullan") == "SOLO_FEMALE"
     assert _explicit_voice_mode_from_notes("Sadece erkek anlatsın") == "SOLO_MALE"
     assert _explicit_voice_mode_from_notes("Solo olmasın, iki sesli duo olsun") == "DUO"
-    assert _explicit_voice_mode_from_notes("Duo olmasın, solo yap") == "SOLO"
+    assert _explicit_voice_mode_from_notes("Duo olmasın, solo yap") == "SOLO_FEMALE"
+    assert _explicit_voice_mode_from_notes("Duo olmasın") == "SOLO_FEMALE"
+    assert _explicit_voice_mode_from_notes("Tek ses olmasın") == "DUO"
+    assert _explicit_voice_mode_from_notes("Yalnizca kadin sesi kullan") == "SOLO_FEMALE"
     assert _explicit_voice_mode_from_notes("Solo mu duo mu videoya göre sen seç") == ""
     assert _explicit_voice_mode_from_notes("Normal üret") == ""
+
+
+def test_explicit_voice_choice_is_persisted_in_canonical_editorial_state():
+    logs = []
+    editorial = _anlatim_modu_karari_ekle(
+        router=None,
+        video_state={},
+        fact_state={},
+        editorial_state={"baslik": "Test"},
+        sure_saniye=30,
+        ton="dengeli",
+        notes="Duo olmasın; yalnızca erkek sesi kullan",
+        log=logs.append,
+    )
+
+    assert editorial["baslik"] == "Test"
+    assert editorial["anlatim_modu_karari"] == {
+        "mode": "SOLO_MALE",
+        "reason": "Kullanıcı notunda açık ses modu tercihi.",
+        "confidence": 1.0,
+        "duo_value": "",
+        "solo_value": "",
+        "source": "user",
+    }
+    assert any("SOLO_MALE" in entry for entry in logs)
 
 
 @_ses_sure_patch

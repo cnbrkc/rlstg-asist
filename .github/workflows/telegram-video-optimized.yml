@@ -123,6 +123,7 @@ jobs:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_UPDATE_ID: ${{ inputs.telegram_update_id }}
           TEXT_INPUT: ${{ inputs.telegram_text }}
           VIDEO_ANALYSIS_NOTE: ${{ inputs.video_note }}
           CONTENT_TONE: ${{ inputs.content_tone }}
@@ -134,12 +135,15 @@ jobs:
 
       - name: Publish diagnostic summary
         if: ${{ always() }}
+        env:
+          TELEGRAM_UPDATE_ID: ${{ inputs.telegram_update_id }}
         run: |
           {
             echo "## Reels pipeline diagnostics"
             echo "- Workflow: $GITHUB_WORKFLOW"
             echo "- Run ID: $GITHUB_RUN_ID"
             echo "- Attempt: $GITHUB_RUN_ATTEMPT"
+            echo "- Telegram update ID: ${TELEGRAM_UPDATE_ID:-not provided}"
             echo "- Result JSON exists: $([ -f pipeline_result.json ] && echo yes || echo no)"
             if [ -f pipeline_result.json ]; then
               python - <<'PY'

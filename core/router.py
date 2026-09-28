@@ -19,7 +19,7 @@ from core.config import (
     COOLDOWN_DIGER,
     COOLDOWN_FREE_TIER_YOK,
     ISTEK_ZAMAN_ASIMI_MS,
-    ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE,
+    ISTEK_BUTCELERI_SANIYE,
     ASIRI_YUK_ATLAMA_PENCERESI_SANIYE,
     model_arama_destekliyor_mu,
 )
@@ -40,11 +40,11 @@ REQUEST_TIMEOUT_MS = max(ISTEK_ZAMAN_ASIMI_MS.values())
 #   video        : Forensic video analizi (inline video upload)
 #   tts          : tek/çoklu ses üretimi
 ISTEK_PROFILLERI = {
-    "metin": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["metin"], "butce_saniye": None},
-    "uzun_metin": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["uzun_metin"], "butce_saniye": None},
-    "istege_bagli": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["istege_bagli"], "butce_saniye": ISTEGE_BAGLI_AJAN_BUTCESI_SANIYE},
-    "video": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["video"], "butce_saniye": None},
-    "tts": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["tts"], "butce_saniye": None},
+    "metin": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["metin"], "butce_saniye": ISTEK_BUTCELERI_SANIYE["metin"]},
+    "uzun_metin": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["uzun_metin"], "butce_saniye": ISTEK_BUTCELERI_SANIYE["uzun_metin"]},
+    "istege_bagli": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["istege_bagli"], "butce_saniye": ISTEK_BUTCELERI_SANIYE["istege_bagli"]},
+    "video": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["video"], "butce_saniye": ISTEK_BUTCELERI_SANIYE["video"]},
+    "tts": {"zaman_asimi_ms": ISTEK_ZAMAN_ASIMI_MS["tts"], "butce_saniye": ISTEK_BUTCELERI_SANIYE["tts"]},
 }
 
 # Bir deneme bu süreden uzun sürüp hata verirse (timeout/yavaş 503) model "yavaş"
@@ -116,17 +116,20 @@ _sleep = time.sleep
 # bekleme OVERLOAD_WAIT_BUDGET_SECONDS ve OVERLOAD_RETRY_DEADLINE_SECONDS ile
 # sınırlıdır; tek tek key denemeleri arasında hâlâ bekleme yoktur.
 #
-# Yalnızca iki durum "kalıcı" sayılır ve adımlar boyunca hatırlanır ( zaman
-# tasarrufu için; key'den bağımsız her key'de aynı sonucu verirler):
-#   * 404 / model_config  -> model düzeyinde yasak (*+model)
-#   * free_tier_yok       -> key/project'e bağlı, yalnızca o key yasaklanır
+# Yalnızca kaynak kapsamı güvenilir biçimde bilinen hatalar istekler arasında
+# hatırlanır:
+#   * 404 / model bulunamadı -> model düzeyinde yasak (*+model)
+#   * free_tier_yok          -> key/project'e bağlı, yalnızca o key yasaklanır
+# 400 / INVALID_ARGUMENT ise isteğe veya modele özgü olabilir; yalnız mevcut
+# istekte o modeli atlar. Ortak şema/config hatası diğer bütün modelleri
+# günlerce devre dışı bırakmamalıdır.
 # ---
 
 
 class SmartRouter:
     def __init__(self) -> None:
         # blacklist: yalnızca KALICI yasaklar. Geçici hatalar buraya yazılmaz.
-        #   "*+{model}"        -> model düzeyi (404 / bozuk config)
+        #   "*+{model}"        -> model düzeyi (yalnızca doğrulanmış 404)
         #   "{mail}+{model}"   -> key düzeyi (free-tier)
         self.blacklist = {}
         self._slow_models = {}
@@ -193,7 +196,7 @@ class SmartRouter:
         self.blacklist[key] = time.time() + cooldown
 
     def _is_model_banned(self, model: str) -> bool:
-        """Model düzeyinde kalıcı yasağı kontrol eder (404 / bozuk config)."""
+        """Model düzeyinde kalıcı yasağı kontrol eder (doğrulanmış 404)."""
         key = f"*+{model}"
         bl = self.blacklist
         if key in bl:
@@ -260,7 +263,9 @@ class SmartRouter:
                 return "quota_day", DAILY_QUOTA_COOLDOWN
             return "quota", 0
         if code == 400 or "400" in m or "invalid_argument" in m or "unsupported" in m:
-            return "model_config", COOLDOWN_BULUNAMADI
+            # 400 model/şema/config uyumsuzluğu olabilir; hangi kapsamda olduğu
+            # her zaman bilinmez. Router bu modeli yalnızca mevcut istekte atlar.
+            return "model_config", 0
         if code == 503 or "503" in m or "unavailable" in m:
             return "unavailable", COOLDOWN_DIGER
         if code in (408, 504) or "timeout" in m or "timed out" in m or "deadline_exceeded" in m:
@@ -304,15 +309,20 @@ class SmartRouter:
         stop_on_quota=False,
         require_text=False,
         profil: Optional[str] = None,
+        response_validator=None,
     ):
         son_hata = None
+        # Model/config/schema veya yapılandırılmış çıktı hatası yalnız bu
+        # istekte atlanır. Ortak API şemasının 24 saatlik global model yasağına
+        # dönüşmesini önler; bir sonraki üretim adımı modeli yeniden deneyebilir.
+        request_failed_models = set()
         modeller = list(model_listesi or [])
         # Açık profil > pipeline'ın `istek_profili()` bağlamı > varsayılan "metin".
         profil = profil or getattr(self, "_aktif_profil", None) or "metin"
         profil_ayari = ISTEK_PROFILLERI.get(profil) or ISTEK_PROFILLERI["metin"]
         config = self._config_with_timeout(config, profil_ayari.get("zaman_asimi_ms"))
-        # İsteğe bağlı ajanlarda toplam süre bütçesi: bütçe dolunca kalan
-        # model+key kombinasyonları denenmez, çağıran güvenli varsayılana düşer.
+        # Profil bazlı toplam süre bütçesi: bütçe dolunca kalan model+key
+        # kombinasyonları denenmez. Zorunlu profillerde de üst sınır vardır.
         butce_saniye = profil_ayari.get("butce_saniye")
         butce_doldu = False
         # Yakın zamanda yavaş/timeout veren modeller silinmez, yalnızca sona atılır.
@@ -343,8 +353,10 @@ class SmartRouter:
                 modeller = [m for m in model_listesi or [] if not self._is_slow(m)] + [m for m in model_listesi or [] if self._is_slow(m)]
             for model_adi in modeller:
                 model_started = time.perf_counter()
-                # Kalıcı model yasağı (404 / bozuk config) → tüm key'lerde geçersiz,
-                # bu modeli tamamen atla. (Adımlar boyunca korunur.)
+                if model_adi in request_failed_models:
+                    continue
+                # Yalnız doğrulanmış 404 model yasağı tüm key'lerde ve istekler
+                # arasında geçerlidir.
                 if self._is_model_banned(model_adi):
                     continue
                 log_ekle(f"🧠 Model deneniyor: {model_adi}")
@@ -352,7 +364,7 @@ class SmartRouter:
 
                 for mail, _api_key in self._ordered_api_items():
                     if butce_saniye and (time.perf_counter() - request_started) >= butce_saniye:
-                        log_ekle(f"⏱️ API #{request_id}: isteğe bağlı ajan bütçesi ({butce_saniye}s) doldu; kalan denemeler atlanıyor.")
+                        log_ekle(f"⏱️ API #{request_id}: toplam istek bütçesi ({butce_saniye}s) doldu; kalan denemeler atlanıyor.")
                         butce_doldu = True
                         break
                     # Bu key'e özel kalıcı yasak (free-tier) → bu key'i atla, diğer
@@ -392,11 +404,18 @@ class SmartRouter:
                             self._ban(mail, model_adi, cooldown, "combo")
                             log_ekle(f"🚫 {mail}+{model_adi}: free tier'da yok; sonraki key deneniyor. | {attempt_elapsed:.2f}s")
                             continue
-                        if scope in ("model_key", "model_config"):
-                            # Model yok / config uyumsuz → tüm key'lerde geçersiz.
+                        if scope == "model_key":
+                            # 404/model yok: tüm key'lerde geçersiz; kalıcı model yasağı.
                             self._ban(mail, model_adi, cooldown, "model")
-                            log_ekle(f"⚠️ {model_adi}: bu model/config desteklenmiyor; sonraki modele geçiliyor. | {attempt_elapsed:.2f}s")
-                            break  # bu modelin kalan key'lerini atla → sonraki model
+                            log_ekle(f"⚠️ {model_adi}: model bulunamadı; tüm key'lerde atlanacak. | {attempt_elapsed:.2f}s")
+                            break
+                        if scope == "model_config":
+                            # 400/INVALID_ARGUMENT kapsamı belirsizdir. Aynı
+                            # modelin kalan key'lerini bu istekte boşa deneme;
+                            # sonraki pipeline isteği temiz bir turla başlayabilir.
+                            request_failed_models.add(model_adi)
+                            log_ekle(f"⚠️ {mail}+{model_adi}: bu istek için model/config reddedildi; sonraki modele geçiliyor (kalıcı yasak yok). | {attempt_elapsed:.2f}s")
+                            break
 
                         # unavailable (503) / combo (timeout) / bilinmeyen -> GEÇICI.
                         # Bekleme yok, yasaklama yok: hemen diğer key. Bir tam tur
@@ -418,6 +437,19 @@ class SmartRouter:
                         son_hata = ValueError("Model boş yanıt verdi.")
                         round_transient += 1
                         continue
+
+                    if callable(response_validator):
+                        try:
+                            response_validator(response)
+                        except Exception as exc:
+                            # Ham model yanıtı veya JSON gövdesi loglanmaz.
+                            son_hata = exc
+                            request_failed_models.add(model_adi)
+                            log_ekle(
+                                f"⚠️ {mail}+{model_adi}: yapılandırılmış yanıt doğrulanamadı "
+                                f"({type(exc).__name__}); sonraki modele geçiliyor. | {attempt_elapsed:.2f}s"
+                            )
+                            break
 
                     total_elapsed = time.perf_counter() - request_started
                     model_elapsed = time.perf_counter() - model_started
@@ -521,6 +553,12 @@ class SmartRouter:
         if profil is not None and profil not in ISTEK_PROFILLERI:
             profil = None
 
+        def _dogrula_yanit(response, label="Gemini metin"):
+            parsed = guvenli_json_yukle(getattr(response, "text", ""))
+            validate_structured_output(parsed, response_schema, label)
+
+        response_validator = _dogrula_yanit
+
         if arama_kullan:
             kwargs = dict(system_instruction=system_prompt)
             if model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
@@ -541,6 +579,7 @@ class SmartRouter:
                 stop_on_quota=False,
                 require_text=True,
                 profil=profil,
+                response_validator=response_validator,
             )
             parsed = self._json_parse_or_none(getattr(response, "text", ""))
             if parsed is not None:
@@ -565,6 +604,7 @@ class SmartRouter:
                     stop_on_quota=False,
                     require_text=True,
                     profil=profil,
+                    response_validator=response_validator,
                 )
                 parsed = guvenli_json_yukle(getattr(response, "text", ""))
                 return validate_structured_output(parsed, response_schema, "Gemini Search fallback"), info
@@ -593,6 +633,7 @@ class SmartRouter:
                     stop_on_quota=False,
                     require_text=True,
                     profil=profil,
+                    response_validator=response_validator,
                 )
                 parsed = guvenli_json_yukle(getattr(response, "text", ""))
                 return validate_structured_output(parsed, response_schema, "Gemini Fact Lock fallback"), info
@@ -626,6 +667,11 @@ class SmartRouter:
             log_ekle,
             require_text=True,
             profil="video",
+            response_validator=lambda candidate: validate_structured_output(
+                guvenli_json_yukle(getattr(candidate, "text", "")),
+                response_schema,
+                "Gemini video analizi",
+            ),
         )
         parsed = guvenli_json_yukle(getattr(response, "text", ""))
         return validate_structured_output(parsed, response_schema, "Gemini video analizi"), info

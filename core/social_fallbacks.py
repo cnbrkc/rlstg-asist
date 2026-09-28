@@ -87,6 +87,27 @@ def caption_fallback(fact_state, editorial_state, video_state) -> tuple:
     return "\n\n".join(p for p in parts if p)[:900].rstrip(), list(DEFAULT_HASHTAGS)
 
 
+def limit_threads_text(value, max_characters=500) -> str:
+    """Threads metnini karakter sınırına, mümkünse cümle/kelime sonunda indir."""
+    value = str(value or "").strip()
+    max_characters = max(1, int(max_characters))
+    if len(value) <= max_characters:
+        return value
+
+    prefix = value[:max_characters]
+    sentence_ends = [
+        match.end()
+        for match in re.finditer(r"[.!?](?=[\"’”']?(?:\s|$))", prefix)
+    ]
+    if sentence_ends and sentence_ends[-1] >= max_characters * 0.6:
+        return prefix[:sentence_ends[-1]].rstrip()
+
+    boundary = prefix.rfind(" ")
+    if boundary > 0:
+        prefix = prefix[:boundary]
+    return prefix.rstrip(" ,;:-")
+
+
 def threads_fallback(fact_state, editorial_state, video_state) -> str:
     """Threads modeli boş/artifact dönerse güvenli Fact Lock tabanlı metin üretir."""
     identity = model_identity(video_state) or "Bu araç"
@@ -95,4 +116,4 @@ def threads_fallback(fact_state, editorial_state, video_state) -> str:
     core = text(editorial.get("core_story"))
     fact = first_fact(fact_state)
     body = discussion or core or fact or "Bu içerikte asıl mesele, videoda görünen detayın gerçek kullanımda ne ifade ettiği."
-    return f"{identity} tarafında bence tartışma tam burada başlıyor: {body}"[:500].rstrip()
+    return limit_threads_text(f"{identity} tarafında bence tartışma tam burada başlıyor: {body}")

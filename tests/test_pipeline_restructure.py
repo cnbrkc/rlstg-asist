@@ -18,9 +18,11 @@ os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
 from core.pipeline import (
     _caption_calistir,
+    _qa_calistir,
     _qa_regeneration_loop,
     _research_calistir,
     _threads_calistir,
+    _threads_state_normalize,
 )
 from core.agentic import agentic_icerik_uretimi
 from core.media import gecici_ses_yolu
@@ -194,6 +196,44 @@ class SocialGuardTests(unittest.TestCase):
         state, model = _threads_calistir(router, self.video, self.fact, self.editorial, lambda m: None, "dengeli")
         self.assertEqual(model, "local-fallback")
         self.assertTrue(state["threads_aciklamasi"])
+
+    def test_threads_text_is_capped_at_500_characters_at_sentence_boundary(self):
+        sentence = "Otomobilde fiyat algısı kadar gerçek kullanım deneyimi de belirleyici."
+        text = (sentence + " ") * 5 + ("İkinci görüşü genişleten ek açıklama. " * 20)
+
+        normalized = _threads_state_normalize({"threads_aciklamasi": text})["threads_aciklamasi"]
+
+        self.assertLessEqual(len(normalized), 500)
+        self.assertTrue(normalized.endswith("."))
+
+    def test_threads_text_without_sentence_boundary_is_cut_at_word_boundary(self):
+        text = "kelime " * 120
+        normalized = _threads_state_normalize(text)["threads_aciklamasi"]
+
+        self.assertLessEqual(len(normalized), 500)
+        self.assertFalse(normalized.endswith("kelim"))
+
+    def test_qa_receives_the_same_capped_threads_text_that_will_be_delivered(self):
+        class _CaptureRouter:
+            content = ""
+
+            def metin_uret(self, content, _prompt, _schema, _log, **_kwargs):
+                self.content = content
+                return {"overall": "PASS", "regeneration_targets": []}, "fake-qa"
+
+        raw_threads = ("Net görüş burada. " * 40) + ("Devam eden açıklama. " * 15)
+        normalized = _threads_state_normalize({"threads_aciklamasi": raw_threads})
+        router = _CaptureRouter()
+
+        _qa_calistir(
+            router, {}, {}, {}, {}, {},
+            {"threads_aciklamasi": raw_threads},
+            30, lambda *_: None, ton="dengeli",
+        )
+
+        self.assertIn("### THREADS\n" + repr(normalized), router.content)
+        self.assertNotIn(raw_threads, router.content)
+        self.assertLessEqual(len(normalized["threads_aciklamasi"]), 500)
 
 
 class TurkiyeKancaTests(unittest.TestCase):

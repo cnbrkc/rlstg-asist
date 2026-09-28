@@ -3,10 +3,12 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("GEMINI_API_KEY", "test-only-not-a-real-key")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -14,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from google.genai.errors import APIError
 from jsonschema import Draft202012Validator
 
-from core import schemas
+from core import router as router_module, schemas
 from core.router import SmartRouter
 from core.schema_validation import (
     StructuredOutputValidationError,
@@ -73,6 +75,33 @@ class StructuredRouterErrorTests(unittest.TestCase):
         self.assertEqual(self.router._parse_hata("429 RESOURCE_EXHAUSTED quota")[0], "quota")
 
 
+class RequestBudgetTests(unittest.TestCase):
+    def test_required_profile_budget_stops_remaining_model_attempts(self):
+        router = SmartRouter()
+        router._ordered_api_items = lambda: [("k0", "fake-key")]
+        calls = []
+
+        class _Models:
+            def generate_content(self, model, contents, config):
+                calls.append(model)
+                if model == "slow-first":
+                    time.sleep(0.03)
+                    raise RuntimeError("503 Service Unavailable")
+                return SimpleNamespace(text='{"ok": true}')
+
+        router.clients = {"k0": SimpleNamespace(models=_Models())}
+        logs = []
+        with patch.dict(router_module.ISTEK_PROFILLERI["metin"], {"butce_saniye": 0.005}):
+            with self.assertRaises(RuntimeError):
+                router._make_request(
+                    ["slow-first", "must-not-run"], "input", None, logs.append,
+                    require_text=True, profil="metin",
+                )
+
+        self.assertEqual(calls, ["slow-first"])
+        self.assertTrue(any("toplam istek bütçesi" in item for item in logs))
+
+
 class StructuredOutputValidationTests(unittest.TestCase):
     def test_repository_schemas_are_valid_json_schemas(self):
         for name, schema in vars(schemas).items():
@@ -102,13 +131,54 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "segments": [{"speaker": "host", "tts_tag": "[meraklı]", "text": "Merhaba."}],
             "yorum_tetikleyici_soru": "Siz ne düşünüyorsunuz?",
         }
-        router._make_request = lambda *args, **kwargs: (SimpleNamespace(text=json.dumps(payload)), "fake+model")
+        captured = {}
+
+        def fake_request(*args, **kwargs):
+            captured["validator"] = kwargs.get("response_validator")
+            return SimpleNamespace(text=json.dumps(payload)), "fake+model"
+
+        router._make_request = fake_request
 
         with self.assertRaises(StructuredOutputValidationError):
             router.metin_uret(
                 "input", "prompt", schemas.SCRIPT_WRITER_SCHEMA,
                 lambda _message: None, arama_kullan=False,
             )
+        self.assertTrue(callable(captured["validator"]))
+
+    def test_invalid_structured_response_falls_back_and_is_retried_next_request(self):
+        router = SmartRouter()
+        router._ordered_api_items = lambda: [("k0", "fake-key")]
+        calls = []
+
+        class _Models:
+            def generate_content(self, model, contents, config):
+                calls.append(model)
+                if model == "bad-schema":
+                    return SimpleNamespace(text='{"ok": "wrong type"}')
+                return SimpleNamespace(text='{"ok": true}')
+
+        router.clients = {"k0": SimpleNamespace(models=_Models())}
+        schema = {
+            "type": "object",
+            "required": ["ok"],
+            "properties": {"ok": {"type": "boolean"}},
+        }
+
+        def validator(response):
+            parsed = json.loads(response.text)
+            validate_structured_output(parsed, schema, "test response")
+
+        for _ in range(2):
+            response, model = router._make_request(
+                ["bad-schema", "good-schema"], "input", None,
+                lambda _message: None, require_text=True, response_validator=validator,
+            )
+            self.assertTrue(model.endswith("good-schema"))
+            self.assertEqual(json.loads(response.text), {"ok": True})
+
+        self.assertEqual(calls, ["bad-schema", "good-schema", "bad-schema", "good-schema"])
+        self.assertFalse(any("wrong type" in item for item in router.blacklist))
 
     def test_router_returns_valid_model_json_unchanged(self):
         router = SmartRouter.__new__(SmartRouter)
@@ -132,15 +202,20 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "required": ["ok"],
             "properties": {"ok": {"type": "boolean"}},
         }
-        router._make_request = lambda *args, **kwargs: (
-            SimpleNamespace(text='{"ok": "not-a-boolean"}'), "fake+video-model",
-        )
+        captured = {}
+
+        def fake_request(*args, **kwargs):
+            captured["validator"] = kwargs.get("response_validator")
+            return SimpleNamespace(text='{"ok": "not-a-boolean"}'), "fake+video-model"
+
+        router._make_request = fake_request
 
         with self.assertRaises(StructuredOutputValidationError):
             router.video_analiz_et(
                 b"video", "video/mp4", "prompt", schema,
                 lambda _message: None, model_listesi=["fake-model"],
             )
+        self.assertTrue(callable(captured["validator"]))
 
 
 if __name__ == "__main__":

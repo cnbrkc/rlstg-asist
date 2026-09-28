@@ -106,15 +106,33 @@ class _Eslesme:
         self.bicim = bicim  # yuzde_kelime | yuzde_rakam | yuzde_isareti_on | yuzde_isareti_son
 
 
-def _otv_baglami_mi(pencere: str) -> bool:
+def _otv_baglami_mi(pencere: str, oran_konumu=None) -> bool:
+    """Aday yüzde ifadesinin en yakın vergi bağlamı ÖTV ise True döndür.
+
+    Yakın bir MTV/KDV ifadesi ile daha uzaktaki ÖTV kelimesini aynı bağlam
+    penceresinde görmek, MTV/KDV oranını ÖTV sanmaya yetmemelidir.
+    """
     w = _fold(pencere)
-    otv = "otv" in w or "ozel tuketim" in w
-    mtv_kdv = bool(re.search(r"\bmtv\b|\bkdv\b|tasitlar vergisi|motorlu tasit", w))
-    if otv:
+    otv_matches = list(re.finditer(r"\botv\b|ozel\s+tuketim", w))
+    diger_matches = list(re.finditer(r"\bmtv\b|\bkdv\b|tasitlar\s+vergisi|motorlu\s+tasit", w))
+    if not otv_matches:
+        if diger_matches:
+            return False
+        return "vergi" in w
+    if not diger_matches:
         return True
-    if mtv_kdv:
+    if oran_konumu is None:
+        # İki vergi türü aynı penceredeyse konum bilinmeden güvenli sınıflandırma yok.
         return False
-    return "vergi" in w
+
+    def _distance(match):
+        if match.start() <= oran_konumu <= match.end():
+            return 0
+        return min(abs(match.start() - oran_konumu), abs(match.end() - oran_konumu))
+
+    en_yakin_otv = min(_distance(match) for match in otv_matches)
+    en_yakin_diger = min(_distance(match) for match in diger_matches)
+    return en_yakin_otv < en_yakin_diger
 
 
 def _esik_mi(pencere: str) -> bool:
@@ -142,8 +160,9 @@ def otv_eslesmeleri(metin: str):
         oran = next(int(g) for g in m.groups() if g)
         if not 25 <= oran <= 300:
             continue
-        pencere = ham[max(0, m.start() - 80):m.end() + 40]
-        if not _otv_baglami_mi(pencere):
+        pencere_bas = max(0, m.start() - 80)
+        pencere = ham[pencere_bas:m.end() + 40]
+        if not _otv_baglami_mi(pencere, m.start() - pencere_bas):
             continue
         if m.group(1):
             bicim = "yuzde_isareti_on"
@@ -171,8 +190,9 @@ def otv_eslesmeleri(metin: str):
             son += ek.end()
         if any(not (e.son <= m.start() or son <= e.bas) for e in bulunan):
             continue
-        pencere = ham[max(0, m.start() - 80):son + 40]
-        if not _otv_baglami_mi(pencere):
+        pencere_bas = max(0, m.start() - 80)
+        pencere = ham[pencere_bas:son + 40]
+        if not _otv_baglami_mi(pencere, m.start() - pencere_bas):
             continue
         bulunan.append(_Eslesme(deger, m.start(), son, "yuzde_kelime"))
     bulunan.sort(key=lambda e: e.bas)
