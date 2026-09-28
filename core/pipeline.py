@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from core.agentic import (
@@ -219,13 +220,100 @@ def _ses_modu_sesi(mode):
 
 # --- Üretim adımları ------------------------------------------------------------
 
+def _ortam_sayisi(ad, varsayilan):
+    try:
+        return int(os.environ.get(ad, varsayilan))
+    except (TypeError, ValueError):
+        return varsayilan
+
+
+# --- Forensic aşaması geçici-hata kurtarması (2026-09-28 503 dalgası) --------
+# Forensic video analizi ZORUNLU ilk aşamadır; router'ın tüm model+key
+# kombinasyonları geçici hatayla (503 yoğunluğu / zaman aşımı) düşerse istisna
+# 9 aşamalık pipeline'ı ve Actions job'unu tamamen öldürüyordu. Router isteği
+# kendi bütçesi (420 sn) içinde tükendiğinde, aşama düzeyinde kısa bir bekleme
+# sonrası BİR ek deneme hakkı tanınır; model tarafındaki dakikalarca süren
+# yoğunluk dalgalarının açılması beklenir. Kalıcı hatalar (400/403/404) ve
+# şema/config reddi beklenmeden yukarı taşınır. Süreler 30 dk'lık Actions
+# job'unda render + Telegram upload'a pay bırakacak şekilde sınırlandırılır.
+FORENSIC_STAGE_EK_DENEME = max(0, _ortam_sayisi("FORENSIC_STAGE_RETRIES", 1))
+FORENSIC_STAGE_BEKLEME_SANIYE = max(5, _ortam_sayisi("FORENSIC_STAGE_RETRY_WAIT_SECONDS", 60))
+FORENSIC_STAGE_TOPLAM_SINIR_SANIYE = max(60, _ortam_sayisi("FORENSIC_STAGE_MAX_SECONDS", 780))
+# Geçici sayılan HTTP durumları (router._parse_hata ile aynı aile).
+GECICI_HTTP_KODLARI = (408, 429, 500, 502, 503, 504)
+_sleep = time.sleep
+
+
+def _gecici_hata_mi(exc) -> bool:
+    """5xx / 429 / zaman aşımı / transport / code'suz (boş yanıt) hatalar geçicidir.
+
+    code alanı olmayan istisnalar (ValueError 'boş yanıt', httpx transport hataları
+    vb.) geçici kabul edilir; 400/403/404 gibi kalıcı hatalar asla tekrar denenmez.
+    """
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    code = getattr(exc, "code", None)
+    if code is None:
+        return True
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return True
+    return code in GECICI_HTTP_KODLARI
+
+
+def _gecici_hatada_tekrar_dene(
+    islev,
+    log,
+    etiket,
+    ek_deneme=FORENSIC_STAGE_EK_DENEME,
+    bekleme_saniye=FORENSIC_STAGE_BEKLEME_SANIYE,
+    toplam_sinir_saniye=FORENSIC_STAGE_TOPLAM_SINIR_SANIYE,
+):
+    """Zorunlu aşamalar için geçici-hata kurtarması.
+
+    `islev` geçici bir hatayla düşerse `bekleme_saniye` beklenip en fazla
+    `ek_deneme` kez daha denenir. Kalıcı hatalar beklemeden yukarı taşınır.
+    Toplam aşama süresi `toplam_sinir_saniye`'yi aşacak bir yeniden deneme
+    başlatılmaz (job'da render + Telegram upload'a pay bırakılır).
+    """
+    baslangic = time.perf_counter()
+    for deneme in range(ek_deneme + 1):
+        try:
+            return islev()
+        except Exception as exc:
+            gecen = time.perf_counter() - baslangic
+            if deneme >= ek_deneme or not _gecici_hata_mi(exc):
+                raise
+            if gecen + bekleme_saniye >= toplam_sinir_saniye:
+                log(
+                    f"⏳ {etiket}: aşama süre sınırı ({toplam_sinir_saniye}s); "
+                    f"yeniden deneme yapılmıyor. | {gecen:.2f}s"
+                )
+                raise
+            log(
+                f"🔁 {etiket}: tüm model+key kombinasyonları geçici hata verdi; "
+                f"{bekleme_saniye}s beklenip aşama tekrar deneniyor "
+                f"({deneme + 1}/{ek_deneme}) | {gecen:.2f}s | {type(exc).__name__}"
+            )
+            _sleep(bekleme_saniye)
+
+
 def _forensic_analiz_calistir(router, video_bytes, mime_type, analiz_notlari, sure_saniye, log):
     ek = ''
     if analiz_notlari and analiz_notlari.strip():
         ek = f"\nÖNEMLİ VİDEO ANALİZ NOTLARI:\n{analiz_notlari.strip()}\n"
+
+    def _tek_deneme():
+        return router.video_analiz_et(
+            video_bytes, mime_type,
+            forensic_analiz_promptunu_olustur(ek, sure_saniye),
+            VIDEO_ANALYSIS_SCHEMA, log,
+        )
+
     return _run_timed(
         log, "Forensic video analizi (Gemini)",
-        lambda: router.video_analiz_et(video_bytes, mime_type, forensic_analiz_promptunu_olustur(ek, sure_saniye), VIDEO_ANALYSIS_SCHEMA, log),
+        lambda: _gecici_hatada_tekrar_dene(_tek_deneme, log, "Forensic video analizi"),
     )
 
 
