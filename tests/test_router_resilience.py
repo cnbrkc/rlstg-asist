@@ -6,7 +6,7 @@ değiştirilir. Doğrulanan davranış:
   * Bir tam tur (tüm key'ler) başarısız olmadan diğer modele geçilmez.
   * Geçici (503/kota) hataların adımlar arası hafızası yoktur: her adım turları
     fresh yapar (3. key hata verse 4. çalışabilir).
-  * Kalıcı hatalar (404 / bozuk config) modeli tüm adımlarda atlar.
+  * Doğrulanmış 404 modeli kalıcı olarak atlar; config/schema hatası yalnız mevcut istekte atlanır.
   * free-tier key/project'e bağlıdır: yalnızca o key yasaklanır, diğerleri denenir.
 """
 import os
@@ -76,6 +76,7 @@ class ParseHataTests(unittest.TestCase):
         }
         for hata, expected in cases.items():
             self.assertEqual(self.router._parse_hata(hata)[0], expected, msg=hata)
+        self.assertEqual(self.router._parse_hata("400 invalid_argument unsupported")[1], 0)
 
 
 class FullTourTests(unittest.TestCase):
@@ -148,8 +149,8 @@ class FreshTourEveryRequestTests(unittest.TestCase):
             self.assertEqual(router.clients[m].models.calls.count("m"), 1)
 
 
-class PermanentBanTests(unittest.TestCase):
-    """Kalıcı hatalar (404 / bozuk config) modeli tüm adımlarda atlar."""
+class ModelBanScopeTests(unittest.TestCase):
+    """404 kalıcıdır; 400 yapılandırma hatası yalnızca isteğin kapsamındadır."""
 
     def test_404_model_skipped_on_next_request(self):
         router = _router_with_keys(["k0", "k1"])
@@ -169,19 +170,18 @@ class PermanentBanTests(unittest.TestCase):
         # "Model deneniyor: dead" logu bile çıkmaz (en başta atlanır).
         self.assertFalse(any("Model deneniyor: dead" in l for l in logs))
 
-    def test_model_config_skipped_on_next_request(self):
+    def test_model_config_failure_is_scoped_to_each_request(self):
         router = _router_with_keys(["k0", "k1"])
         behavior = {"bad-tts": "model_config", "good-tts": "ok"}
 
-        router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1")}
-        _, info1 = router._make_request(["bad-tts", "good-tts"], "x", None, lambda *a: None, require_text=True)
-        self.assertTrue(info1.endswith("good-tts"))
-
-        router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1")}
-        _, info2 = router._make_request(["bad-tts", "good-tts"], "x", None, lambda *a: None, require_text=True)
-        self.assertTrue(info2.endswith("good-tts"))
-        self.assertEqual(router.clients["k0"].models.calls.count("bad-tts"), 0)
-        self.assertEqual(router.clients["k1"].models.calls.count("bad-tts"), 0)
+        for _ in range(2):
+            router.clients = {m: _FakeClient(behavior) for m in ("k0", "k1")}
+            _, info = router._make_request(["bad-tts", "good-tts"], "x", None, lambda *a: None, require_text=True)
+            self.assertTrue(info.endswith("good-tts"))
+            # This request skips remaining keys for bad-tts, but a later request
+            # retries it instead of inheriting a global model ban.
+            self.assertEqual(router.clients["k0"].models.calls.count("bad-tts"), 1)
+            self.assertEqual(router.clients["k1"].models.calls.count("bad-tts"), 0)
 
 
 class MultiSpeakerConfigTests(unittest.TestCase):

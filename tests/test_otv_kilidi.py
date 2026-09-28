@@ -76,6 +76,19 @@ class OtvMetinTests(unittest.TestCase):
         self.assertEqual([220], metindeki_otv_oranlari("ÖTV yüzde iki yüz yirmi."))
         self.assertEqual([], metindeki_otv_oranlari("KDV yüzde 20."))
 
+    def test_nearby_mtv_or_kdv_percentage_is_not_misclassified_as_otv(self):
+        self.assertEqual([80], metindeki_otv_oranlari("MTV yüzde 20, ÖTV yüzde 80."))
+        self.assertEqual([80], metindeki_otv_oranlari("ÖTV %80; MTV %20."))
+        self.assertEqual([80], metindeki_otv_oranlari("KDV yüzde 20 ve ÖTV yüzde 80."))
+
+    def test_lock_does_not_rewrite_a_nearby_mtv_rate(self):
+        kilit = {"durum": "KESIN", "oran": 220, "izinli": [220]}
+        metin = metni_otv_kilidine_cek("MTV yüzde 70, ÖTV yüzde 80.", kilit)
+
+        self.assertIn("MTV yüzde 70", metin)
+        self.assertIn("ÖTV yüzde 220", metin)
+        self.assertEqual([220], metindeki_otv_oranlari(metin))
+
     def test_lock_rewrites_70_and_170_to_220_in_both_channels(self):
         kilit = {"durum": "KESIN", "oran": 220, "izinli": [220]}
         ses = metni_otv_kilidine_cek("Bu hibritte ÖTV yüzde yetmiş.", kilit)

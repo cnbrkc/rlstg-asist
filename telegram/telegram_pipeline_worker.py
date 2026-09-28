@@ -2,6 +2,7 @@ import json
 import mimetypes
 import os
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from core.pipeline import MAX_QA_REGEN, SOCIAL_QA_EXTRA_REGEN, pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
 from core.media import video_suresini_al
-from core.social_fallbacks import caption_fallback, threads_fallback, text as _text
+from core.social_fallbacks import caption_fallback, limit_threads_text, threads_fallback, text as _text
 
 
 def _token():
@@ -25,6 +26,12 @@ def _token():
 
 def _chat_id():
     return os.environ["TELEGRAM_CHAT_ID"]
+
+
+def _telegram_update_id(value=None):
+    raw = os.environ.get("TELEGRAM_UPDATE_ID", "") if value is None else value
+    update_id = str(raw or "").strip()
+    return update_id if update_id.isdigit() and len(update_id) <= 32 else ""
 
 
 def _base():
@@ -61,6 +68,96 @@ def _timed_action(log, label, callback):
     return result
 
 
+def _pipeline_result_document(source, tone_key, result=None, warnings=None, errors=None,
+                              run_status="success", video_note="", caption=None,
+                              caption_telegram=None, threads=None,
+                              telegram_delivery_status=None, telegram_update_id=None):
+    """Success and failure runs share one downloadable diagnostics format."""
+    result = result if isinstance(result, dict) else {}
+    editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}
+    pipeline_state = result.get("pipeline_state") if isinstance(result.get("pipeline_state"), dict) else {}
+    reels_state = pipeline_state.get("reels_state") if isinstance(pipeline_state.get("reels_state"), dict) else {}
+    document = {
+        "source": source,
+        "content_tone": tone_key,
+        "run_status": run_status,
+        "selected_story_category": editorial.get("selected_story_category"),
+        "priority_audit": editorial.get("_runtime_priority_audit"),
+        "turkiye_ilgi_kancasi": reels_state.get("turkiye_ilgi_kancasi"),
+        "qa": result.get("qa_result", {}),
+        "qa_pass": result.get("qa_pass"),
+        "warnings": list(warnings or []),
+        "errors": list(errors or []),
+    }
+    if source == "text":
+        document.update({
+            "caption": caption if caption is not None else result.get("reels_aciklamasi", ""),
+            "title_options": result.get("kapak_basliklari", []),
+            "threads": threads if threads is not None else result.get("threads_aciklamasi", ""),
+            "voiceover": result.get("seslendirme_metni", ""),
+            "voice_mode": result.get("ses_modu"),
+            "voice": result.get("ses_modu_sesi") or result.get("kullanilan_ses_modeli"),
+            "tts_wave_ready": bool(result.get("ses_basarili") and result.get("ses_dosyasi") and os.path.isfile(result.get("ses_dosyasi"))),
+        })
+    else:
+        final_video = str(result.get("final_video") or "")
+        document.update({
+            "final_video": Path(final_video).name if final_video else "",
+            "video_note": video_note,
+            "seslendirme": result.get("seslendirme_metni", ""),
+            "caption": caption if caption is not None else result.get("reels_aciklamasi", ""),
+            "caption_telegram": caption_telegram or "",
+            "title_options": result.get("kapak_basliklari", []),
+            "threads": threads if threads is not None else result.get("threads_aciklamasi", ""),
+            "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0),
+            "voice_mode": result.get("ses_modu"),
+            "voice": result.get("ses_modu_sesi"),
+            "input_media": result.get("input_media", {}),
+            "output_media": result.get("output_media", {}),
+        })
+    if telegram_delivery_status is not None:
+        document["telegram_delivery_status"] = dict(telegram_delivery_status)
+    update_id = _telegram_update_id(telegram_update_id)
+    if update_id:
+        document["telegram_update_id"] = update_id
+    return document
+
+
+def _write_pipeline_result(document, log=None, path="pipeline_result.json"):
+    """Best-effort atomic write; diagnostics must never mask a pipeline result."""
+    destination = Path(path)
+    temporary = None
+    descriptor = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=str(destination.parent or Path(".")),
+        )
+        temporary = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = None
+            json.dump(document, handle, ensure_ascii=False, indent=2, default=str)
+            handle.write("\n")
+        os.replace(temporary, destination)
+        return True
+    except Exception as exc:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if callable(log):
+            try:
+                log(f"⚠️ Pipeline tanı dosyası yazılamadı: {type(exc).__name__}: {str(exc)[:160]}")
+            except Exception:
+                pass
+        return False
+
+
 def send_message(text):
     r = requests.post(f"{_base()}/sendMessage", data={"chat_id": _chat_id(), "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
     r.raise_for_status()
@@ -76,6 +173,21 @@ def send_video(path, caption):
     with open(path, "rb") as fh:
         r = requests.post(f"{_base()}/sendVideo", data={"chat_id": _chat_id(), "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
     r.raise_for_status()
+
+
+def send_document(path, caption=""):
+    """Upload an arbitrary file as a document (not as assumed audio media)."""
+    path = Path(path)
+    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    with path.open("rb") as handle:
+        response = requests.post(
+            f"{_base()}/sendDocument",
+            data={"chat_id": _chat_id(), "caption": str(caption or "")[:TELEGRAM_VIDEO_CAPTION_LIMIT]},
+            files={"document": (path.name, handle, mime_type)},
+            timeout=300,
+        )
+    response.raise_for_status()
+    return response.json()
 
 
 def video_duration(path):
@@ -200,6 +312,103 @@ def _final_report(step_status, warnings, errors, result, tone_key):
     if errors:
         lines += ["", "❌ HATALAR"] + [f"• {x}" for x in errors[:8]]
     return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
+
+
+def _telegram_text_chunks(text, limit=TELEGRAM_TEXT_LIMIT):
+    """Split long text without dropping characters or exceeding Telegram's limit."""
+    remaining = str(text or "")
+    if not remaining:
+        return []
+    chunks = []
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at < limit // 2:
+            split_at = remaining.rfind(" ", 0, limit + 1)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _send_telegram_text(text):
+    """Send all parts of a long result; `send_message` must never truncate it."""
+    responses = []
+    for part in _telegram_text_chunks(text):
+        responses.append(send_message(part))
+    return responses
+
+
+def _text_caption_message(caption, hashtags):
+    tags = [
+        "#" + str(tag).lstrip("#").strip()
+        for tag in (hashtags or [])
+        if str(tag or "").strip()
+    ]
+    body = str(caption or "").strip()
+    if tags:
+        body = f"{body}\n\n{' '.join(tags)}" if body else " ".join(tags)
+    return f"📝 INSTAGRAM CAPTION + HASHTAG\n\n{body}" if body else ""
+
+
+def _text_voiceover_message(result):
+    text = str((result or {}).get("seslendirme_metni") or "").strip()
+    if not text:
+        return ""
+    mode = str((result or {}).get("ses_modu") or "Belirtilmedi")
+    voice = str((result or {}).get("ses_modu_sesi") or (result or {}).get("kullanilan_ses_modeli") or "Belirtilmedi")
+    return f"🎙️ SESLENDİRME METNİ\nMod: {mode} | Ses: {voice}\n\n{text}"
+
+
+def _text_final_report(step_status, warnings, errors, result, tone_key, delivery_status):
+    lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
+    for index, name in enumerate(TEXT_PIPELINE_STEPS):
+        lines.append(f"{step_status.get(index, '⚪')} {index + 1}/8 {name}")
+    lines += [
+        "",
+        f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}",
+        f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
+        f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
+        f"✅ QA final: {_qa_final_label(result)}",
+        f"🎧 WAV hazır: {'Evet' if delivery_status.get('tts_wave') != 'not_available' and result.get('ses_basarili') else 'Hayır'}",
+        "",
+        "📦 TELEGRAM TESLİMAT DURUMU",
+    ]
+    delivery_labels = {
+        "caption": "Caption + hashtag",
+        "title_options": "Kapak başlığı alternatifleri",
+        "threads": "Threads metni",
+        "voiceover": "Seslendirme metni",
+        "tts_wave": "TTS WAV dosyası",
+    }
+    display_status = {
+        "delivered": "✅ Gönderildi",
+        "failed": "❌ Gönderilemedi",
+        "not_available": "— Üretilmedi / yok",
+        "pending": "⏳ Bekliyor",
+    }
+    for key, label in delivery_labels.items():
+        lines.append(f"• {label}: {display_status.get(delivery_status.get(key), 'Bilinmiyor')}")
+    lines += [f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}"]
+    if warnings:
+        lines += ["", "⚠️ UYARILAR"] + [f"• {item}" for item in warnings[:6]]
+    if errors:
+        lines += ["", "❌ HATALAR"] + [f"• {item}" for item in errors[:6]]
+    return "\n".join(lines)[:TELEGRAM_TEXT_LIMIT]
+
+
+def _deliver_text_asset(key, label, callback, delivery_status, delivery_errors, log):
+    try:
+        callback()
+        delivery_status[key] = "delivered"
+        log(f"📨 Text-mode teslim edildi: {label}")
+    except Exception as exc:
+        delivery_status[key] = "failed"
+        detail = f"{label}: {type(exc).__name__}: {str(exc)[:180]}"
+        delivery_errors.append(detail)
+        log(f"⚠️ Text-mode teslimat başarısız ({label}): {type(exc).__name__}: {str(exc)[:180]}")
 
 
 def _qa_text(qa_result):
@@ -386,11 +595,14 @@ def _ensure_social_outputs(result, warnings):
             hashtags = fallback_hashtags
             result["reels_hashtagleri"] = hashtags
             warnings.append("⚠️ Hashtag modeli boş döndü; güvenli varsayılan hashtag seti kullanıldı.")
-    threads = _text(result.get("threads_aciklamasi"))
+    original_threads = _text(result.get("threads_aciklamasi"))
+    threads = limit_threads_text(original_threads)
     if not threads:
         threads = threads_fallback(fact_state, editorial, video_state)
-        result["threads_aciklamasi"] = threads
         warnings.append("⚠️ Threads modeli boş döndü; Fact Lock tabanlı güvenli sosyal fallback kullanıldı.")
+    if len(original_threads) > 500:
+        warnings.append("⚠️ Threads metni 500 karakter sınırına indirildi.")
+    result["threads_aciklamasi"] = threads
     return caption, hashtags, threads
 
 
@@ -407,7 +619,7 @@ def process(path):
     log(
         f"🚀 PIPELINE INPUT | mode=video | file={path.name} | bytes={len(raw)} | "
         f"duration={duration if duration is not None else 'unknown'}s | mime={mime} | "
-        f"tone={tone_key} | note_chars={len(user_video_note)}"
+        f"tone={tone_key} | update_id={_telegram_update_id() or 'unavailable'} | note_chars={len(user_video_note)}"
     )
 
     try:
@@ -415,6 +627,13 @@ def process(path):
     except Exception as exc:
         errors.append(str(exc))
         log(f"❌ Pipeline exception: {type(exc).__name__}: {str(exc)[:300]}")
+        _write_pipeline_result(
+            _pipeline_result_document(
+                path.name, tone_key, warnings=warnings, errors=errors,
+                run_status="pipeline_error", video_note=user_video_note,
+            ),
+            log,
+        )
         log.finish_timing("FAIL")
         try:
             edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
@@ -429,6 +648,13 @@ def process(path):
     if not final or not Path(final).exists():
         errors.append("Pipeline tamamlandı ancak final video üretilemedi.")
         log("❌ Pipeline tamamlandı ancak final video üretilemedi.")
+        _write_pipeline_result(
+            _pipeline_result_document(
+                path.name, tone_key, result=result, warnings=warnings, errors=errors,
+                run_status="no_final_video", video_note=user_video_note,
+            ),
+            log,
+        )
         log.finish_timing("FAIL_NO_VIDEO")
         edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
@@ -440,12 +666,32 @@ def process(path):
         warnings.append(f"⚠️ Telegram video caption sınırı ({TELEGRAM_VIDEO_CAPTION_LIMIT} karakter): açıklama kısaltıldı; tam Instagram metni aşağıdaki sosyal çıktıda korunuyor.")
     for i in range(len(PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
-    _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
-    _timed_action(log, "Telegram final video upload", lambda: send_video(final, video_caption))
-    _timed_action(log, "Telegram başlık seçenekleri", lambda: send_message(_format_title_options(result.get("kapak_basliklari") or [])))
-    if threads:
-        _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
-    Path("pipeline_result.json").write_text(json.dumps({"source": path.name, "final_video": Path(final).name, "content_tone": tone_key, "selected_story_category": (result.get("editorial_brief") or {}).get("selected_story_category"), "priority_audit": (result.get("editorial_brief") or {}).get("_runtime_priority_audit"), "turkiye_ilgi_kancasi": ((result.get("pipeline_state") or {}).get("reels_state") or {}).get("turkiye_ilgi_kancasi"), "video_note": user_video_note, "seslendirme": result.get("seslendirme_metni", ""), "caption": caption, "caption_telegram": video_caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "qa_regeneration_rounds": result.get("qa_regeneration_rounds", 0), "voice_mode": result.get("ses_modu"), "voice": result.get("ses_modu_sesi"), "input_media": result.get("input_media", {}), "output_media": result.get("output_media", {}), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
+        _timed_action(log, "Telegram final video upload", lambda: send_video(final, video_caption))
+        _timed_action(log, "Telegram başlık seçenekleri", lambda: send_message(_format_title_options(result.get("kapak_basliklari") or [])))
+        if threads:
+            _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
+    except Exception as exc:
+        errors.append(f"{type(exc).__name__}: {str(exc)[:300]}")
+        _write_pipeline_result(
+            _pipeline_result_document(
+                path.name, tone_key, result=result, warnings=warnings, errors=errors,
+                run_status="telegram_delivery_error", video_note=user_video_note,
+                caption=caption, caption_telegram=video_caption, threads=threads,
+            ),
+            log,
+        )
+        raise
+
+    _write_pipeline_result(
+        _pipeline_result_document(
+            path.name, tone_key, result=result, warnings=warnings, errors=errors,
+            run_status="success", video_note=user_video_note,
+            caption=caption, caption_telegram=video_caption, threads=threads,
+        ),
+        log,
+    )
     log.finish_timing("SUCCESS")
 
 
@@ -455,15 +701,28 @@ def process_text(text):
     loading_id = initial["result"]["message_id"]
     router = SmartRouter()
     step_status, warnings, errors, tone_key, selected_tone, log, progress = _setup_env(TEXT_PIPELINE_STEPS, loading_id)
-    log(f"🚀 PIPELINE INPUT | mode=text | text_chars={len(text)} | tone={tone_key}")
+    log(f"🚀 PIPELINE INPUT | mode=text | text_chars={len(text)} | tone={tone_key} | update_id={_telegram_update_id() or 'unavailable'}")
 
     try:
         result = metin_pipeline_calistir(router=router, metin=text, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
         log(f"❌ Text pipeline exception: {type(exc).__name__}: {str(exc)[:300]}")
+        _write_pipeline_result(
+            _pipeline_result_document(
+                "text", tone_key, warnings=warnings, errors=errors,
+                run_status="pipeline_error",
+            ),
+            log,
+        )
         log.finish_timing("FAIL")
-        edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
+        try:
+            edit_message(
+                loading_id,
+                _text_final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key, {}),
+            )
+        except Exception:
+            pass
         raise
 
     log.close_stage()
@@ -471,11 +730,98 @@ def process_text(text):
     caption, hashtags, threads = _ensure_social_outputs(result, warnings)
     for i in range(len(TEXT_PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
-    _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
-    if threads:
-        _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
-    Path("pipeline_result.json").write_text(json.dumps({"source": "text", "content_tone": tone_key, "selected_story_category": (result.get("editorial_brief") or {}).get("selected_story_category"), "priority_audit": (result.get("editorial_brief") or {}).get("_runtime_priority_audit"), "turkiye_ilgi_kancasi": ((result.get("pipeline_state") or {}).get("reels_state") or {}).get("turkiye_ilgi_kancasi"), "caption": caption, "title_options": result.get("kapak_basliklari", []), "threads": threads, "qa": result.get("qa_result", {}), "qa_pass": result.get("qa_pass"), "warnings": warnings, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
-    log.finish_timing("SUCCESS")
+    if not result.get("qa_pass"):
+        step_status[6] = "🔴"
+        step_status[7] = "⏭️"
+    elif not (result.get("ses_basarili") and result.get("ses_dosyasi") and os.path.isfile(result.get("ses_dosyasi"))):
+        step_status[7] = "⚠️"
+
+    delivery_status = {
+        "caption": "pending",
+        "title_options": "pending",
+        "threads": "pending",
+        "voiceover": "pending",
+        "tts_wave": "pending",
+    }
+    delivery_errors = []
+
+    caption_message = _text_caption_message(caption, hashtags)
+    if caption_message:
+        _deliver_text_asset(
+            "caption", "caption + hashtag",
+            lambda: _timed_action(log, "Telegram caption + hashtag", lambda: _send_telegram_text(caption_message)),
+            delivery_status, delivery_errors, log,
+        )
+    else:
+        delivery_status["caption"] = "not_available"
+
+    title_message = _format_title_options(result.get("kapak_basliklari") or [])
+    _deliver_text_asset(
+        "title_options", "kapak başlığı alternatifleri",
+        lambda: _timed_action(log, "Telegram kapak başlığı alternatifleri", lambda: _send_telegram_text(title_message)),
+        delivery_status, delivery_errors, log,
+    )
+
+    thread_message = _threads_message(threads)
+    if thread_message:
+        _deliver_text_asset(
+            "threads", "Threads metni",
+            lambda: _timed_action(log, "Telegram Threads metni", lambda: _send_telegram_text(thread_message)),
+            delivery_status, delivery_errors, log,
+        )
+    else:
+        delivery_status["threads"] = "not_available"
+
+    voiceover_message = _text_voiceover_message(result)
+    if voiceover_message:
+        _deliver_text_asset(
+            "voiceover", "seslendirme metni",
+            lambda: _timed_action(log, "Telegram seslendirme metni", lambda: _send_telegram_text(voiceover_message)),
+            delivery_status, delivery_errors, log,
+        )
+    else:
+        delivery_status["voiceover"] = "not_available"
+
+    tts_path = result.get("ses_dosyasi")
+    if result.get("ses_basarili") and tts_path and os.path.isfile(tts_path):
+        _deliver_text_asset(
+            "tts_wave", "TTS WAV dosyası",
+            lambda: _timed_action(
+                log,
+                "Telegram TTS WAV belge yükleme",
+                lambda: send_document(
+                    tts_path,
+                    "Text-mode TTS WAV; dosya belge olarak eklendi, audio formatına dönüştürülmedi.",
+                ),
+            ),
+            delivery_status, delivery_errors, log,
+        )
+    else:
+        delivery_status["tts_wave"] = "not_available"
+
+    errors.extend(delivery_errors)
+    delivery_status["final_report"] = "pending"
+    final_report = _text_final_report(step_status, warnings, errors, result, tone_key, delivery_status)
+    try:
+        _timed_action(log, "Telegram text-only final raporu", lambda: edit_message(loading_id, final_report))
+        delivery_status["final_report"] = "delivered"
+    except Exception as exc:
+        delivery_status["final_report"] = "failed"
+        detail = f"Final rapor: {type(exc).__name__}: {str(exc)[:180]}"
+        errors.append(detail)
+        delivery_errors.append(detail)
+        log(f"⚠️ Text-mode final rapor gönderilemedi: {type(exc).__name__}: {str(exc)[:180]}")
+
+    run_status = "telegram_delivery_error" if delivery_errors else "success"
+    _write_pipeline_result(
+        _pipeline_result_document(
+            "text", tone_key, result=result, warnings=warnings, errors=errors,
+            run_status=run_status, caption=caption, threads=threads,
+            telegram_delivery_status=delivery_status,
+        ),
+        log,
+    )
+    log.finish_timing("SUCCESS" if not delivery_errors else "SUCCESS_WITH_DELIVERY_ERRORS")
 
 
 def main():

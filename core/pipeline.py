@@ -4,9 +4,9 @@ Katmanlar:
   1. pipeline_calistir      : video girdili tam üretim (forensic → research →
      editorial → agentic döngü → QA → FFmpeg render → payload).
   2. metin_pipeline_calistir: video analizi olmadan metin girdili üretim.
-  3. _qa_regeneration_loop  : agentic üretim + caption/threads + final QA ve
-     kontrollü (maks 1) yenileme; QA yalnızca DUO scripti işaretlerken geçerli
-     DUO TTS varsa render'ı boğmaz (duo_nonblocking_fallback).
+  3. _qa_regeneration_loop  : agentic üretim + caption/threads + final QA;
+     bir olağan yenileme ve yalnız sosyal hedeflerde bir ek yenileme hakkı vardır.
+     QA yalnızca DUO scripti işaretlerken geçerli DUO TTS varsa render'ı boğmaz.
 
 Sosyal korumalar (artifact/boş çıktı doğrulaması + Fact Lock tabanlı fallback)
 bu modülde NİTELEMSİZ (native) uygulanır; ayrı monkey-patch katmanı yoktur.
@@ -50,7 +50,8 @@ from core.media import (
 )
 from core.narration_mode import anlatim_modu_karar_ver
 from core.social_fallbacks import (
-    caption_fallback, looks_like_artifact, sanitize_hashtags,
+    caption_fallback, limit_threads_text as _limit_threads_text,
+    looks_like_artifact, sanitize_hashtags,
     text as _text, threads_fallback,
 )
 
@@ -161,10 +162,12 @@ def _caption_state_normalize(value, log=None):
 def _threads_state_normalize(value):
     parsed = _json_object_or_none(value)
     if parsed is not None:
-        return {"threads_aciklamasi": str(parsed.get("threads_aciklamasi", "") or "")}
-    if isinstance(value, str) and value.strip():
-        return {"threads_aciklamasi": value.strip()}
-    return {"threads_aciklamasi": ""}
+        text = parsed.get("threads_aciklamasi", "")
+    elif isinstance(value, str):
+        text = value
+    else:
+        text = ""
+    return {"threads_aciklamasi": _limit_threads_text(text)}
 
 
 def _ilerleme(cb, n, msg=None):
@@ -412,29 +415,52 @@ def _threads_calistir(router, video_state, fact_state, editorial_state, log, ton
 
 # --- Ses modu katmanı ------------------------------------------------------------
 
+_VOICE_NOTE_TRANSLATION = str.maketrans("çğıöşüâîû", "cgiosuaiu")
+
+
 def _explicit_voice_mode_from_notes(notes):
-    """Kullanıcı notundan açık ses modu talebini çözer; yoksa '' döner."""
-    text = str(notes or "").casefold().replace("_", " ")
-    if re.search(r"\b(sen\s+seç|ai.{0,20}karar\s+ver|içeriğe\s+göre\s+seç|videoya\s+göre\s+seç)\b", text):
+    """Açık kullanıcı ses tercihini canonical moda indirger; yoksa '' döner.
+
+    Türkçe diakritiksiz yazımlar da eşleşir. Genel "solo" isteği, narration
+    mode sözleşmesindeki güvenli varsayılan olan SOLO_FEMALE'a çözülür.
+    """
+    text = str(notes or "").casefold().translate(_VOICE_NOTE_TRANSLATION).replace("_", " ")
+    if re.search(r"\b(sen\s+sec|ai.{0,20}karar\s+ver|icerige\s+gore\s+sec|videoya\s+gore\s+sec)\b", text):
         return ""
 
-    duo_pattern = r"\b(duo|iki\s+ses(?:li)?|çift\s+ses(?:li)?)\b"
+    duo_pattern = r"\b(duo|iki\s+ses(?:li)?|cift\s+ses(?:li)?)\b"
     solo_pattern = r"\b(solo|tek\s+ses(?:li)?)\b"
-    duo_negated = bool(re.search(duo_pattern + r".{0,18}\b(olmasın|istemiyorum|isteme)\b", text))
-    solo_negated = bool(re.search(solo_pattern + r".{0,18}\b(olmasın|istemiyorum|isteme)\b", text))
+    negation = r"(olmasin|istemiyorum|isteme)"
+    duo_negated = bool(re.search(duo_pattern + r".{0,18}\b" + negation + r"\b", text))
+    solo_negated = bool(re.search(solo_pattern + r".{0,18}\b" + negation + r"\b", text))
+
+    gender_patterns = (
+        (r"\b(solo\s+female|sadece\s+kadin(?:\s+sesi)?|yalnizca\s+kadin(?:\s+sesi)?|tek\s+kadin\s+sesi)\b", "SOLO_FEMALE"),
+        (r"\b(solo\s+male|sadece\s+erkek(?:\s+sesi)?|yalnizca\s+erkek(?:\s+sesi)?|tek\s+erkek\s+sesi)\b", "SOLO_MALE"),
+    )
+    if duo_negated and not solo_negated:
+        # Kullanıcı yalnızca Duo'yu yasakladıysa da bu tercih tek ses demektir.
+        if not re.search(solo_pattern, text):
+            gender_candidates = []
+            for pattern, mode in gender_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    gender_candidates.append((match.start(), mode))
+            return max(gender_candidates, default=(-1, "SOLO_FEMALE"))[1]
+    elif solo_negated and not duo_negated:
+        return "DUO"
+    elif duo_negated and solo_negated:
+        return ""
 
     candidates = []
-    for pattern, mode in (
-        (r"\b(solo\s+female|sadece\s+kadın|yalnızca\s+kadın|tek\s+kadın\s+sesi)\b", "SOLO_FEMALE"),
-        (r"\b(solo\s+male|sadece\s+erkek|yalnızca\s+erkek|tek\s+erkek\s+sesi)\b", "SOLO_MALE"),
-    ):
+    for pattern, mode in gender_patterns:
         match = re.search(pattern, text)
         if match and not solo_negated:
             candidates.append((match.start(), mode))
     if not solo_negated:
         match = re.search(solo_pattern, text)
         if match:
-            candidates.append((match.start(), "SOLO"))
+            candidates.append((match.start(), "SOLO_FEMALE"))
     if not duo_negated:
         match = re.search(duo_pattern, text)
         if match:
@@ -449,11 +475,22 @@ def _mod_karari_al(editorial_state):
 
 def _anlatim_modu_karari_ekle(router, video_state, fact_state, editorial_state, sure_saniye, ton, notes, log):
     editorial = dict(_object_state_or_empty(editorial_state))
-    if not editorial:
+    explicit_mode = _explicit_voice_mode_from_notes(notes)
+    if not editorial and not explicit_mode:
         log('⚠️ Editorial state okunamadı; anlatım modu kararı atlandı.')
         return editorial_state
-    if _explicit_voice_mode_from_notes(notes):
-        log('🎚️ Kullanıcı notunda açık ses modu talebi var; AI mod kararı atlandı.')
+    if explicit_mode:
+        # Açık kullanıcı tercihi yalnızca AI kararını atlamaz; Script Writer ve
+        # QA'nın okuyacağı Editorial state'e de canonical biçimde kaydedilir.
+        editorial['anlatim_modu_karari'] = {
+            "mode": explicit_mode,
+            "reason": "Kullanıcı notunda açık ses modu tercihi.",
+            "confidence": 1.0,
+            "duo_value": "",
+            "solo_value": "",
+            "source": "user",
+        }
+        log(f'🎚️ Kullanıcının açık ses modu tercihi kaydedildi: {explicit_mode}; AI mod kararı atlandı.')
         return editorial
     if _asiri_yukte_atla_mi(router):
         # Yalnız ISTEGE_BAGLI_ASIRI_YUK_ATLA=1 iken (hız-öncelikli operasyon modu).
@@ -714,6 +751,9 @@ def _otv_qa_zorla(qa_state, reels_state, caption_state, threads_state, fact_stat
 
 
 def _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan=None, duo_script=None, ton=None):
+    # QA'nın denetlediği Threads metni, kullanıcıya teslim edilecek 500-char
+    # canonical sürümle aynı olmalı.
+    threads_state = _threads_state_normalize(threads_state)
     content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('DUO PLAN', duo_plan or {}), durumu_metne_donustur('DUO SCRIPT', duo_script or {}), durumu_metne_donustur('CAPTION', caption_state), durumu_metne_donustur('THREADS', threads_state), f'VIDEO SÜRESİ: {sure_saniye}', f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}', vergi_kilidi_talimati(fact_state))
     try:
         with _istek_profili(router, "uzun_metin"):
@@ -784,7 +824,10 @@ def _threads_future_sonucu(future, router, video_state, fact_state, editorial_st
 
 
 def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, duo_plan, duo_script, sure_saniye, ton, legacy_voice, log, voice_initial_instruction='', production_notes='', ses_modu_notlari=None, editorial_hazirlayici=None):
-    """Agentic üretim + caption/threads + final QA (maks 1 kontrollü yenileme).
+    """Agentic üretim + caption/threads + final QA.
+
+    En fazla bir olağan yenileme ve yalnız sosyal hata kaldıysa bir ek sosyal
+    yenileme yapılır; bu sınırlı ek tur video/TTS üretimini başlatmaz.
 
     editorial_hazirlayici: (isteğe bağlı) anlatım modu kararını içeren nihai
       editorial_state'i döndüren callable. Verilirse mod kararı arka planda

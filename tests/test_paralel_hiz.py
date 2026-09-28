@@ -1,7 +1,6 @@
 """Üretim hız iyileştirmeleri (Eylül 2026 logu) regresyon testleri.
 
-* agentic `_hizli_basarislik` router'da `hizli_basarisizlik` adıyla kaldığı için
-  isteğe bağlı ajanlar hızlı-başarısızlık korumasını hiç almıyordu.
+* Router hızlı-başarısızlık alias/fallback ve thread-local bağlam davranışı.
 * Paralel kollar (Threads / Metadata / anlatım modu) için router bağlamı
   (istek profili + hızlı-başarısızlık) thread-local olmalı.
 * QA yenilemesinde Detective/Hook yeniden çağrılmaz, Critic atlanır.

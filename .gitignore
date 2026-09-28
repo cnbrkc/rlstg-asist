@@ -5,6 +5,7 @@ data/*.webm
 data/pending/*.json
 *.telegram.mp3
 pipeline_result.json
+.pipeline_result.*.tmp
 __pycache__/
 *.pyc
 .venv/
