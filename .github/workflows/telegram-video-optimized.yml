@@ -148,6 +148,7 @@ jobs:
           p = Path("pipeline_result.json")
           data = json.loads(p.read_text(encoding="utf-8"))
           print(f"- Result size: {p.stat().st_size} bytes")
+          print(f"- Run status: {data.get('run_status', 'unknown')}")
           print(f"- QA pass: {data.get('qa_pass')}")
           print(f"- QA regeneration rounds: {data.get('qa_regeneration_rounds', 0)}")
           print(f"- Voice mode: {data.get('voice_mode', 'unknown')}")
@@ -156,3 +157,14 @@ jobs:
           PY
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Includes generated copy and the user-provided analysis note; keep access
+      # to repository collaborators and retention short for privacy.
+      - name: Upload pipeline diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pipeline_result.json
+          if-no-files-found: ignore
+          retention-days: 7

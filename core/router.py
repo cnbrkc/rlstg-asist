@@ -24,6 +24,7 @@ from core.config import (
     model_arama_destekliyor_mu,
 )
 from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
+from core.schema_validation import validate_structured_output
 from core.tts_delivery import teslimatlari_birlestir, transkripti_ayikla
 
 # İstemci düzeyi varsayılan zaman aşımı (ms). Her istek ayrıca kendi profiline
@@ -224,23 +225,56 @@ class SmartRouter:
                 bl.pop(key, None)
         return False
 
-    def _parse_hata(self, hata_metni: str) -> Tuple[str, int]:
-        m = (hata_metni or "").lower()
-        if "404" in m or "not_found" in m or "model not found" in m:
+    def _parse_hata(self, hata: Any) -> Tuple[str, int]:
+        """SDK durum kodu/alanlarını kullanır; eski metin tabanlı çağrıları da kabul eder."""
+        code = getattr(hata, "code", None)
+        response = getattr(hata, "response", None)
+        if code is None:
+            code = getattr(response, "status_code", None)
+        try:
+            code = int(code) if code is not None else None
+        except (TypeError, ValueError):
+            code = None
+
+        if isinstance(hata, str):
+            m = hata.lower()
+        else:
+            # google-genai APIError exposes code, status and message. Keep the
+            # text fallback for transport errors and SDK versions with a
+            # different shape.
+            fields = (
+                str(code or ""),
+                str(getattr(hata, "status", "") or ""),
+                str(getattr(hata, "message", "") or ""),
+                str(getattr(hata, "details", "") or ""),
+                str(hata or ""),
+            )
+            m = " ".join(fields).lower()
+
+        if code == 404 or "404" in m or "not_found" in m or "model not found" in m:
             return "model_key", COOLDOWN_BULUNAMADI
         if "limit: 0" in m or 'limit\\": 0' in m:
             return "free_tier_yok", COOLDOWN_FREE_TIER_YOK
-        if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
+        if code == 429 or "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
             if "perday" in m.replace(" ", "").replace("_", ""):
                 return "quota_day", DAILY_QUOTA_COOLDOWN
             return "quota", 0
-        if "400" in m or "invalid_argument" in m or "unsupported" in m:
+        if code == 400 or "400" in m or "invalid_argument" in m or "unsupported" in m:
             return "model_config", COOLDOWN_BULUNAMADI
-        if "503" in m or "unavailable" in m:
+        if code == 503 or "503" in m or "unavailable" in m:
             return "unavailable", COOLDOWN_DIGER
-        if "timeout" in m or "timed out" in m:
+        if code in (408, 504) or "timeout" in m or "timed out" in m or "deadline_exceeded" in m:
             return "combo", COOLDOWN_DIGER
         return "combo", COOLDOWN_DIGER
+
+    def _bekleme_butcesi_rezerve_et(self, alan: str, butce_saniye: float, istenen_saniye: float) -> float:
+        """Paralel istekler için bekleme bütçesini atomik olarak rezerve eder."""
+        with self._request_counter_lock:
+            harcanan = float(getattr(self, alan, 0.0) or 0.0)
+            kalan = max(0.0, float(butce_saniye) - harcanan)
+            ayrilan = min(max(0.0, float(istenen_saniye)), kalan)
+            setattr(self, alan, harcanan + ayrilan)
+            return ayrilan
 
     @staticmethod
     def _reason_for(scope: str) -> str:
@@ -340,7 +374,7 @@ class SmartRouter:
                     except Exception as e:
                         son_hata = e
                         attempt_elapsed = time.perf_counter() - attempt_started
-                        scope, cooldown = self._parse_hata(str(e))
+                        scope, cooldown = self._parse_hata(e)
 
                         if scope in ("quota", "quota_day"):
                             # Kota key'e özeldir ve dolar; beklemeden diğer key.
@@ -406,22 +440,20 @@ class SmartRouter:
             istege_bagli_havuz = profil == "istege_bagli"
             havuz_alani = "_optional_overload_wait_spent" if istege_bagli_havuz else "_overload_wait_spent"
             havuz_butcesi = OVERLOAD_OPTIONAL_WAIT_BUDGET_SECONDS if istege_bagli_havuz else OVERLOAD_WAIT_BUDGET_SECONDS
-            spent = getattr(self, havuz_alani, 0.0)
-            remaining = havuz_butcesi - spent
             age = time.monotonic() - getattr(self, "_created_at", time.monotonic())
             if age + wait_s > OVERLOAD_RETRY_DEADLINE_SECONDS:
                 log_ekle(f"⏳ API #{request_id}: çalışma süresi {age/60:.1f} dk; job zaman sınırı için yeniden deneme beklemesi yapılmıyor.")
-                break
-            if remaining <= 0:
-                log_ekle(f"⏳ API #{request_id}: aşırı-yük bekleme bütçesi ({havuz_butcesi}s{', isteğe bağlı havuz' if istege_bagli_havuz else ''}) tükendi; yeniden deneme yapılmıyor.")
                 break
             if butce_saniye and (time.perf_counter() - request_started) + wait_s >= butce_saniye:
                 # Bekleme bitince istek bütçesi zaten dolmuş olacak: boşuna uyuma.
                 log_ekle(f"⏱️ API #{request_id}: istek bütçesi ({butce_saniye}s) bekleme sonrasına yetmiyor; yeniden deneme yapılmıyor.")
                 break
-            wait_s = min(wait_s, remaining)
-            with self._request_counter_lock:
-                setattr(self, havuz_alani, getattr(self, havuz_alani, 0.0) + wait_s)
+            # Kalan bütçeyi okuma ve harcama tek kilit altında yapılır; böylece
+            # eşzamanlı kollar aynı son bekleme süresini iki kez kullanamaz.
+            wait_s = self._bekleme_butcesi_rezerve_et(havuz_alani, havuz_butcesi, wait_s)
+            if wait_s <= 0:
+                log_ekle(f"⏳ API #{request_id}: aşırı-yük bekleme bütçesi ({havuz_butcesi}s{', isteğe bağlı havuz' if istege_bagli_havuz else ''}) tükendi; yeniden deneme yapılmıyor.")
+                break
             log_ekle(
                 f"⏳ API #{request_id}: tüm model+key kombinasyonları geçici hata verdi (503/kota/timeout). "
                 f"{wait_s:.0f}s beklenip tam tur yeniden deneniyor ({round_no}/{OVERLOAD_RETRY_ROUNDS})."
@@ -512,6 +544,7 @@ class SmartRouter:
             )
             parsed = self._json_parse_or_none(getattr(response, "text", ""))
             if parsed is not None:
+                parsed = validate_structured_output(parsed, response_schema, "Gemini metin")
                 return parsed, info
 
             if arama_kullan:
@@ -533,7 +566,8 @@ class SmartRouter:
                     require_text=True,
                     profil=profil,
                 )
-                return guvenli_json_yukle(getattr(response, "text", "")), info
+                parsed = guvenli_json_yukle(getattr(response, "text", ""))
+                return validate_structured_output(parsed, response_schema, "Gemini Search fallback"), info
 
             raise ValueError("Model JSON yanıtı parse edilemedi.")
 
@@ -560,7 +594,8 @@ class SmartRouter:
                     require_text=True,
                     profil=profil,
                 )
-                return guvenli_json_yukle(getattr(response, "text", "")), info
+                parsed = guvenli_json_yukle(getattr(response, "text", ""))
+                return validate_structured_output(parsed, response_schema, "Gemini Fact Lock fallback"), info
             except Exception:
                 raise first_error
 
@@ -592,7 +627,8 @@ class SmartRouter:
             require_text=True,
             profil="video",
         )
-        return guvenli_json_yukle(getattr(response, "text", "")), info
+        parsed = guvenli_json_yukle(getattr(response, "text", ""))
+        return validate_structured_output(parsed, response_schema, "Gemini video analizi"), info
 
     def _tts_performans_promptu_olustur(self, metin: str, ses_adi: str, teslimat: str = "") -> str:
         not_bloku = ""

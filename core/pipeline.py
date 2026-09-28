@@ -4,9 +4,9 @@ Katmanlar:
   1. pipeline_calistir      : video girdili tam üretim (forensic → research →
      editorial → agentic döngü → QA → FFmpeg render → payload).
   2. metin_pipeline_calistir: video analizi olmadan metin girdili üretim.
-  3. _qa_regeneration_loop  : agentic üretim + caption/threads + final QA ve
-     kontrollü (maks 1) yenileme; QA yalnızca DUO scripti işaretlerken geçerli
-     DUO TTS varsa render'ı boğmaz (duo_nonblocking_fallback).
+  3. _qa_regeneration_loop  : agentic üretim + caption/threads + final QA;
+     bir olağan yenileme ve yalnız sosyal hedeflerde bir ek yenileme hakkı vardır.
+     QA yalnızca DUO scripti işaretlerken geçerli DUO TTS varsa render'ı boğmaz.
 
 Sosyal korumalar (artifact/boş çıktı doğrulaması + Fact Lock tabanlı fallback)
 bu modülde NİTELEMSİZ (native) uygulanır; ayrı monkey-patch katmanı yoktur.
@@ -784,7 +784,10 @@ def _threads_future_sonucu(future, router, video_state, fact_state, editorial_st
 
 
 def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, duo_plan, duo_script, sure_saniye, ton, legacy_voice, log, voice_initial_instruction='', production_notes='', ses_modu_notlari=None, editorial_hazirlayici=None):
-    """Agentic üretim + caption/threads + final QA (maks 1 kontrollü yenileme).
+    """Agentic üretim + caption/threads + final QA.
+
+    En fazla bir olağan yenileme ve yalnız sosyal hata kaldıysa bir ek sosyal
+    yenileme yapılır; bu sınırlı ek tur video/TTS üretimini başlatmaz.
 
     editorial_hazirlayici: (isteğe bağlı) anlatım modu kararını içeren nihai
       editorial_state'i döndüren callable. Verilirse mod kararı arka planda
