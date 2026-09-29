@@ -34,6 +34,13 @@ class CloudflareWebhookSozlesmeTests(unittest.TestCase):
             "/setup setWebhook'tan ÖNCE doğrulamalı",
         )
 
+    def test_allowlist_yalniz_ozel_degiskende_devreye_girer(self):
+        """Allowlist YALNIZ ALLOWED_CHAT_IDS ile aktifleşir; TELEGRAM_CHAT_ID
+        fallback'i YOKTUR — o değişken başka sebeple setli olsa bile bot
+        yanlışlıkla kilitlenemez."""
+        self.assertNotIn("env.TELEGRAM_CHAT_ID", self.kaynak)
+        self.assertIn('String(env.ALLOWED_CHAT_IDS || "").trim()', self.kaynak)
+
     def test_sohbet_allowlist_zorlanir(self):
         self.assertIn("function allowedChats(env)", self.kaynak)
         self.assertIn("function chatAllowed(env, chatId)", self.kaynak)

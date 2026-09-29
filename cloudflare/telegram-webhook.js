@@ -1,8 +1,13 @@
-// Sohbet allowlist: ALLOWED_CHAT_IDS (virgülle ayrılmış) ya da tek sohbet için
-// TELEGRAM_CHAT_ID set edilmeli. Hiçbiri setli değilse bot herkese açık kalır
-// (eski davranış) — üretimde bunu boş bırakma.
+// Sohbet allowlist — TAMAMEN İSTEĞE BAĞLI, varsayılanı KAPALI:
+//  * ALLOWED_CHAT_IDS setli DEĞİLSE bot eski davranışıyla herkese açık çalışır;
+//    bu kilidin devreye girmesi için elle yapılandırma ŞARTTIR (yanlışlıkla
+//    aktifleşme yolu yoktur, başka değişkene fallback YOKTUR).
+//  * Aktif etmek istersen Worker env'ine virgülle ayrılmış chat_id ver
+//    (ör. "123456789" veya "123456789,-100987654321").
+//  * Neden: botu bulan bir yabancı sınırısız pipeline çalıştırıp GitHub Actions
+//    dakikasını ve Gemini kotasını yakabilir.
 function allowedChats(env) {
-  const raw = String(env.ALLOWED_CHAT_IDS || env.TELEGRAM_CHAT_ID || "").trim();
+  const raw = String(env.ALLOWED_CHAT_IDS || "").trim();
   if (!raw) return null;
   return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 }
