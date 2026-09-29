@@ -1003,6 +1003,15 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
                 supported_targets = ["DUO_SCRIPT_FAIL"]
                 qa_state["overall"] = "FAIL"
                 qa_state["regeneration_targets"] = supported_targets
+            elif not ses_basarili or not ses_dosyasi or not os.path.exists(ses_dosyasi):
+                # Fail-closed TÜM modlar için (SOLO/LEGACY dahil): eski kod bu
+                # korumayı yalnız DUO'ya bağlıyordu; SOLO modda QA PASS dese bile
+                # doğrulanmış TTS yoksa qa_pass=True ile geçiliyor, sonra render
+                # "FFmpeg final video üretemedi" diye yanıltıcı şekilde loglanıyordu.
+                overall = "FAIL"
+                supported_targets = ["VOICEOVER_FAIL"]
+                qa_state["overall"] = "FAIL"
+                qa_state["regeneration_targets"] = supported_targets
             else:
                 if qa_state.get("overall") != "PASS" and not qa_state.get("qa_unavailable"):
                     qa_state["overall_model"] = qa_state.get("overall")
@@ -1163,8 +1172,11 @@ def pipeline_calistir(router, video_bytes, mime_type, temp_input_video, video_an
                         '', temp_input_video, fact_state, editorial_state, duo_plan, duo_script,
                         qa_state, False, state)
 
-    if ses_basarili and (not ses_dosyasi or not os.path.exists(ses_dosyasi)):
-        log_ekle('❌ Pipeline tamamlanamadı: render için doğrulanmış TTS dosyası yok.')
+    if not ses_basarili or not ses_dosyasi or not os.path.exists(ses_dosyasi):
+        # qa_pass=True kalmış olsa bile (ör. sosyal-kalan non-blocking yolu)
+        # TTS olmadan render başlatılmaz; hata FFmpeg'e değil TTS aşamasına
+        # bağlanarak raporlanır.
+        log_ekle('❌ Pipeline tamamlanamadı: TTS aşaması doğrulanmış bir ses dosyası üretmedi (FFmpeg hatası değil).')
         return _payload(reels_state, caption_state, threads_state, False, '', legacy_voice,
                         model_reels, kullanilan_ses_modeli, model_threads, ses_modu, qa_rounds,
                         '', temp_input_video, fact_state, editorial_state, duo_plan, duo_script,

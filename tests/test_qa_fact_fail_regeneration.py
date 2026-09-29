@@ -196,24 +196,58 @@ class QaFactFailTests(unittest.TestCase):
         self.assertEqual(result[0]["kapak_basliklari"][0]["ust"], "YENİ KAPAK")
 
 
-class LengthOverrideTests(unittest.TestCase):
-    def test_length_override_requires_strict_range(self):
-        from core.pipeline import _uzunluk_uygun_mu
-        # 30 sn → hedef 85, sıkı aralık 76-94.
-        self.assertTrue(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30))
-        # ±%20 toleransta ama sıkı aralık dışında → QA itirazı bastırılmaz.
-        self.assertFalse(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 100}, 30))
+    def _solo_cevirisi(self, basarili, wav):
+        return (
+            {"seslendirme_metni": "metin", "kapak_basliklari": [{"ust": "A B", "alt": "c d e f"}]},
+            "m-reels",
+            {"mode": "SOLO_FEMALE"},
+            {"status": "ready", "segments": [{"speaker": "female", "text": "a"}], "contract": {"mode": "SOLO_FEMALE"}},
+            basarili,
+            "m-ses" if basarili else None,
+            "SOLO_FEMALE",
+            wav if basarili else "",
+            {"reels_aciklama": "caption", "reels_hashtag": ["#oto"]},
+        )
 
-    def test_length_override_checks_real_tts_duration(self):
-        from core.pipeline import _uzunluk_uygun_mu
-        wav = _make_wav()
+    def test_solo_eksik_tts_fail_closed_regen_ile_iyilesir(self):
+        """#15: QA PASS dese bile doğrulanmış TTS yoksa PASS dalı dönmemeli.
+
+        Eski kod bu korumayı yalnız DUO'ya bağlıyordu: SOLO + TTS arızası
+        qa_pass=True ile geçiyor, sonra render 'FFmpeg üretemedi' diye
+        loglanıyordu. Artık VOICEOVER_FAIL ile yenileme tetiklenir."""
+        kendi_wav = _make_wav()
+        sayac = {"n": 0}
+
+        def solo_agentic(*args, **kwargs):
+            sayac["n"] += 1
+            return self._solo_cevirisi(sayac["n"] >= 2, kendi_wav)
+
         try:
-            with patch("core.agentic._ses_suresini_al", return_value=40.0):
-                self.assertFalse(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30, wav))
-            with patch("core.agentic._ses_suresini_al", return_value=30.0):
-                self.assertTrue(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30, wav))
+            qa_pass = {"overall": "PASS", "regeneration_targets": []}
+            result, calls, logs = self._run([dict(qa_pass), dict(qa_pass)], agentic_side=solo_agentic)
+            self.assertTrue(result[14], "2. turda TTS üretildiyse pipeline PASS etmeli")
+            self.assertEqual(sayac["n"], 2, "eksik TTS tam 1 yenileme tetiklemeli")
+            self.assertTrue(any("VOICEOVER_FAIL" in line for line in logs))
         finally:
-            os.remove(wav)
+            if os.path.exists(kendi_wav):
+                os.remove(kendi_wav)
+
+    def test_solo_tts_hic_uretilemezse_fail_closed_kalir(self):
+        kendi_wav = _make_wav()
+        sayac = {"n": 0}
+
+        def solo_agentic(*args, **kwargs):
+            sayac["n"] += 1
+            return self._solo_cevirisi(False, kendi_wav)
+
+        try:
+            qa_pass = {"overall": "PASS", "regeneration_targets": []}
+            result, calls, logs = self._run([dict(qa_pass)] * 4, agentic_side=solo_agentic)
+            self.assertFalse(result[14], "TTS hiç üretilmediyse qa_pass=True dönmemeli")
+            self.assertTrue(any("VOICEOVER_FAIL" in line for line in logs))
+        finally:
+            if os.path.exists(kendi_wav):
+                os.remove(kendi_wav)
 
 
 class QaSonucCozTests(unittest.TestCase):
@@ -265,6 +299,25 @@ class QaSonucCozTests(unittest.TestCase):
             "length_check": "FAIL: çok kısa",
         }, text="kelime " * 20)
         self.assertEqual(targets, ["VOICEOVER_FAIL"])
+
+class LengthOverrideTests(unittest.TestCase):
+    def test_length_override_requires_strict_range(self):
+        from core.pipeline import _uzunluk_uygun_mu
+        # 30 sn → hedef 85, sıkı aralık 76-94.
+        self.assertTrue(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30))
+        # ±%20 toleransta ama sıkı aralık dışında → QA itirazı bastırılmaz.
+        self.assertFalse(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 100}, 30))
+
+    def test_length_override_checks_real_tts_duration(self):
+        from core.pipeline import _uzunluk_uygun_mu
+        wav = _make_wav()
+        try:
+            with patch("core.agentic._ses_suresini_al", return_value=40.0):
+                self.assertFalse(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30, wav))
+            with patch("core.agentic._ses_suresini_al", return_value=30.0):
+                self.assertTrue(_uzunluk_uygun_mu({"seslendirme_metni": "kelime " * 85}, 30, wav))
+        finally:
+            os.remove(wav)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,11 @@
 """Ses ve video işleme fonksiyonları (ffmpeg, hızlandırma, birleştirme)."""
 import os, re, wave, shutil, subprocess, tempfile, uuid, json, math
 from core.config import VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
+from core.sozlesme import VIDEO_HIZ_MAKS, VIDEO_HIZ_MIN
 
-MAKS_VIDEO_HIZLANDIRMA = 1.5
-MIN_VIDEO_YAVASLATMA = 0.5
+# Sözleşme sınırları (tek doğruluk kaynağı: core/sozlesme.py).
+MAKS_VIDEO_HIZLANDIRMA = VIDEO_HIZ_MAKS
+MIN_VIDEO_YAVASLATMA = VIDEO_HIZ_MIN
 FFMPEG_TIMEOUT = 600
 FINAL_AUDIO_SAMPLE_RATE = 48000
 FINAL_AUDIO_BITRATE = "192k"

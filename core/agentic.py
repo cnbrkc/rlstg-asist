@@ -17,6 +17,7 @@ from contextlib import contextmanager
 
 import core.config as _cfg
 from core.config import KELIME_HIZI_ORANI, SES_HIZ_CARPANI
+from core.sozlesme import SES_SURE_MAX_ORAN, SES_SURE_MIN_ORAN
 from core.schemas import (
     DETECTIVE_SCHEMA, HOOK_GEN_SCHEMA, SCRIPT_WRITER_SCHEMA,
     CRITIC_SCHEMA, METADATA_GEN_SCHEMA,
@@ -49,8 +50,9 @@ def _metni_kilide_cek(metin, fact_state):
 
 # --- TTS / kelime güvenli limitleri -----------------------------------------
 VOICE_REGEN_MAX = 2
-VOICE_DURATION_MIN_RATIO = 0.85
-VOICE_DURATION_MAX_RATIO = 1.15
+# Sözleşme bandı (tek doğruluk kaynağı: core/sozlesme.py).
+VOICE_DURATION_MIN_RATIO = SES_SURE_MIN_ORAN
+VOICE_DURATION_MAX_RATIO = SES_SURE_MAX_ORAN
 # Kelime aralığı dışındaki senaryo yalnızca sapma bu oranın ÜZERİNDEYSE yeniden
 # yazdırılır (hedefe göre). Küçük sapmayı FFmpeg senkron katmanı (0.5x-1.5x video
 # hızı) zaten kapatıyor; tam Script+Critic turu API yoğunluğunda pahalıdır.

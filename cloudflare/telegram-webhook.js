@@ -1,7 +1,26 @@
+// Sohbet allowlist: ALLOWED_CHAT_IDS (virgülle ayrılmış) ya da tek sohbet için
+// TELEGRAM_CHAT_ID set edilmeli. Hiçbiri setli değilse bot herkese açık kalır
+// (eski davranış) — üretimde bunu boş bırakma.
+function allowedChats(env) {
+  const raw = String(env.ALLOWED_CHAT_IDS || env.TELEGRAM_CHAT_ID || "").trim();
+  if (!raw) return null;
+  return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
+}
+function chatAllowed(env, chatId) {
+  const set = allowedChats(env);
+  if (!set) return true;
+  return set.has(String(chatId));
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/setup") {
+      // /setup webhoook'u yeniden yazar (drop_pending_updates ile); kimliksiz
+      // çağrı DoS vektörüdür. Sahibi: /setup?key=<TELEGRAM_WEBHOOK_SECRET>
+      if (!env.TELEGRAM_WEBHOOK_SECRET || url.searchParams.get("key") !== env.TELEGRAM_WEBHOOK_SECRET) {
+        return new Response("Unauthorized", { status: 401 });
+      }
       const webhookUrl = `${url.origin}/`;
       const response = await telegram(env, "setWebhook", { url: webhookUrl, secret_token: env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: ["message", "callback_query"], drop_pending_updates: true });
       return new Response(response.ok ? "OK - Telegram webhook aktif.\n" + JSON.stringify(response.result) : "ERROR - " + JSON.stringify(response), { status: response.ok ? 200 : 500, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -17,6 +36,11 @@ export default {
     const message = update?.message;
     const chatId = message?.chat?.id;
     if (!chatId) return new Response("OK", { status: 200 });
+    if (!chatAllowed(env, chatId)) {
+      // Botu bulan yabancı sınırısız Actions/Gemini kotası yakamamalı.
+      await telegram(env, "sendMessage", { chat_id: chatId, text: "⛔ Bu bot yalnızca yetkili sohbetlerde çalışır." }).catch(() => {});
+      return new Response("Forbidden", { status: 403 });
+    }
 
 
     let fileId = null, filename = "", videoNote = "", textInput = "", inputType = "text";
@@ -39,17 +63,28 @@ export default {
     }
 
     const updateId = String(update.update_id);
-    const pendingPath = `data/pending/${updateId}.json`;
-    const pending = { file_id: fileId, chat_id: String(chatId), filename, video_note: videoNote, text_input: textInput, input_type: inputType, created_at: new Date().toISOString() };
-    const saved = await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Queue Telegram ${inputType} ${updateId}`);
-    if (!saved.ok) {
-      const body = await saved.text();
-      await telegram(env, "sendMessage", { chat_id: chatId, text: `❌ Girdi kuyruğa alınamadı.\n\n${body.slice(0, 1000)}` });
-      return new Response("Pending save failed", { status: 502 });
+    // update_id dosya yoluna girmeden doğrulanır (path injection etkisi az ama
+    // bedava; callback tarafındaki regex ile aynı sözleşme).
+    if (!/^\d{1,32}$/.test(updateId)) return new Response("OK", { status: 200 });
+    try {
+      const pendingPath = `data/pending/${updateId}.json`;
+      const pending = { file_id: fileId, chat_id: String(chatId), filename, video_note: videoNote, text_input: textInput, input_type: inputType, created_at: new Date().toISOString() };
+      const saved = await githubPut(env, pendingPath, JSON.stringify(pending, null, 2), `Queue Telegram ${inputType} ${updateId}`);
+      if (!saved.ok) {
+        const body = await saved.text();
+        await telegram(env, "sendMessage", { chat_id: chatId, text: `❌ Girdi kuyruğa alınamadı.\n\n${body.slice(0, 1000)}` }).catch(() => {});
+        return new Response("Pending save failed", { status: 502 });
+      }
+      const keyboard = { inline_keyboard: [[{ text: "🎭 Eğlenceli", callback_data: `mode:eglence:${updateId}` }, { text: "⚖️ Dengeli", callback_data: `mode:dengeli:${updateId}` }], [{ text: "🧠 Bilgi Ağırlıklı", callback_data: `mode:bilgi:${updateId}` }, { text: "📊 Teknik / Detaylı", callback_data: `mode:teknik:${updateId}` }]] };
+      const intro = inputType === "video" ? `📥 Videonu aldım.${videoNote ? `\n📝 Video açıklamasını analiz notu olarak aldım: ${videoNote}` : ""}\n\n🎯 İçerik türünü seç:` : "📝 Metnini aldım.\n\n🎯 İçerik türünü seç:";
+      await telegram(env, "sendMessage", { chat_id: chatId, text: intro, reply_markup: keyboard });
+    } catch (error) {
+      // Telegram/GitHub hatası yakalanmazsa webhook 500 döner, Telegram update'i
+      // yeniden teslim eder → aynı video için sonsuz döngü + buton spinner'ı.
+      console.log("Pending save/keyboard failed", String(error));
+      await telegram(env, "sendMessage", { chat_id: chatId, text: `❌ Girdi işlenirken hata oluştu; mesajı tekrar gönderebilirsin.\n\n${String(error?.message || error).slice(0, 800)}` }).catch(() => {});
+      return new Response("Pending failed", { status: 502 });
     }
-    const keyboard = { inline_keyboard: [[{ text: "🎭 Eğlenceli", callback_data: `mode:eglence:${updateId}` }, { text: "⚖️ Dengeli", callback_data: `mode:dengeli:${updateId}` }], [{ text: "🧠 Bilgi Ağırlıklı", callback_data: `mode:bilgi:${updateId}` }, { text: "📊 Teknik / Detaylı", callback_data: `mode:teknik:${updateId}` }]] };
-    const intro = inputType === "video" ? `📥 Videonu aldım.${videoNote ? `\n📝 Video açıklamasını analiz notu olarak aldım: ${videoNote}` : ""}\n\n🎯 İçerik türünü seç:` : "📝 Metnini aldım.\n\n🎯 İçerik türünü seç:";
-    await telegram(env, "sendMessage", { chat_id: chatId, text: intro, reply_markup: keyboard });
     return new Response("OK", { status: 200 });
   }
 };

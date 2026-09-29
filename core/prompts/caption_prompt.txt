@@ -58,7 +58,7 @@ KLİŞE CTA YASAĞI: "Yorumlarınızı bekliyoruz", "Ne düşünüyorsunuz?", "Y
 
 CAPTION BİÇİMİ:
 - Telegram video caption sınırı nedeniyle toplam reels açıklamasını HASHTAGLER HARİÇ 700-850 karakter hedefle; 900'ü aşma. Hashtagler ayrıca array olarak döndüğü için açıklama içinde onlar için yer ayırma. Amaç Telegram'ın 1024 karakterlik video caption sınırına güvenli biçimde sığmak; sistem sonradan metni kesmek zorunda KALMAMALI.
-- Sırf karakter doldurmak için uzatma. İçerik doğal akıyorsa 650-750 karakter bile olabilir. Öncelik DOĞALLIK + TAMAMLANMIŞ METİN > KARAKTER DOLDURMA.
+- Sırf karakter doldurmak için uzatma. İçerik doğal akıyorsa 650 karaktere kadar inilebilir; 650'nin ALTINDAKİ caption reddedilir, 900'ü aşmak yasaktır. Öncelik DOĞALLIK + TAMAMLANMIŞ METİN > KARAKTER DOLDURMA.
 - Aynı paragrafta MAX 2-3 cümle, sonra doğal paragraf değişimi. Cümleler arasında enter kullanma; sadece paragraf değişiminde 1 boş satır.
 - Caption başına MAX 2 büyük harfli kelime.
 - Rakam formatı: Binlik 2.400.000 TL veya 2.4M, yüzde %15, motor 1.5 litre, güç 170 bg, yakıt 5.2L, hız 100 km/h.
