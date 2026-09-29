@@ -233,5 +233,44 @@ class AgenticQualityRegenerationTests(unittest.TestCase):
         self.assertEqual({"male"}, speakers)
 
 
+    @_ses_sure_patch
+    @_kelime_patch
+    @patch("core.agentic.duo_ses_uret", side_effect=_mock_duo_ses)
+    def test_critic_revizesi_segment_butcesi_tasir(self, mock_tts, mock_kelime, mock_ses):
+        """Critic revizesi ilk üretimle AYNI kelime/sayım bütçesini almalı.
+
+        segment_butcesi aktarılmıyorsa 'TAM N CÜMLE' bloğu revizede düşüyor ve
+        eksik üretim tam da düzeltilmesi gereken yerde tekrar ediyordu."""
+        poor_script = _script([
+            {"speaker": "female", "tts_tag": "[vurgulu]", "text": "Bu araç çok iyi."},
+            {"speaker": "male", "tts_tag": "", "text": "Evet."}
+        ])
+
+        cagri_kwargs = []
+
+        def _sw(*args, **kwargs):
+            cagri_kwargs.append(kwargs)
+            return poor_script, "fake-sw"
+
+        # _script_writer_calistir patch'li olduğu için router'ı TÜKETMEZ:
+        # kuyrukta script yok; critic 3. çağrıdır.
+        router = _Router([
+            _detective(), _hook(),
+            _critic(4, False, "Daha doğal yap."),
+            _metadata(),
+        ])
+        with patch("core.agentic._script_writer_calistir", side_effect=_sw):
+            agentic_icerik_uretimi(
+                router, {}, {}, {}, 30, "dengeli", "Autonoe",
+                lambda *_: None, mod_karari={"mode": "DUO"},
+            )
+        self.assertGreaterEqual(len(cagri_kwargs), 2, "critic reddi revize çağrısı tetiklemeli")
+        revize = cagri_kwargs[1]
+        self.assertTrue(revize.get("segment_butcesi"), "revize çağrısı segment_butcesi içermiyor")
+        self.assertTrue(revize.get("hedef_kelime"), "revize çağrısı hedef_kelime içermiyor")
+        # İlk çağrıyla aynı bütçe bloğu: tutarlılık.
+        self.assertEqual(cagri_kwargs[0].get("segment_butcesi"), revize.get("segment_butcesi"))
+
+
 if __name__ == "__main__":
     unittest.main()

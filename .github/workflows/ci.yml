@@ -28,8 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --disable-pip-version-check -r requirements.txt
-          pip install --disable-pip-version-check pytest ruff pyyaml
+          pip install --disable-pip-version-check -r requirements-dev.txt
 
       - name: Compile Python
         run: python -m compileall -q core telegram tests

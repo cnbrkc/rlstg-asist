@@ -72,8 +72,12 @@ def _stil_bul(ham: str) -> str:
         return _STIL_HARITASI["duraksama"]
     if kat in _STIL_HARITASI:
         return _STIL_HARITASI[kat]
+    # Kelime sınırı gerekli: "net" gibi kısa anahtar normal Türkçe kelimenin
+    # içinde geçerken ("internette") yanlış eşleşip gerçek sözün silinmesine
+    # yol açıyordu; eşleşme yalnız bağımsız kelime/cümle üzerinde aranır.
     for anahtar, stil in _STIL_HARITASI.items():
-        if anahtar in kat:
+        desen = r"(?<![a-z0-9])" + re.escape(anahtar).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+        if re.search(desen, kat):
             return stil
     kelimeler = kat.split()
     if kelimeler and all(k in _YONERGE_KELIMELERI or k in {"bir", "olarak", "sekilde", "tonunda", "tonuyla"} for k in kelimeler):
@@ -91,7 +95,13 @@ def _yenerge_parcasi_mi(ic: str) -> bool:
     if _stil_bul(ham):
         return True
     kelimeler = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşüâîû]+", ham)
-    return 0 < len(kelimeler) <= 4 and all(_fold(k) in _YONERGE_KELIMELERI for k in kelimeler)
+    if kelimeler and all(_fold(k) in _YONERGE_KELIMELERI for k in kelimeler):
+        return True
+    # Tanınmayan TEK kelimelik etiket yönergedir ("[heyecanla]" gibi): transkriptte
+    # bırakılırsa TTS yönergeyi yüksek sesle okur. Çok kelimelik parça gerçek söz
+    # olabilir ("[internette fiyatlar acayip]"): yönerge SAYILMAZ; parantez
+    # karakterleri soyulup kelimeler konuşulur (replik_tts_hazirla'da).
+    return len(kelimeler) == 1 and not re.search(r"[.!?]", ham)
 
 
 def replik_tts_hazirla(metin: str, tts_tag: str = "") -> tuple:
@@ -113,10 +123,14 @@ def replik_tts_hazirla(metin: str, tts_tag: str = "") -> tuple:
     def _degistir(eslesme):
         ic = eslesme.group(1)
         if not _yenerge_parcasi_mi(ic):
-            return eslesme.group(0)
+            # Duyulacak bilgi: köşeli/parantez sembolleri konuşulmaz, kelimeler kalır.
+            return ic
         stil = _stil_bul(ic)
         if stil:
             stiller.append(stil)
+        else:
+            # Tanınmayan yönerge: nota yazılır, transkripte asla.
+            stiller.append("slightly more colored delivery on this turn, still conversational")
         return " "
 
     konusma = re.sub(r"[\[\(\{]([^\[\]\(\)\{\}]{1,48})[\]\)\}]", _degistir, ham_metin)

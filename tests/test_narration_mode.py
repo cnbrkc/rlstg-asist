@@ -42,3 +42,32 @@ def test_env_override_skips_ai_call(monkeypatch):
     karar = anlatim_modu_karar_ver(router, {}, {}, {}, 20, "dengeli", _log)
     assert karar["mode"] == "DUO"
     assert router.calls == 0
+
+def test_fiil_baglantili_erkek_sesi_komutu_solo_male_doner():
+    from core.pipeline import _explicit_voice_mode_from_notes
+
+    assert _explicit_voice_mode_from_notes("erkek sesiyle anlat") == "SOLO_MALE"
+    assert _explicit_voice_mode_from_notes("bu videoyu erkek sesi okusun") == "SOLO_MALE"
+
+
+def test_fiil_baglantili_kadin_sesi_komutu_solo_female_doner():
+    from core.pipeline import _explicit_voice_mode_from_notes
+
+    assert _explicit_voice_mode_from_notes("kadın sesiyle anlat") == "SOLO_FEMALE"
+    assert _explicit_voice_mode_from_notes("kadın sesi anlatsın") == "SOLO_FEMALE"
+
+
+def test_fiilsiz_cinsiyet_ifadesi_modu_degistirmez():
+    from core.pipeline import _explicit_voice_mode_from_notes
+
+    # "videoda kadın sesi var" gözlem bildirimi; komut değil → karar verilmez.
+    assert _explicit_voice_mode_from_notes("videoda kadın sesi var") == ""
+    assert _explicit_voice_mode_from_notes("erkek sesi güzel duruyor") == ""
+
+
+def test_duo_negasyonuyla_birlikte_fiil_komutu_galip_cikar():
+    from core.pipeline import _explicit_voice_mode_from_notes
+
+    # "duo istemiyorum" tek ses ister; fiil komutu cinsiyeti de söyler.
+    assert _explicit_voice_mode_from_notes("duo istemiyorum, erkek sesiyle anlat") == "SOLO_MALE"
+

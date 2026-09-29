@@ -16,9 +16,18 @@ Ajan eksik/boş dönerse Editorial/Detective kanıtlarından yerel alternatifler
 import math
 import re
 
-ALTERNATIF_SAYISI = 5
-UST_MIN_KELIME, UST_MAX_KELIME = 2, 4
-ALT_MIN_KELIME, ALT_MAX_KELIME = 4, 7
+from core.sozlesme import (
+    KAPAK_ALTERNATIF_SAYISI,
+    KAPAK_ALT_MAX_KELIME,
+    KAPAK_ALT_MIN_KELIME,
+    KAPAK_UST_MAX_KELIME,
+    KAPAK_UST_MIN_KELIME,
+)
+
+# Sözleşme sabitleri (tek doğruluk kaynağı: core/sozlesme.py).
+ALTERNATIF_SAYISI = KAPAK_ALTERNATIF_SAYISI
+UST_MIN_KELIME, UST_MAX_KELIME = KAPAK_UST_MIN_KELIME, KAPAK_UST_MAX_KELIME
+ALT_MIN_KELIME, ALT_MAX_KELIME = KAPAK_ALT_MIN_KELIME, KAPAK_ALT_MAX_KELIME
 
 _TR_BUYUK = str.maketrans("iıöüçşğâîû", "İIÖÜÇŞĞÂÎÛ")
 _TR_KUCUK = str.maketrans("IİÖÜÇŞĞÂÎÛ", "ıiöüçşğâîû")
@@ -374,9 +383,9 @@ def kapak_basliklarini_normalize_et(ham, editorial_state=None, detective_state=N
 
 
 def kapak_basliklarini_metne_dok(basliklar, baslik_satiri="") -> str:
-    """Kullanıcı çıktı şablonu:
+    """Kullanıcı çıktı şablonu (kelime aralıkları: core/sozlesme.py):
         Alternatif N:
-        Üst: [2-4 KELİME BÜYÜK HARF]
+        Üst: [{UST_MIN}-{UST_MAX} KELİME BÜYÜK HARF]
         Alt: [cümle düzeninde açıklayıcı metin]
     """
     satirlar = [baslik_satiri, ""] if baslik_satiri else []

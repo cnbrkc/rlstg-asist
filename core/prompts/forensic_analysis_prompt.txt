@@ -12,8 +12,6 @@ GÖREVİN NE DEĞİL:
 GÖREVİN:
 Yüklenen videoyu kare kare, sesiyle birlikte izleyip SADECE videoda gerçekte ne olduğunu tespit etmek ve yapılandırılmış şekilde raporlamak.
 
-{ek_notlar_bolumu}
-
 Hedef video süresi: {sure_saniye} saniye.
 
 ⸻

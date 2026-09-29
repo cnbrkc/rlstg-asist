@@ -376,5 +376,52 @@ class LoadingEditorTests(unittest.TestCase):
         self.assertLessEqual(len(sent), 2)
 
 
+class ThreadsFutureTimeoutTests(unittest.TestCase):
+    def test_takilan_future_zaman_asimiyla_iptal_edilip_senkron_denir(self):
+        """_threads_future_sonucu sonsuza kadar beklememeli (#16): takılan
+        paralel kol iptal edilip senkron yol taze çağrıyla denenir."""
+        import core.pipeline as pl
+
+        def _takilan(*a, **k):
+            time.sleep(30)
+            return {"threads_aciklamasi": "gecikmis"}, "yavas"
+
+        iptal = {"cagrildi": False}
+
+        class _TakilanFuture:
+            def result(self, timeout=None):
+                self.goren_timeout = timeout
+                raise TimeoutError()
+
+            def cancel(self):
+                iptal["cagrildi"] = True
+                return True
+
+        future = _TakilanFuture()
+        with patch.object(pl, "_threads_calistir", return_value=({"threads_aciklamasi": "senkron"}, "senkron-model")):
+            sonuc, model = pl._threads_future_sonucu(
+                future, None, {}, {}, {}, lambda *_: None, "dengeli", timeout_s=0.05,
+            )
+        self.assertEqual("senkron", sonuc["threads_aciklamasi"])
+        self.assertTrue(iptal["cagrildi"])
+        self.assertEqual(0.05, future.goren_timeout)
+
+    def test_vayran_future_hatasinda_senkron_yeniden_denir(self):
+        import core.pipeline as pl
+
+        class _HataliFuture:
+            def result(self, timeout=None):
+                raise RuntimeError("kol dustu")
+
+            def cancel(self):
+                return False
+
+        with patch.object(pl, "_threads_calistir", return_value=({"threads_aciklamasi": "t"}, "m")):
+            sonuc, model = pl._threads_future_sonucu(
+                _HataliFuture(), None, {}, {}, {}, lambda *_: None, "dengeli",
+            )
+        self.assertEqual("t", sonuc["threads_aciklamasi"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,7 +54,11 @@ SLOW_MODEL_COOLDOWN = 180
 SLOW_HITS_BEFORE_NEXT_MODEL = 2
 # Günlük kota (PerDay) o gün geri gelmez; bu çalışma boyunca atlanır.
 DAILY_QUOTA_COOLDOWN = 6 * 60 * 60
-
+# Yapılandırılmış yanıt (JSON) bir istekte kaç farklı key'de doğrulanamadan
+# sonra model atlanır? Bozuk/kesilmiş JSON stokastik olduğundan ilk hatada
+# modeli tüm key'lerle birlikte çöpe atmak yanlış; ikinci doğrulama hatası
+# modeli bu istek için düşürür.
+VALIDATOR_FAIL_KEY_LIMITI = 2
 # Aşırı yük koruması: Bir isteğin TÜM model+key kombinasyonları yalnızca geçici
 # hatalarla (503 / dakikalık kota / zaman aşımı) düşerse, istek hemen exception
 # fırlatıp tüm pipeline'ı öldürmez. Kısa bir bekleme sonrası tam tur yeniden
@@ -95,6 +99,11 @@ SDK_RETRY_ATTEMPTS = _env_int("ROUTER_SDK_RETRY_ATTEMPTS", 2)
 SDK_RETRY_MAX_DELAY_S = 8.0
 
 
+# Yapılandırılmış çıktı üst sınırı (token). Ayarlanmadığında modelin varsayılanı
+# geçerlidir; thinking tüketimiyle birlikte uzun şemalı script/QA çıktıları
+# kesilip JSON'ı bozabiliyordu. Cömert ama sınırlı bir üst sınır hem truncation
+# riskini azaltır hem koşuyu sınırlar. 0 → üst sınır YOK (eski davranış).
+MAKS_CIKTI_TOKENLARI = _env_int("ROUTER_MAX_OUTPUT_TOKENS", 32768)
 OVERLOAD_RETRY_ROUNDS = _env_int("ROUTER_OVERLOAD_RETRY_ROUNDS", 2)
 # Eski 20/40/60 sn beklemeler tek bir Editorial isteğini 4+ dakikaya taşıyordu;
 # 503 dalgaları genelde saniyeler içinde açılıyor, kısa bekleme + hızlı tam tur yeter.
@@ -221,10 +230,15 @@ class SmartRouter:
         """Model düzeyinde kalıcı yasağı kontrol eder (doğrulanmış 404)."""
         key = f"*+{model}"
         bl = self.blacklist
-        if key in bl:
-            if time.time() < bl[key]:
-                return True
-            bl.pop(key, None)
+        # .get kullan: `key in bl` ile `bl[key]`/pop arasında başka paralel kol
+        # girdiyi silerse KeyError, try bloğunun DIŞINDA olduğu için isteği
+        # öldürüyordu.
+        until = bl.get(key)
+        if until is None:
+            return False
+        if time.time() < until:
+            return True
+        bl.pop(key, None)
         return False
 
     def _mark_slow(self, model: str) -> None:
@@ -244,14 +258,23 @@ class SmartRouter:
         now = time.time()
         bl = self.blacklist
         for key in (f"{mail}+*", f"{mail}+{model}"):
-            if key in bl:
-                if now < bl[key]:
-                    return True
-                bl.pop(key, None)
+            until = bl.get(key)
+            if until is None:
+                continue
+            if now < until:
+                return True
+            bl.pop(key, None)
         return False
 
     def _parse_hata(self, hata: Any) -> Tuple[str, int]:
-        """SDK durum kodu/alanlarını kullanır; eski metin tabanlı çağrıları da kabul eder."""
+        """Önce SDK'nın yapısal durum kodu, kod yoksa metin fallback'i.
+
+        Yapısal kod (google-genai APIError.code / requests status_code) varken
+        gövde metni substring'leriyle sınıflandırma DEĞİŞTİRİLMEZ: 503 gövdesi
+        "backend error: 400 workers" ya da "model not found in region" içerebilir;
+        eski substring taraması bu geçici hatayı 400-config'e veya 24 saatlik
+        kalıcı model yasağına çevirip tüm model listesini düşürüyordu.
+        """
         code = getattr(hata, "code", None)
         response = getattr(hata, "response", None)
         if code is None:
@@ -261,36 +284,64 @@ class SmartRouter:
         except (TypeError, ValueError):
             code = None
 
+        if code is not None:
+            detaylar = " ".join((
+                str(getattr(hata, "message", "") or ""),
+                str(getattr(hata, "status", "") or ""),
+                str(getattr(hata, "details", "") or ""),
+            )).lower()
+            return self._durum_kodunu_siniflandir(code, detaylar)
+
         if isinstance(hata, str):
             m = hata.lower()
         else:
-            # google-genai APIError exposes code, status and message. Keep the
-            # text fallback for transport errors and SDK versions with a
-            # different shape.
+            # Yapısal kod yok (eski SDK şekli / transport hatası): metin fallback.
             fields = (
-                str(code or ""),
                 str(getattr(hata, "status", "") or ""),
                 str(getattr(hata, "message", "") or ""),
                 str(getattr(hata, "details", "") or ""),
                 str(hata or ""),
             )
             m = " ".join(fields).lower()
+        return self._metni_siniflandir(m)
 
-        if code == 404 or "404" in m or "not_found" in m or "model not found" in m:
+    @staticmethod
+    def _durum_kodunu_siniflandir(code: int, detaylar: str) -> Tuple[str, int]:
+        """Yapısal durum kodundan sınıflandırma; detay yalnız kota alt tipini
+        ayrıştırmak için kullanılır (kalıcılık asla gövde metnine bakılmaz)."""
+        if code == 404:
+            # Doğrulanmış model yokluğu: tüm key'lerde kalıcı yasak güvenli.
+            return "model_key", COOLDOWN_BULUNAMADI
+        if code == 429:
+            if "limit: 0" in detaylar or 'limit\\": 0' in detaylar:
+                return "free_tier_yok", COOLDOWN_FREE_TIER_YOK
+            if "perday" in detaylar.replace(" ", "").replace("_", ""):
+                return "quota_day", DAILY_QUOTA_COOLDOWN
+            return "quota", 0
+        if code in (400, 422):
+            # Model/şema/config reddi kapsamı istek bazlıdır; kalıcı yasak yok.
+            return "model_config", 0
+        if code == 503:
+            # Gövdede "400"/"not found" geçse bile bu 503'tür: geçici.
+            return "unavailable", COOLDOWN_DIGER
+        return "combo", COOLDOWN_DIGER
+
+    @staticmethod
+    def _metni_siniflandir(m: str) -> Tuple[str, int]:
+        """Yapısal kod yokken (düz string/transport hatası) en iyi çaba."""
+        if "404" in m or "not_found" in m or "model not found" in m:
             return "model_key", COOLDOWN_BULUNAMADI
         if "limit: 0" in m or 'limit\\": 0' in m:
             return "free_tier_yok", COOLDOWN_FREE_TIER_YOK
-        if code == 429 or "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
+        if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
             if "perday" in m.replace(" ", "").replace("_", ""):
                 return "quota_day", DAILY_QUOTA_COOLDOWN
             return "quota", 0
-        if code == 400 or "400" in m or "invalid_argument" in m or "unsupported" in m:
-            # 400 model/şema/config uyumsuzluğu olabilir; hangi kapsamda olduğu
-            # her zaman bilinmez. Router bu modeli yalnızca mevcut istekte atlar.
+        if "400" in m or "invalid_argument" in m or "unsupported" in m:
             return "model_config", 0
-        if code == 503 or "503" in m or "unavailable" in m:
+        if "503" in m or "unavailable" in m:
             return "unavailable", COOLDOWN_DIGER
-        if code in (408, 504) or "timeout" in m or "timed out" in m or "deadline_exceeded" in m:
+        if "408" in m or "504" in m or "timeout" in m or "timed out" in m or "deadline_exceeded" in m:
             return "combo", COOLDOWN_DIGER
         return "combo", COOLDOWN_DIGER
 
@@ -338,6 +389,9 @@ class SmartRouter:
         # istekte atlanır. Ortak API şemasının 24 saatlik global model yasağına
         # dönüşmesini önler; bir sonraki üretim adımı modeli yeniden deneyebilir.
         request_failed_models = set()
+        # Yanıt doğrulama (JSON) hataları model başına sayılır; VALIDATOR_FAIL_
+        # KEY_LIMITI'ne ulaşan model bu istek için atlanır (bkz. validator bloğu).
+        validator_fail_counts = {}
         modeller = list(model_listesi or [])
         # Açık profil > pipeline'ın `istek_profili()` bağlamı > varsayılan "metin".
         profil = profil or getattr(self, "_aktif_profil", None) or "metin"
@@ -371,6 +425,10 @@ class SmartRouter:
             # boş yanıt) görüldüyse bekleyip tekrar denemeye değer. Tüm hatalar
             # kalıcıysa (404 / config / free-tier / günlük kota) beklemek boşuna.
             round_transient = 0
+            # Yalnız yanıt doğrulama hataları: aşırı-yük damgası YAZMAZ (API
+            # yoğunluğu değildir) ama tur yenilemeyi tetikler (truncation geçici
+            # olabilir; bekle + taze tur).
+            round_dogrulama = 0
             if round_no > 1:
                 modeller = [m for m in model_listesi or [] if not self._is_slow(m)] + [m for m in model_listesi or [] if self._is_slow(m)]
             for model_adi in modeller:
@@ -465,13 +523,28 @@ class SmartRouter:
                             response_validator(response)
                         except Exception as exc:
                             # Ham model yanıtı veya JSON gövdesi loglanmaz.
+                            # Bozuk/kesilmiş JSON (ör. MAX_TOKENS truncation)
+                            # stokastiktir: aynı modeli diğer key'lerde denemeden
+                            # ve tur yenilemeden isteği düşürmek, uzun şemalı
+                            # üretimlerde en olası gerçek dünya kırılmasıydı
+                            # (boş yanıt key rotasyonu yaparken JSON hatası tüm
+                            # kombinasyonları ve aşırı-yük turlarını iptal
+                            # ediyordu).
                             son_hata = exc
-                            request_failed_models.add(model_adi)
+                            round_dogrulama += 1
+                            validator_fail_counts[model_adi] = validator_fail_counts.get(model_adi, 0) + 1
+                            if validator_fail_counts[model_adi] >= VALIDATOR_FAIL_KEY_LIMITI:
+                                request_failed_models.add(model_adi)
+                                log_ekle(
+                                    f"⚠️ {mail}+{model_adi}: yapılandırılmış yanıt {validator_fail_counts[model_adi]} key'de de "
+                                    f"doğrulanamadı ({type(exc).__name__}); sonraki modele geçiliyor. | {attempt_elapsed:.2f}s"
+                                )
+                                break
                             log_ekle(
                                 f"⚠️ {mail}+{model_adi}: yapılandırılmış yanıt doğrulanamadı "
-                                f"({type(exc).__name__}); sonraki modele geçiliyor. | {attempt_elapsed:.2f}s"
+                                f"({type(exc).__name__}); sonraki key deneniyor. | {attempt_elapsed:.2f}s"
                             )
-                            break
+                            continue
 
                     total_elapsed = time.perf_counter() - request_started
                     model_elapsed = time.perf_counter() - model_started
@@ -484,7 +557,7 @@ class SmartRouter:
                 if butce_doldu:
                     break
 
-            if round_transient == 0:
+            if round_transient == 0 and round_dogrulama == 0:
                 break
             if round_transient:
                 self._last_full_overload_at = time.monotonic()
@@ -576,10 +649,19 @@ class SmartRouter:
             profil = None
 
         def _dogrula_yanit(response, label="Gemini metin"):
+            # MAX_TOKENS ile kesilen yanıtın JSON'u eksiktir; rotasyon/tur
+            # yenilemesi bunu kurtarır ama operasyonda görünür olmalı.
+            for aday in (getattr(response, "candidates", None) or []):
+                sebep = str(getattr(aday, "finish_reason", "") or "").upper()
+                if sebep:
+                    if "MAX_TOKENS" in sebep:
+                        log_ekle(f"⚠️ {label}: yanıt MAX_TOKENS ile kesildi; JSON eksik olabilir, diğer key/model denenecek.")
+                    break
             parsed = guvenli_json_yukle(getattr(response, "text", ""))
             validate_structured_output(parsed, response_schema, label)
 
         response_validator = _dogrula_yanit
+        ust_token = MAKS_CIKTI_TOKENLARI or None
 
         if arama_kullan:
             kwargs = dict(system_instruction=system_prompt)
@@ -590,6 +672,7 @@ class SmartRouter:
                 system_instruction=system_prompt,
                 response_mime_type="application/json",
                 response_schema=response_schema,
+                max_output_tokens=ust_token,
             )
 
         try:
@@ -617,6 +700,7 @@ class SmartRouter:
                     system_instruction=system_prompt,
                     response_mime_type="application/json",
                     response_schema=response_schema,
+                    max_output_tokens=ust_token,
                 )
                 response, info = self._make_request(
                     fallback_models,
@@ -645,6 +729,7 @@ class SmartRouter:
                 system_instruction=system_prompt,
                 response_mime_type="application/json",
                 response_schema=response_schema,
+                max_output_tokens=ust_token,
             )
             try:
                 response, info = self._make_request(
@@ -678,6 +763,7 @@ class SmartRouter:
             system_instruction=system_prompt,
             response_mime_type="application/json",
             response_schema=response_schema,
+            max_output_tokens=MAKS_CIKTI_TOKENLARI or None,
         )
         if arama_kullan and model_listesi and model_arama_destekliyor_mu(model_listesi[0]):
             kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]

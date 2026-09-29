@@ -48,7 +48,10 @@ permissions:
 
 concurrency:
   group: telegram-video-${{ inputs.telegram_chat_id }}
-  cancel-in-progress: true
+  # Aynı sohbette ikinci istek gelirse devam eden render'ı KESME: kuyruğa gir.
+  # cancel-in-progress: true, uzun bir render'ı ortadan kesip kullanıcıya
+  # haber vermeden videoyu çöpe atıyordu.
+  cancel-in-progress: false
 
 jobs:
   telegram-video:
@@ -132,6 +135,46 @@ jobs:
           echo "::group::Reels pipeline ayrıntılı zamanlama"
           /usr/bin/time -v python -m telegram.telegram_pipeline_worker
           echo "::endgroup::"
+
+      # Pipeline adımı düşerse kullanıcı Telegram'dan haber bekler; sessiz
+      # FAIL_NO_VIDEO dönemi (#23): job kırmızıya döner ama sohbete kimse
+      # yazmaz, buton "yükleniyor"da kalır. Bu adım her zaman koşar ve yalnız
+      # failure durumunda mesaj gönderir; bildirimin kendisi job'u kırmaz.
+      - name: Notify user on failure
+        if: ${{ always() && failure() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+          chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+          if not token or not chat:
+              print("Bildirim atlanıyor: TELEGRAM_BOT_TOKEN / chat_id yok.")
+              raise SystemExit(0)
+          mesaj = (
+              "❌ Reels pipeline bu çalışmada sonuç üretemedi.\n\n"
+              "Yeni bir video veya metin göndererek tekrar deneyebilirsin.\n"
+              "Ayrıntı: job logundaki 'Publish diagnostic summary' adımı ve "
+              "pipeline-result artifact'ı."
+          )
+          data = json.dumps({"chat_id": chat, "text": mesaj}).encode()
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=data,
+              headers={"content-type": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  print("Bildirim gönderildi:", response.status)
+          except Exception as exc:
+              # Bildirim hatası job'un kendi sonucunu değiştirmemeli.
+              print(f"Bildirim gönderilemedi: {type(exc).__name__}")
+          PY
 
       - name: Publish diagnostic summary
         if: ${{ always() }}

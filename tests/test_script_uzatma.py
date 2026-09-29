@@ -426,6 +426,21 @@ class KapanisSorusuTestleri(unittest.TestCase):
         yeni = _kapanis_sorusunu_ayristir(script)
         self.assertEqual(len(yeni["segments"]), 0)
 
+    def test_uzatma_sonrasi_ortadaki_soru_kopyasi_cikarilir(self):
+        """Uzatma yeni replikleri sona ekler; soru kopyası ORTADA kalabilir.
+        Yalnız segments[-1] kontrolü bu kopyayı kaçırdığı için soru İKİ KEZ
+        okunuyordu (kelime bütçesi de çift sayılıyordu)."""
+        script = {
+            "segments": [
+                {"speaker": "female", "tts_tag": "", "text": "Siz bu fiyata alırdınız mı?"},
+                {"speaker": "male", "tts_tag": "", "text": "Bakıyorum da o Türkiye fiyatı değil."},
+            ],
+            "yorum_tetikleyici_soru": "Siz bu fiyata alırdınız mı?",
+        }
+        yeni = _kapanis_sorusunu_ayristir(script)
+        self.assertEqual(1, len(yeni["segments"]))
+        self.assertEqual("Bakıyorum da o Türkiye fiyatı değil.", yeni["segments"][0]["text"])
+
     def test_bossoru_oldugunda_dokunulmaz(self):
         script = {
             "segments": [{"speaker": "female", "tts_tag": "", "text": "Son cümle burada."}],
