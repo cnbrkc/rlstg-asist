@@ -367,6 +367,12 @@ def _research_calistir(router, video_state, log):
         return vergi_kilidini_uygula(result, otv_kilidi_hesapla(result, web_sonuclari, video_state), log), model
 
     result = _object_state_or_empty(result)
+    if not result:
+        # Model erişilebilir ama boş/parse edilemez state döndürdüyse sessizce
+        # kabul etme: gözlemlenen gerçeklerle güvenli fallback (QA katmanındaki
+        # boş-state korumasının üretim başındaki eşleniği).
+        result = _research_observed_fallback(video_state, ValueError("Fact Lock modeli boş state döndürdü"), log)
+        model = "forensic-fallback"
     kilit = otv_kilidi_hesapla(result, web_sonuclari, video_state)
     if kilit.get("durum") != "KESIN":
         ek = otv_ek_arastirma(video_state, log)
@@ -522,6 +528,24 @@ def _explicit_voice_mode_from_notes(notes):
     duo_negated = bool(re.search(duo_pattern + r".{0,18}\b" + negation + r"\b", text))
     solo_negated = bool(re.search(solo_pattern + r".{0,18}\b" + negation + r"\b", text))
 
+    # Fiil bağlantılı açık komut: "erkek sesiyle anlat", "kadın sesi okusun".
+    # Yalnız emir/bağlantı fiiliyle geldiğinde solo sayılır; sıradan bir cümlede
+    # geçen "kadın sesi" ifadesi ("videoda kadın sesi var" gibi) modu DEĞİŞTİRMEZ
+    # (yanlış pozitif koruması).
+    fiil_desenleri = (
+        (r"\berkek\s+ses(?:i|in|ini|ine)?\s*(?:yle|ile|le)?\s+(?:anlat|soyle|söyle|oku|yaz|yap|anlatsin|anlatsın|okusun|kullan)\b", "SOLO_MALE"),
+        (r"\bkadin\s+ses(?:i|in|ini|ine)?\s*(?:yle|ile|le)?\s+(?:anlat|soyle|söyle|oku|yaz|yap|anlatsin|anlatsın|okusun|kullan)\b", "SOLO_FEMALE"),
+    )
+
+    def _fiil_modu():
+        for desen, mod in fiil_desenleri:
+            m = re.search(desen, text)
+            if m:
+                return (m.start(), mod)
+        return None
+
+    fiil_eslesme = _fiil_modu()
+
     gender_patterns = (
         (r"\b(solo\s+female|sadece\s+kadin(?:\s+sesi)?|yalnizca\s+kadin(?:\s+sesi)?|tek\s+kadin\s+sesi)\b", "SOLO_FEMALE"),
         (r"\b(solo\s+male|sadece\s+erkek(?:\s+sesi)?|yalnizca\s+erkek(?:\s+sesi)?|tek\s+erkek\s+sesi)\b", "SOLO_MALE"),
@@ -534,6 +558,8 @@ def _explicit_voice_mode_from_notes(notes):
                 match = re.search(pattern, text)
                 if match:
                     gender_candidates.append((match.start(), mode))
+            if fiil_eslesme:
+                gender_candidates.append(fiil_eslesme)
             return max(gender_candidates, default=(-1, "SOLO_FEMALE"))[1]
     elif solo_negated and not duo_negated:
         return "DUO"
@@ -553,6 +579,8 @@ def _explicit_voice_mode_from_notes(notes):
         match = re.search(duo_pattern, text)
         if match:
             candidates.append((match.start(), "DUO"))
+    if fiil_eslesme and not duo_negated:
+        candidates.append(fiil_eslesme)
     return max(candidates, default=(-1, ""))[1]
 
 
@@ -903,9 +931,15 @@ def _arka_planda(fn, *args, **kwargs):
         havuz.shutdown(wait=False)
 
 
-def _threads_future_sonucu(future, router, video_state, fact_state, editorial_state, log, ton):
+def _threads_future_sonucu(future, router, video_state, fact_state, editorial_state, log, ton, timeout_s=300.0):
     try:
-        return future.result()
+        return future.result(timeout=timeout_s)
+    except TimeoutError:
+        # concurrent.futures.TimeoutError: future sonsuza kadar beklenmez;
+        # takılan kol iptal edilip senkron yol taze bir çağrıyla denenir.
+        future.cancel()
+        log(f"⚠️ Paralel Threads kolu {timeout_s:.0f} sn içinde bitmedi; senkron yeniden deneniyor.")
+        return _threads_calistir(router, video_state, fact_state, editorial_state, log, ton)
     except Exception as exc:
         log(f"⚠️ Paralel Threads kolu hata verdi; senkron yeniden deneniyor: {type(exc).__name__}: {str(exc)[:160]}")
         return _threads_calistir(router, video_state, fact_state, editorial_state, log, ton)
@@ -1080,7 +1114,8 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
             onceki_caption = (caption_state, model_caption)
             try:
                 caption_state, model_caption = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi=geri_bildirim)
-            except Exception:
+            except Exception as exc:
+                log(f"⚠️ Caption yenilemesi üretilemedi; önceki caption korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
                 caption_state, model_caption = onceki_caption
             if model_caption == "local-fallback" and onceki_caption[1] not in ("local-fallback", "hata"):
                 # Yenileme modeli yanıt vermedi: modelin önceki caption'ı güvenli
@@ -1093,7 +1128,8 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
             onceki_threads = (threads_state, model_threads)
             try:
                 threads_state, model_threads = _threads_calistir(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi=geri_bildirim)
-            except Exception:
+            except Exception as exc:
+                log(f"⚠️ Threads yenilemesi üretilemedi; önceki Threads metni korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
                 threads_state, model_threads = onceki_threads
             if model_threads == "local-fallback" and onceki_threads[1] not in ("local-fallback", "hata"):
                 log("⚠️ Threads yenilemesi yanıt vermedi; önceki model Threads metni korunuyor.")

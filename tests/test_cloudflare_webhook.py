@@ -59,6 +59,16 @@ class CloudflareWebhookSozlesmeTests(unittest.TestCase):
         catch_idx = self.kaynak.index("} catch (error) {", try_idx)
         self.assertTrue(try_idx < put_idx < catch_idx, "githubPut try/catch dışında")
 
+    def test_dispatch_hatasi_klavyeyi_yeniden_gonderir(self):
+        """Dispatch hatasında mode klavyesi kaybolmamalı: kullanıcı aynı
+        butonlarla retry edebilmeli (#22 'retry mümkün' sözleşmesi)."""
+        self.assertIn("İçerik türünü yeniden seçebilirsin", self.kaynak)
+        self.assertIn("retryKeyboard", self.kaynak)
+        # Retry klavyesi dispatch-fail dalından SONRA ve onun içinde olmalı.
+        fail_idx = self.kaynak.index('"GitHub dispatch failed"')
+        keyboard_idx = self.kaynak.index("retryKeyboard")
+        self.assertLess(keyboard_idx, fail_idx)
+
 
 class CloudflareJsSyntaxTests(unittest.TestCase):
     def test_node_check_gecer(self):

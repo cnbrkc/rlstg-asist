@@ -316,7 +316,7 @@ def _final_report(step_status, warnings, errors, result, tone_key):
     errors = [_scrub(x) for x in (errors or [])]
     lines = ["📊 PIPELINE RAPORU", ""]
     for i, name in enumerate(PIPELINE_STEPS):
-        lines.append(f"{step_status.get(i, '⚪')} {i+1}/9 {name}")
+        lines.append(f"{step_status.get(i, '⚪')} {i+1}/{len(PIPELINE_STEPS)} {name}")
     input_media = result.get("input_media") or {}
     output_media = result.get("output_media") or {}
     editorial = result.get("editorial_brief") if isinstance(result.get("editorial_brief"), dict) else {}

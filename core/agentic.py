@@ -374,12 +374,22 @@ def _kapanis_sorusunu_ayristir(script_state, log=None):
     if not soru:
         return script_state
     segments = [seg for seg in (script_state.get("segments") or []) if isinstance(seg, dict)]
-    if not segments or _metni_normalizle(segments[-1].get("text")) != soru:
+    if not segments:
+        return script_state
+    # Kopya yalnız sonda değil ORTADA da olabilir: uzatma yeni replikleri sona
+    # ekler, soru replik kopyası ortada kalır. Yalnız segments[-1] kontrolü o
+    # kopyayı kaçırdığı için seslendirme soruyu İKİ KEZ okuyordu (kelime bütçesi
+    # de çift sayılıyordu). Tüm kopyalar güvenle atılır; sistem soruyu en sona
+    # kendisi ekler.
+    kopyalar = [i for i, seg in enumerate(segments) if _metni_normalizle(seg.get("text")) == soru]
+    if not kopyalar:
         return script_state
     yeni = dict(script_state)
-    yeni["segments"] = segments[:-1]
+    atlanan = set(kopyalar)
+    yeni["segments"] = [seg for i, seg in enumerate(segments) if i not in atlanan]
     if log:
-        log("🧹 Kapanış sorusu replik listesinden çıkarıldı; sistem soruyu seslendirmenin en sonuna ekleyecek.")
+        konum = "sonunda" if kopyalar == [len(segments) - 1] else f"metnin ortasında ({len(kopyalar)} replik)"
+        log(f"🧹 Kapanış sorusu replik listesinden çıkarıldı ({konum}); sistem soruyu seslendirmenin en sonuna ekleyecek.")
     return yeni
 
 
@@ -1057,7 +1067,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 revize_state, revize_model = _script_writer_calistir(
                     router, hook_state, detective_state, fact_state, editorial_state,
                     video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
-                    qa_geri_bildirimi=qa_geri_bildirimi,
+                    qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef, segment_butcesi=segment_butcesi,
                 )
                 revize_state = _object_state_or_empty(revize_state)
                 if revize_state.get("segments"):

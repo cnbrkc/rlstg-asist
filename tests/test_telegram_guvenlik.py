@@ -74,5 +74,15 @@ class TitleFormatTests(unittest.TestCase):
         self.assertNotIn("Üst:", mesaj)
 
 
+class StepCounterTests(unittest.TestCase):
+    def test_adim_sayaci_sabit_degil_listeden_turer(self):
+        rapor = w._final_report({}, [], [], {}, "dengeli")
+        son_adim = f"{len(w.PIPELINE_STEPS)}/{len(w.PIPELINE_STEPS)}"
+        self.assertIn(son_adim, rapor)
+        # Metin modu raporu kendi 8 adımlı listesini kullanır.
+        rapor_text = w._text_final_report({}, [], [], {}, "dengeli", {})
+        self.assertIn(f"{len(w.TEXT_PIPELINE_STEPS)}/{len(w.TEXT_PIPELINE_STEPS)}", rapor_text)
+
+
 if __name__ == "__main__":
     unittest.main()

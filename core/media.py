@@ -6,6 +6,10 @@ from core.sozlesme import VIDEO_HIZ_MAKS, VIDEO_HIZ_MIN
 # Sözleşme sınırları (tek doğruluk kaynağı: core/sozlesme.py).
 MAKS_VIDEO_HIZLANDIRMA = VIDEO_HIZ_MAKS
 MIN_VIDEO_YAVASLATMA = VIDEO_HIZ_MIN
+# Yavaşlatma clamp'i devredeyken (TTS >> video) ses kuyruğu -t ile kesilmeden
+# önce son kare dondurarak BU KADAR süreye kadar uzatılır; daha fazlası görsel
+# olarak taşımadığı için kırpma + açık uyarı tercih edilir.
+MAKS_DONDURULMUS_UZATMA = 8.0
 FFMPEG_TIMEOUT = 600
 FINAL_AUDIO_SAMPLE_RATE = 48000
 FINAL_AUDIO_BITRATE = "192k"
@@ -223,8 +227,22 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
     # keskinleştirmesini zaten uygular.
     video_filtresi = speed_filter
 
+    # Yavaşlatma clamp'i devredeyken (TTS >> video) eski davranış ses kuyruğunu
+    # sessizce kesiyordu: kapanış CTA'sı cümlenin ortasında susuyordu. Kuyruk
+    # makul bir süreye sığıyorsa video SON KARE DONdurularak uzatılır; ses
+    # eksiksiz kalır. Çok uzun kuyrukta kırpma kaçınılmazdır ama artık SESSİZ
+    # değildir.
+    kesilecek_sure = max(0.0, ses_sure - hedef_sure)
+    if kesilecek_sure > 0.05 and video_hiz <= MIN_VIDEO_YAVASLATMA + 1e-9:
+        if kesilecek_sure <= MAKS_DONDURULMUS_UZATMA:
+            video_filtresi = f"{speed_filter},tpad=stop_mode=clone:stop_duration={kesilecek_sure + 0.5:.3f}"
+            hedef_sure = ses_sure
+            log_ekle(f"🎥 Video son kare dondurularak {kesilecek_sure:.1f}s uzatılıyor; ses kuyruğu (kapanış dahil) tamamen korunuyor.")
+        else:
+            log_ekle(f"⚠️ TTS, yavaşlatma sınırında {kesilecek_sure:.1f}s uzun; ses kuyruğunun sonu {hedef_sure:.2f}s'te kesilecek (kapanış CTA'sı etkilenebilir). Kısa seslendirme yeniden üretilmeli.")
+
     output_fps = input_bilgi.get("fps") or 30.0
-    komut = [FFMPEG_BIN, "-y", "-i", video_yolu, "-i", ses_yolu, "-filter:v", video_filtresi, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", str(VIDEO_CRF), "-pix_fmt", "yuv420p", "-r", f"{output_fps:.6f}", "-af", "apad", "-c:a", "aac", "-ar", str(FINAL_AUDIO_SAMPLE_RATE), "-ac", str(SES_KANAL), "-b:a", FINAL_AUDIO_BITRATE, "-t", f"{hedef_sure:.6f}", cikti_yolu]
+    komut = _senkron_komutu(video_yolu, ses_yolu, cikti_yolu, video_filtresi, hedef_sure, output_fps)
     try:
         r = subprocess.run(komut, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
         if r.returncode != 0:
@@ -235,6 +253,11 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
     except Exception as e:
         log_ekle(f"⚠️ Video render hatası: {e}")
         return False
+
+def _senkron_komutu(video_yolu, ses_yolu, cikti_yolu, video_filtresi, hedef_sure, output_fps):
+    """Video+TTS birleştirme ffmpeg komutunu kurar (test edilebilirlik için ayrı)."""
+    return [FFMPEG_BIN, "-y", "-i", video_yolu, "-i", ses_yolu, "-filter:v", video_filtresi, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", str(VIDEO_CRF), "-pix_fmt", "yuv420p", "-r", f"{output_fps:.6f}", "-af", "apad", "-c:a", "aac", "-ar", str(FINAL_AUDIO_SAMPLE_RATE), "-ac", str(SES_KANAL), "-b:a", FINAL_AUDIO_BITRATE, "-t", f"{hedef_sure:.6f}", cikti_yolu]
+
 
 def _ses_suresini_al(dosya_yolu: str) -> float:
     return float(_ffprobe_bilgi_al(dosya_yolu).get("duration", 0.0))

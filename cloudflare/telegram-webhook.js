@@ -120,6 +120,11 @@ async function dispatchPipeline(env, chatId, pending, updateId, tone, messageId,
   if (!dispatch.ok) {
     const body = await dispatch.text();
     await safeEdit(env, chatId, messageId, `❌ GitHub pipeline başlatılamadı.\n\nHTTP ${dispatch.status}\n${body.slice(0, 1500)}`);
+    // Hata mesajı eski klavyeyi yutmuş olur; kullanıcı retry edebilsin diye
+    // mode seçimi yeniden sunulur (pending henüz silinmemiştir, aynı
+    // update_id ile dispatch tekrar denenebilir).
+    const retryKeyboard = { inline_keyboard: [[{ text: "🎭 Eğlenceli", callback_data: `mode:eglence:${updateId}` }, { text: "⚖️ Dengeli", callback_data: `mode:dengeli:${updateId}` }], [{ text: "🧠 Bilgi Ağırlıklı", callback_data: `mode:bilgi:${updateId}` }, { text: "📊 Teknik / Detaylı", callback_data: `mode:teknik:${updateId}` }]] };
+    await telegram(env, "sendMessage", { chat_id: chatId, text: "🔄 İçerik türünü yeniden seçebilirsin:", reply_markup: retryKeyboard }).catch(() => {});
     return new Response("GitHub dispatch failed", { status: 502 });
   }
   await safeEdit(env, chatId, messageId, `${isVideo ? "🎥 Video" : "📝 Metin"}\n🎯 İçerik türü: ${labels[tone] || tone}\n\n⏳ Reels pipeline çalışıyor...\n\n🟢 GitHub Actions tetiklendi.`);
