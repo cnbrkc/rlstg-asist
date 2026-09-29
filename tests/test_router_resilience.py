@@ -9,12 +9,15 @@ değiştirilir. Doğrulanan davranış:
   * Doğrulanmış 404 modeli kalıcı olarak atlar; config/schema hatası yalnız mevcut istekte atlanır.
   * free-tier key/project'e bağlıdır: yalnızca o key yasaklanır, diğerleri denenir.
 """
+import json
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core import router as router_module
 from core.router import SmartRouter
 
 
@@ -275,6 +278,85 @@ class FreeTierPerKeyTests(unittest.TestCase):
         self.assertIn("k1", info2)
         self.assertEqual(router.clients["k0"].models.calls.count("m"), 0)  # k0 artık atlanır
         self.assertEqual(router.clients["k1"].models.calls.count("m"), 1)
+
+
+class _JsonClient:
+    def __init__(self, metin):
+        self.models = _JsonModels(metin)
+
+
+class _JsonModels:
+    """Yanıtı önceden belirlenmiş metin olan sahte model koludur."""
+
+    def __init__(self, metin):
+        self.metin = metin
+        self.calls = []
+        self.son_config = None
+
+    def generate_content(self, model, contents, config):
+        self.calls.append(model)
+        self.son_config = config
+
+        class _R:
+            text = self.metin
+
+        return _R()
+
+
+def _json_router(keys_metinleri):
+    router = SmartRouter()
+    router._ordered_api_items = lambda: [(m, "x") for m in keys_metinleri]
+    router.clients = {m: _JsonClient(metin) for m, metin in keys_metinleri.items()}
+    return router
+
+
+def _kesin_json_dogrulayici(response):
+    parsed = json.loads(response.text)
+    if "ok" not in parsed:
+        raise ValueError("ok alanı yok")
+
+
+class ValidatorRotationTests(unittest.TestCase):
+    """Bozuk/kesilmiş JSON: boş yanıt gibi KEY rotasyonu ve tur yenilemesi alır;
+    tek hatada modeli tüm kombinasyonlarla çöpe atmaz."""
+
+    def test_invalid_json_rotates_to_next_key_and_succeeds(self):
+        router = SmartRouter()
+        router._ordered_api_items = lambda: [("k0", "x"), ("k1", "x")]
+        router.clients = {
+            "k0": _JsonClient('{"ok": tru'),  # kesilmiş JSON
+            "k1": _JsonClient('{"ok": true}'),
+        }
+        _, info = router._make_request(
+            ["m"], "x", None, lambda *a: None,
+            require_text=True, response_validator=_kesin_json_dogrulayici,
+        )
+        self.assertTrue(info.startswith("k1"))
+        # Eski davranışta k0 hatası modeli o istek için tamamen düşürür ve k1
+        # HİÇ denenmezdi.
+        self.assertEqual(router.clients["k1"].models.calls, ["m"])
+
+    def test_max_output_tokens_is_sent_for_structured_output(self):
+        router = _json_router({"k0": '{"ok": true}'})
+        router.metin_uret(
+            "x", "sistem", {"type": "object"}, lambda *a: None,
+            model_listesi=["m"], arama_kullan=False,
+        )
+        config = router.clients["k0"].models.son_config
+        self.assertEqual(router_module.MAKS_CIKTI_TOKENLARI, getattr(config, "max_output_tokens", None))
+
+    def test_all_keys_invalid_retry_round_runs_without_overload_stamp(self):
+        router = _json_router({"k0": '{"ok": tru', "k1": '{"ok": fals'})
+        with patch.object(router_module, "_sleep") as sleep_mock:
+            with self.assertRaises(ValueError):
+                router._make_request(
+                    ["m"], "x", None, lambda *a: None,
+                    require_text=True, response_validator=_kesin_json_dogrulayici,
+                )
+        # Doğrulama-hatası turu yeniden denendi (bekleme çağrıldı) AMA bu API
+        # aşırı-yükü değildir: isteğe bağlı ajanları atlatan damga YAZILMAZ.
+        self.assertTrue(sleep_mock.called)
+        self.assertIsNone(getattr(router, "_last_full_overload_at", None))
 
 
 if __name__ == "__main__":

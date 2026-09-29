@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import sys
 import urllib.parse
 import urllib.request
@@ -60,6 +61,18 @@ def _safe_filename(value):
     return (cleaned or "telegram_video.mp4")[:160]
 
 
+def _videoyi_indir(url, destination):
+    """Videoyu parça parça, socket zaman aşımıyla indirir.
+
+    urllib.request.urlretrieve timeout ALMAZ: yavaş/takılan bağlantı job'u
+    belirsiz süreliğine meşgul edebiliyordu. urlopen(timeout=…) bağlantı ve her
+    okuma için 60 sn sınırı koyar; toplam süre dosya boyuyla ölçeklenir.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": "rlstg-asist-intake"})
+    with urllib.request.urlopen(req, timeout=60) as response, open(destination, "wb") as fh:
+        shutil.copyfileobj(response, fh, length=1024 * 1024)
+
+
 def main():
     filename = _safe_filename(os.environ.get("TELEGRAM_FILENAME"))
     data_dir = Path("data")
@@ -71,7 +84,7 @@ def main():
         raise RuntimeError(f"getFile failed: {result}")
     file_path = result["result"]["file_path"]
     url = f"https://api.telegram.org/file/bot{_token()}/{file_path}"
-    urllib.request.urlretrieve(url, destination)
+    _videoyi_indir(url, destination)
     size_mb = destination.stat().st_size / (1024 * 1024)
     send(f"✅ Video indirildi.\n\n📁 {filename}\n📦 {size_mb:.1f} MB\n\nPipeline devam ediyor...")
     github_env = os.environ.get("GITHUB_ENV", "").strip()

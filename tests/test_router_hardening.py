@@ -218,5 +218,60 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertTrue(callable(captured["validator"]))
 
 
+class StructuralFirstClassificationTests(unittest.TestCase):
+    """Yapısal durum kodu varken gövde substring'leri sınıflandırmayı değiştiremez.
+
+    Gerçek vaka: 503 gövdesi "backend error: 400 workers" ya da "model not found
+    in region" içerebilir; eski substring taraması bu geçici hatayı 400-config'e
+    ya da 24 SAATLİK kalıcı model yasağına çevirip tüm model listesini
+    düşürüyordu.
+    """
+
+    def setUp(self):
+        self.router = SmartRouter()
+
+    def test_503_body_substrings_cannot_reclassify_or_ban(self):
+        err = APIError(503, {"error": {
+            "status": "UNAVAILABLE",
+            "message": "The model is overloaded. backend error: 400 workers, model not found in region",
+        }})
+        scope, cooldown = self.router._parse_hata(err)
+        self.assertEqual("unavailable", scope)
+        self.assertEqual(router_module.COOLDOWN_DIGER, cooldown)
+
+    def test_429_with_limit_zero_is_key_scoped_permanent(self):
+        err = APIError(429, {"error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "GenerateRequests quota limit: 0 for this model",
+        }})
+        scope, cooldown = self.router._parse_hata(err)
+        self.assertEqual("free_tier_yok", scope)
+        self.assertEqual(router_module.COOLDOWN_FREE_TIER_YOK, cooldown)
+
+    def test_400_stays_request_scoped_with_no_cooldown(self):
+        err = APIError(400, {"error": {"status": "INVALID_ARGUMENT", "message": "schema mismatch"}})
+        scope, cooldown = self.router._parse_hata(err)
+        self.assertEqual("model_config", scope)
+        self.assertEqual(0, cooldown)
+
+    def test_structural_code_beats_text_even_when_code_in_body_differs(self):
+        # 429 gövdesinde "400" / "404" geçse bile sınıflandırma kota olmalı.
+        err = APIError(429, {"error": {"message": "rate limited (backend error: 404 workers)"}})
+        self.assertEqual("quota", self.router._parse_hata(err)[0])
+
+
+class BlacklistRaceTests(unittest.TestCase):
+    def test_expired_entries_are_cleaned_and_never_raise(self):
+        router = SmartRouter()
+        router.blacklist["*+m-eski"] = time.time() - 10
+        router.blacklist["k0+*"] = time.time() + 999
+        self.assertFalse(router._is_model_banned("m-eski"))
+        self.assertNotIn("*+m-eski", router.blacklist)
+        self.assertTrue(router._is_key_banned("k0", "m"))
+        # Paralel kolun sildiği girdiye ikinci okuma KeyError vermemeli.
+        router.blacklist.pop("k0+*")
+        self.assertFalse(router._is_key_banned("k0", "m"))
+
+
 if __name__ == "__main__":
     unittest.main()
