@@ -140,9 +140,12 @@ değişmez; kritik yolda bekleme olmaz.
 **Kapak kuralı (istisnasız):** Hook çıktısı `kapak_basliklarini_normalize_et` ile
 doğrulanır; eksikse Editorial/Detective kanıtları + şablon havuzuyla **5'e tamamlanır**.
 Her öğe `{ust, alt, ana(==ust), kaynak}`; `ana` worker uyumluluğu için.
-Alt başlık **asla kelime sayısına kırpılmaz** (Türkçe SOV: yüklem düşer). Yerel
-tamamlamada kaynaktan yalnız doğal 4-7 kelimelik cümle/yan cümle alınır, yoksa şablon;
-modelden gelen kırpık sonlar (`_kirpik_sonu_temizle`) temizlenir.
+Alt başlıkta hedef doğal 4-7 kelimelik cümledir; yerel tamamlamada kaynaktan yalnız
+doğal bu uzunluktaki cümle/yan cümle alınır, yoksa şablon. KAYNAK 7 kelimeyi aşıyorsa
+son çare kelime sınırından kırpma uygulanır (`_kelime_kirp`): kapakta 8+ kelimelik alt
+başlık görsel olarak taşımayacağı için kısa kalması uzun olmasından iyidir; kırpılan
+sarkık bağlaç/edatlar temizlenir (`_kirpik_sonu_temizle`), böylece Türkçe SOV diziliminde
+yüklemi düşen cümle bırakılmamaya çalışılır.
 
 **DUO diyalog kuralları** (Script Writer promptu içinde, QA `duo_check` bunları denetler):
 HOOK→FRICTION→PROOF→REVERSAL→PAYOFF/CALLBACK omurgası, 2. turdan itibaren lexical

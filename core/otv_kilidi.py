@@ -143,6 +143,26 @@ def _esik_mi(pencere: str) -> bool:
     ))
 
 
+def _baglam_penceresi(ham: str, bas: int, son: int) -> tuple:
+    """Aday yüzde ifadesinin bağlam penceresini döndürür.
+
+    Sabit 80/40 karakterlik pencere, ÖTV kilidinin kendi ürettiği uzun kanonik
+    ifadeyi ("matrah dilimine göre yüzde yetmiş veya ... yüzde doksan", 90+
+    karakter) okuyamıyordu: cümle başındaki 'ÖTV' bağlamı pencerenin dışında
+    kalıp ifadenin SON oranları eşleşmeden düşüyordu. Pencere cümle sınırına
+    kadar genişletilir; eski 80/40 penceresi de kapsanmaya devam eder.
+    """
+    geri = bas
+    while geri > 0 and ham[geri - 1] not in ".!?\n" and bas - geri < 300:
+        geri -= 1
+    geri = min(geri, max(0, bas - 80))
+    ileri = son
+    while ileri < len(ham) and ham[ileri] not in ".!?\n" and ileri - son < 300:
+        ileri += 1
+    ileri = max(ileri, min(len(ham), son + 40))
+    return geri, ileri
+
+
 def otv_eslesmeleri(metin: str):
     """Metindeki ÖTV/vergi yüzdelerini, konuşma bağlamındakileri döndürür."""
     ham = str(metin or "")
@@ -160,8 +180,8 @@ def otv_eslesmeleri(metin: str):
         oran = next(int(g) for g in m.groups() if g)
         if not 25 <= oran <= 300:
             continue
-        pencere_bas = max(0, m.start() - 80)
-        pencere = ham[pencere_bas:m.end() + 40]
+        pencere_bas, pencere_son = _baglam_penceresi(ham, m.start(), m.end())
+        pencere = ham[pencere_bas:pencere_son]
         if not _otv_baglami_mi(pencere, m.start() - pencere_bas):
             continue
         if m.group(1):
@@ -190,8 +210,8 @@ def otv_eslesmeleri(metin: str):
             son += ek.end()
         if any(not (e.son <= m.start() or son <= e.bas) for e in bulunan):
             continue
-        pencere_bas = max(0, m.start() - 80)
-        pencere = ham[pencere_bas:son + 40]
+        pencere_bas, pencere_son = _baglam_penceresi(ham, m.start(), son)
+        pencere = ham[pencere_bas:pencere_son]
         if not _otv_baglami_mi(pencere, m.start() - pencere_bas):
             continue
         bulunan.append(_Eslesme(deger, m.start(), son, "yuzde_kelime"))
@@ -758,8 +778,23 @@ def otv_tutarlilik_sorunlari(reels_state, caption_state, threads_state, fact_sta
                 sorunlar.append(f"{ad} matrah belirsizken tek/yanlış oran diyor: {vals}; izinli {sorted(izinli)}")
     dolu = {ad: set(vals) for ad, vals in oranlar.items() if vals}
     if len(dolu) >= 2:
-        birlesik = set().union(*dolu.values())
-        if len(birlesik) > 1:
+        # İki kanalın iddiası yalnız kümelerden biri diğerini KAPSAYARAK uyumludur.
+        # Eski "birleşim > 1" kontrolü yasal ARALIK üretimini bile hata sayıp
+        # üretimi durduruyordu: talimat "her iki ucu da söyle" dediği için
+        # seslendirme {70, 90}, kilitlenen açıklama tüm dilimleri {70,75,80,90}
+        # söylüyordu — çelişki yok. Gerçek çelişki, kümelerin karşılaştırılamaz
+        # olmasıdır (ör. {70, 80} ile {75, 90}; veya {70} ile {90}).
+        adlar = list(dolu)
+        celiski = False
+        for i in range(len(adlar)):
+            for j in range(i + 1, len(adlar)):
+                a, b = dolu[adlar[i]], dolu[adlar[j]]
+                if not (a <= b or b <= a):
+                    celiski = True
+                    break
+            if celiski:
+                break
+        if celiski:
             ozet = ", ".join(f"{ad}={sorted(vals)}" for ad, vals in dolu.items())
             sorunlar.append(f"kanallar farklı ÖTV oranı söylüyor ({ozet})")
     # Aynı mesajı iki kez yazma.

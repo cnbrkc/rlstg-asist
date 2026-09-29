@@ -1,6 +1,7 @@
 import json
 import mimetypes
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -22,6 +23,35 @@ from core.social_fallbacks import caption_fallback, limit_threads_text, threads_
 
 def _token():
     return os.environ["TELEGRAM_BOT_TOKEN"]
+
+
+_TOKEN_RE = re.compile(r"bot(\d+):[A-Za-z0-9_\-]{15,}")
+
+
+def _scrub(metin) -> str:
+    """Log, rapor ve tanı metinlerinden bot token'ını maskeleyerek çıkarır.
+
+    requests'in HTTPError metni "… for url: https://api.telegram.org/bot<TOKEN>/…"
+    biçimindedir; bu metin loga, hata listesine ve Telegram raporuna aksın token
+    ele geçirilmiş olur. Tüm kullanıcıya/loga giden metinler bu yardımcıdan geçer.
+    """
+    ham = str(metin or "")
+    try:
+        token = _token()
+    except Exception:
+        token = ""
+    if token:
+        ham = ham.replace(token, "bot***")
+    return _TOKEN_RE.sub(r"bot\1:***", ham)
+
+
+def _telegram_api_hatasi(r, eylem: str) -> RuntimeError:
+    """URL/token içermeyen güvenli bir API hata mesajı üretir."""
+    try:
+        aciklama = str((r.json() or {}).get("description") or "")
+    except Exception:
+        aciklama = ""
+    return RuntimeError(f"Telegram {eylem} başarısız: HTTP {r.status_code} {aciklama[:200]}".strip())
 
 
 def _chat_id():
@@ -86,8 +116,8 @@ def _pipeline_result_document(source, tone_key, result=None, warnings=None, erro
         "turkiye_ilgi_kancasi": reels_state.get("turkiye_ilgi_kancasi"),
         "qa": result.get("qa_result", {}),
         "qa_pass": result.get("qa_pass"),
-        "warnings": list(warnings or []),
-        "errors": list(errors or []),
+        "warnings": [_scrub(x) for x in (warnings or [])],
+        "errors": [_scrub(x) for x in (errors or [])],
     }
     if source == "text":
         document.update({
@@ -160,19 +190,22 @@ def _write_pipeline_result(document, log=None, path="pipeline_result.json"):
 
 def send_message(text):
     r = requests.post(f"{_base()}/sendMessage", data={"chat_id": _chat_id(), "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
-    r.raise_for_status()
+    if not r.ok:
+        raise _telegram_api_hatasi(r, "sendMessage")
     return r.json()
 
 
 def edit_message(message_id, text):
     r = requests.post(f"{_base()}/editMessageText", data={"chat_id": _chat_id(), "message_id": message_id, "text": text[:TELEGRAM_TEXT_LIMIT]}, timeout=60)
-    r.raise_for_status()
+    if not r.ok:
+        raise _telegram_api_hatasi(r, "editMessageText")
 
 
 def send_video(path, caption):
     with open(path, "rb") as fh:
         r = requests.post(f"{_base()}/sendVideo", data={"chat_id": _chat_id(), "caption": caption[:TELEGRAM_VIDEO_CAPTION_LIMIT]}, files={"video": (Path(path).name, fh, "video/mp4")}, timeout=300)
-    r.raise_for_status()
+    if not r.ok:
+        raise _telegram_api_hatasi(r, "sendVideo")
 
 
 def send_document(path, caption=""):
@@ -186,7 +219,8 @@ def send_document(path, caption=""):
             files={"document": (path.name, handle, mime_type)},
             timeout=300,
         )
-    response.raise_for_status()
+    if not response.ok:
+        raise _telegram_api_hatasi(response, "sendDocument")
     return response.json()
 
 
@@ -220,9 +254,13 @@ def _format_title_options(titles):
         if not ust and not alt:
             continue
         shown += 1
-        lines.append(f"Alternatif {shown}:")
-        lines.append(f"Üst: {ust}")
-        lines.append(f"Alt: {alt}")
+        # Üst katman TAMAMI BÜYÜK HARF, alt katman cümle düzeni olduğu için
+        # "Üst:"/"Alt:" etiketine gerek yok; kullanıcıya etiketsiz sunulur.
+        if ust and alt:
+            lines.append(f"{shown}) {ust}")
+            lines.append(alt)
+        else:
+            lines.append(f"{shown}) {ust or alt}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -274,6 +312,8 @@ def _qa_issue_lines(qa, limit=6):
 
 
 def _final_report(step_status, warnings, errors, result, tone_key):
+    warnings = [_scrub(x) for x in (warnings or [])]
+    errors = [_scrub(x) for x in (errors or [])]
     lines = ["📊 PIPELINE RAPORU", ""]
     for i, name in enumerate(PIPELINE_STEPS):
         lines.append(f"{step_status.get(i, '⚪')} {i+1}/9 {name}")
@@ -363,6 +403,8 @@ def _text_voiceover_message(result):
 
 
 def _text_final_report(step_status, warnings, errors, result, tone_key, delivery_status):
+    warnings = [_scrub(x) for x in (warnings or [])]
+    errors = [_scrub(x) for x in (errors or [])]
     lines = ["📊 TEXT-ONLY PIPELINE RAPORU", ""]
     for index, name in enumerate(TEXT_PIPELINE_STEPS):
         lines.append(f"{step_status.get(index, '⚪')} {index + 1}/8 {name}")
@@ -523,7 +565,7 @@ def _setup_env(steps, loading_id):
         # Actions satırlarında UTC duvar saati + job başlangıcından itibaren süre.
         # Ham mesaj warning/error sınıflandırmasında korunur; API anahtar değeri,
         # prompt veya tam model çıktısı hiçbir zaman yazdırılmaz.
-        text = str(msg).strip()
+        text = _scrub(str(msg).strip())
         elapsed = time.perf_counter() - process_started
         stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         print(f"[{stamp}] [+{elapsed:8.2f}s] {text}", flush=True)

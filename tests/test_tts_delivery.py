@@ -87,6 +87,30 @@ class TtsDeliveryTests(unittest.TestCase):
         self.assertIn("chuckle", notlar)
         self.assertNotIn("gülerek", temiz)
 
+    def test_kisa_anahtar_kelime_icinde_gecerse_gercek_soz_silinmez(self):
+        # "net" anahtarı "internette" kelimesinin içinde: substring eşleşme gerçek
+        # sözü yönerge sanıp siliyordu; kelime sınırı eşleşmesi şart.
+        konusma, stil = replik_tts_hazirla("[internette fiyatlar acayip] Bir de buna bak.", "")
+        self.assertIn("internette fiyatlar acayip", konusma)
+        self.assertIn("Bir de buna bak", konusma)
+        self.assertNotIn("[", konusma)
+        self.assertNotIn("]", konusma)
+        self.assertNotIn("grounded and serious", stil)
+
+    def test_bilinmeyen_tek_kelime_etiket_konusulmaz(self):
+        # "[heyecanla]" tanınmayan etiketti: transkriptte kalıp TTS tarafından
+        # yüksek sesle okunuyordu. Yönerge nota yazılır, konuşulmaz.
+        konusma, stil = replik_tts_hazirla("[heyecanla] Harika bir gün.", "")
+        self.assertEqual("Harika bir gün.", konusma)
+        self.assertNotIn("heyecanla", konusma.casefold())
+        self.assertTrue(stil)
+
+    def test_rakamli_parantez_bilgisi_konusulur(self):
+        konusma, _ = replik_tts_hazirla("[2024 model] Fiyat listesi çıktı.", "")
+        self.assertIn("2024 model", konusma)
+        self.assertIn("Fiyat listesi", konusma)
+        self.assertNotIn("[", konusma)
+
 
 class _noop:
     def __enter__(self):

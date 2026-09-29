@@ -164,6 +164,44 @@ class OtvTutarlilikTests(unittest.TestCase):
         self.assertIn("VOICEOVER_FAIL", qa["regeneration_targets"])
         self.assertTrue(qa["fact_check"].startswith("FAIL:"))
 
+    def test_aralik_kilitinde_her_kanalin_iki_ucu_söylemesi_hata_degil(self):
+        """ARALIK kilidinde talimat 'her iki ucu da söyle' der; buna uyan yasal
+        üretim kanallar-arası çelişki sayılıp üretim DURDURULMAMALI (QA FAIL
+        zinciri: otv_tutarlilik_sorunlari → _otv_qa_zorla → qa_pass=False)."""
+        kilit = tablo_orani("ice", 1300, None)  # 1400cc altı, matrah yok → ARALIK [70,75,80,90]
+        self.assertEqual("ARALIK", kilit["durum"])
+        fact = vergi_kilidini_uygula({}, kilit)
+        reels = {"seslendirme_metni": "Bu araçta ÖTV matraha göre yüzde 70 veya yüzde 90 olabilir."}
+        caption = {"reels_aciklamasi": "ÖTV matrah dilimine göre %70 veya %90."}
+        threads = {"threads_aciklamasi": "Matraha göre %70 ya da %90."}
+        sorunlar = otv_tutarlilik_sorunlari(reels, caption, threads, fact)
+        self.assertEqual([], sorunlar)
+        qa = _otv_qa_zorla({"overall": "PASS", "regeneration_targets": []}, reels, caption, threads, fact, lambda *_: None)
+        self.assertEqual("PASS", qa["overall"])
+        self.assertEqual([], qa["regeneration_targets"])
+
+    def test_aralik_kilidi_sosyal_kilitle_sonrasi_qa_pass(self):
+        """Üretim hattının gerçek sırası: sosyal kilitle → QA zorla. Eski union
+        kontrolü bu yasal akışı bile FAIL'e çeviriyordu."""
+        kilit = tablo_orani("ice", 1300, None)
+        fact = vergi_kilidini_uygula({}, kilit)
+        reels = {"seslendirme_metni": "ÖTV yüzde yetmiş veya yüzde doksan olabilir.", "kapak_basliklari": []}
+        caption = {"reels_aciklamasi": "Vergi %170 diyor eski tablolar."}
+        threads = {"threads_aciklamasi": "ÖTV yüzdesi yüzde yetmiş."}
+        caption, threads = _otv_sosyal_kilitle(reels, caption, threads, fact, lambda *_: None)
+        qa = _otv_qa_zorla({"overall": "PASS", "regeneration_targets": []}, reels, caption, threads, fact, lambda *_: None)
+        self.assertEqual("PASS", qa["overall"])
+
+    def test_aralik_kanallar_farkli_uc_soylerse_hala_isaretlenir(self):
+        """Seslendirme %70, açıklama %80 diyor (farklı tek uçlar): hem kanal-başı
+        'tek oran' kuralı hem kanallar-arası çelişki kuralı işaretlemeli."""
+        fact = {"vergi_kilidi": {"durum": "ARALIK", "izinli": [70, 80], "marka": "X"}}
+        reels = {"seslendirme_metni": "ÖTV matraha göre yüzde 70 olabilir."}
+        caption = {"reels_aciklamasi": "ÖTV matraha göre %80."}
+        sorunlar = otv_tutarlilik_sorunlari(reels, caption, {}, fact)
+        self.assertTrue(any("tek/yanlış" in s for s in sorunlar))
+        self.assertTrue(any("farklı ÖTV" in s for s in sorunlar))
+
 
 if __name__ == "__main__":
     unittest.main()

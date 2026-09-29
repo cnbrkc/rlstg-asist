@@ -13,6 +13,21 @@ def _token():
     return os.environ["TELEGRAM_BOT_TOKEN"]
 
 
+_TOKEN_RE = re.compile(r"bot(\d+):[A-Za-z0-9_\-]{15,}")
+
+
+def _scrub(metin) -> str:
+    """Hata/rapor metinlerinden bot token'ını maskele (URL'den de temizler)."""
+    ham = str(metin or "")
+    try:
+        token = _token()
+    except Exception:
+        token = ""
+    if token:
+        ham = ham.replace(token, "bot***")
+    return _TOKEN_RE.sub(r"bot\1:***", ham)
+
+
 def _chat_id():
     return os.environ["TELEGRAM_CHAT_ID"]
 
@@ -71,8 +86,8 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         try:
-            send(f"❌ Video alınırken hata oluştu:\n\n{str(exc)[:2000]}")
+            send(f"❌ Video alınırken hata oluştu:\n\n{_scrub(str(exc)[:2000])}")
         except Exception:
             pass
-        print(f"Webhook intake error: {exc}", file=sys.stderr)
+        print(f"Webhook intake error: {_scrub(exc)}", file=sys.stderr)
         raise
