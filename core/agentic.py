@@ -31,6 +31,7 @@ from core.cover_titles import (
     kapak_basliklarini_normalize_et,
     kapak_basliklarini_metne_dok,
 )
+from core.fiyat_kilidi import fiyat_talimati
 from core.duo_audio import duo_ses_uret
 from core.tts_delivery import replik_tts_hazirla, script_metnini_konusmaya_cek, segment_konusma, teslimat_blogu
 from core.otv_kilidi import (
@@ -469,6 +470,7 @@ def _detective_calistir(router, video_state, fact_state, editorial_state, log):
         "Türkiye'ye özel vergi/maliyet mağduriyetlerini ve en kışkırtıcı ham bilgiyi bulmak.\n"
         "Aşağıdaki video, fact lock ve editorial brief'e dayanarak sadece JSON şemasına uygun çıktı ver."
         + vergi_kilidi_talimati(fact_state)
+        + fiyat_talimati(fact_state)
     )
     content = girdi_birlestir(
         durumu_metne_donustur('VIDEO', video_state),
@@ -524,6 +526,7 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
         + "\n\n"
         + KAPAK_KALITE_KURALI
         + vergi_kilidi_talimati(fact_state)
+        + fiyat_talimati(fact_state)
     )
     if geri_bildirim:
         prompt += f"\n\n🚨 FINAL QA GERİ BİLDİRİMİ (kapak/kancayı buna göre düzelt): {geri_bildirim}"
@@ -621,7 +624,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             "Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia, rakam veya özellik kullanma, emin olmadığın bilgiyi çıkar:\n"
             f"{qa_geri_bildirimi}"
         )
-    prompt += vergi_kilidi_talimati(fact_state)
+    prompt += vergi_kilidi_talimati(fact_state) + fiyat_talimati(fact_state)
 
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
@@ -669,7 +672,7 @@ def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, to
     # gelir (700-850 karakter, TAM 5 hashtag, Fact Lock sınırları, artifact yasağı)
     # + reels_baslik talimatı. Eski 2 satırlık prompt kuralsız çıktı ürettiği
     # için kaldırıldı (Eylül 2026: kısa caption + 7 hashtag).
-    prompt = metadata_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state)
+    prompt = metadata_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state) + fiyat_talimati(fact_state)
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
         durumu_metne_donustur('SCRIPT', script_state),

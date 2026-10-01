@@ -29,6 +29,56 @@ def _env_int(ad: str, varsayilan: int) -> int:
         return varsayilan
 
 
+# Forensic analiz şeması modelden emin olamadığında 'UNKNOWN' yazmasını
+# istiyor. Bu yer tutucu metni sorguya sızınca DDGS sorguyu terim sayıp
+# "No results found" dönüyordu (01.10.2026 logu: 'Kia Seltos UNKNOWN Türkiye
+# fiyat satış' → 0 sonuç, '... şikayet ...' → 4 sonuç). Kimlik alanları ve
+# dinamik araştırma soruları sorgu üretiminde ayıklanır.
+_YER_TUTUCU_DEGERLER = {
+    "", "unknown", "unkown", "bilinmiyor", "bilinmeyen", "belirsiz",
+    "tanimsiz", "tanımsız", "none", "null", "n/a", "na", "-", "--", "?", "??",
+    "yok", "x", "xx",
+}
+# Metin içi token ayıklamada 'yok' GERÇEK bir kelimedir ("Türkiye'de satışı yok
+# mu?") — yalnızca açıkça yer tutucu olan token'lar atılır.
+_TOKEN_YER_TUTUCULAR = {
+    "unknown", "unkown", "bilinmiyor", "bilinmeyen", "belirsiz",
+    "tanimsiz", "tanımsız", "none", "null", "n/a", "na", "-", "--", "?", "??",
+}
+
+
+def _kimlik_parcasi(deger) -> str:
+    """Kimlik alanını ayıklar; yer tutucuysa ('UNKNOWN'/'bilinmiyor') boş döner."""
+    temiz = str(deger or "").strip().strip("\"'`").strip()
+    if temiz.casefold() in _YER_TUTUCU_DEGERLER:
+        return ""
+    return temiz
+
+
+def _yer_tutucu_tokenlari_at(metin: str) -> str:
+    """Serbest metindeki başına sonuna gelmiş yer tutucu token'larını atar."""
+    parcalar = []
+    for parca in re.split(r"\s+", str(metin or "")):
+        saf = parca.strip("\"'`.,;:!?()[]{}").casefold()
+        if saf in _TOKEN_YER_TUTUCULAR:
+            continue
+        parcalar.append(parca)
+    return " ".join(parcalar).strip(" ,;:–—-")
+
+
+def _basitlestirilmis_sorgu(sorgu: str, kimlik: str) -> str:
+    """Sonuçsuz kalan sorguyu kimlik + ilk anahtar kelimelerle kısaltır.
+
+    Kimlik önekini çıkarıp kalan kısmın ilk 4 kelimesini korur; hedef aynı
+    araç/model için daha az terimli, DDGS'in getirebildiği sorgu.
+    """
+    kalan = str(sorgu or "")
+    if kimlik and kalan.lower().startswith(kimlik.lower()):
+        kalan = kalan[len(kimlik):].strip()
+    kelimeler = kalan.split()[:4]
+    return _yer_tutucu_tokenlari_at(f"{kimlik} {' '.join(kelimeler)}")
+
+
 def _temizle_metin(text: str, max_chars: int = 500) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text[:max_chars] if len(text) > max_chars else text
@@ -152,12 +202,14 @@ def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
     """Forensic analizden agentic sorgu listesi üretir."""
     sorgular = []
     kimlik = video_state.get("video_identity") or {}
-    marka = str(kimlik.get("brand") or "").strip()
-    model = str(kimlik.get("exact_model") or "").strip()
-    variant = str(kimlik.get("variant") or "").strip()
-    tam_ad = f"{marka} {model} {variant}".strip()
+    marka = _kimlik_parcasi(kimlik.get("brand"))
+    model = _kimlik_parcasi(kimlik.get("exact_model"))
+    variant = _kimlik_parcasi(kimlik.get("variant"))
+    # 'UNKNOWN' variant/model sorgu içinde kalırsa DDGS terim sayıp sonuçsuz
+    # dönüyor; yer tutucular ayıklanır (bkz. _YER_TUTUCU_DEGERLER).
+    tam_ad = _yer_tutucu_tokenlari_at(f"{marka} {model} {variant}")
 
-    if not marka or marka.upper() == "UNKNOWN":
+    if not marka:
         return []
 
     # 1. Kimlik ve Teknik (yıl: sorgu her zaman güncel kalır)
@@ -173,9 +225,9 @@ def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
     sorgular.append(f"{tam_ad} Türkiye fiyat satış")
     # 4. Viral Araştırma İhtiyaçları (Forensic'ten gelen dinamik sorular)
     for soru in (video_state.get("viral_arastirma_ihtiyaclari") or [])[:2]:
-        soru_metni = _temizle_metin(soru, 120)
+        soru_metni = _yer_tutucu_tokenlari_at(_temizle_metin(soru, 120))
         if soru_metni:
-            sorgular.append(f"{tam_ad} {soru_metni}")
+            sorgular.append(_yer_tutucu_tokenlari_at(f"{tam_ad} {soru_metni}"))
 
     return sorgular[:7]
 
@@ -185,16 +237,21 @@ def otv_ek_arastirma(video_state: Dict[str, Any], log_ekle) -> str:
 
     Genel tablo snippet'i 500-800 karakterde %70 ve %170'i bir arada gösterir;
     bu ikinci tur motor hacmi / kW veya modele yazılmış oranı arar.
+
+    Tırnak içine alınmış sorgular DDGS'de tam ifade aramasına dönüşüp
+    "No results found" veriyordu (01.10.2026 logu); sorgular düz metin
+    kurulur, model bilinmiyorsa marka ile devam edilir.
     """
     kimlik = (video_state or {}).get("video_identity") or {}
-    marka = str(kimlik.get("brand") or "").strip()
-    model = str(kimlik.get("exact_model") or "").strip()
-    if not marka or marka.upper() == "UNKNOWN" or not model or model.upper() == "UNKNOWN":
+    marka = _kimlik_parcasi(kimlik.get("brand"))
+    model = _kimlik_parcasi(kimlik.get("exact_model"))
+    if not marka:
         return ""
+    kimlik_metni = _yer_tutucu_tokenlari_at(f"{marka} {model}")
     yil = datetime.now(ZoneInfo("Europe/Istanbul")).year
     sorgular = [
-        f"\"{marka} {model}\" motor hacmi cc elektrik motor kW hibrit",
-        f"\"{marka} {model}\" Türkiye ÖTV yüzde {yil}",
+        f"{kimlik_metni} motor hacmi cc elektrik motor kW hibrit",
+        f"{kimlik_metni} Türkiye ÖTV yüzde {yil}",
     ]
     bloklar = []
     for sorgu in sorgular:
@@ -249,6 +306,23 @@ def web_arastirma_yap(video_state: Dict[str, Any], log_ekle) -> str:
                 tum_sonuclar[i] = duckduckgo_sorgu(sorgular[i], max_sonuc=4, log_ekle=log_ekle)
     else:
         tum_sonuclar = [duckduckgo_sorgu(q, max_sonuc=4, log_ekle=log_ekle) for q in sorgular]
+
+    # KALİTE: Hâlâ sonuçsuz kalan sorgular bir kez BASİTLEŞTİRİLİP yeniden
+    # denenir. Uzun/terim ağırlıklı sorgu DDGS'de "No results found" dönebildiği
+    # için (01.10.2026: 'Kia Seltos ... Türkiye fiyat satış' → 0 sonuç) aynı
+    # araç için kısa savunma hattı: kimlik + ilk anahtar kelimeler.
+    kimlik = _yer_tutucu_tokenlari_at(" ".join(
+        _kimlik_parcasi((video_state.get("video_identity") or {}).get(alan))
+        for alan in ("brand", "exact_model")
+    ))
+    for i, sonuc in enumerate(tum_sonuclar):
+        if sonuc:
+            continue
+        basit = _basitlestirilmis_sorgu(sorgular[i], kimlik)
+        if not basit or basit == sorgular[i]:
+            continue
+        log_ekle(f"🔁 Sonuçsuz sorgu basitleştirilip tekrar deneniyor: '{basit[:60]}'")
+        tum_sonuclar[i] = duckduckgo_sorgu(basit, max_sonuc=4, log_ekle=log_ekle)
 
     bloklar = []
     for sorgu, sonuclar in zip(sorgular, tum_sonuclar):

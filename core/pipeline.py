@@ -26,6 +26,7 @@ from core.agentic import (
     _object_state_or_empty,
     agentic_icerik_uretimi, kapaklari_yeniden_uret,
 )
+from core.fiyat_kilidi import fiyat_talimati
 from core.web_search import otv_ek_arastirma, web_arastirma_yap
 from core.otv_kilidi import (
     kapaklari_otv_kilidine_cek,
@@ -448,7 +449,12 @@ def _qa_duzeltme_talimati(katman, qa_geri_bildirimi):
 
 def _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
     content = girdi_birlestir(durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('VIDEO', video_state))
-    prompt = caption_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state) + _qa_duzeltme_talimati("CAPTION", qa_geri_bildirimi)
+    prompt = (
+        caption_promptunu_olustur(ton)
+        + vergi_kilidi_talimati(fact_state)
+        + fiyat_talimati(fact_state)
+        + _qa_duzeltme_talimati("CAPTION", qa_geri_bildirimi)
+    )
     result, model = _run_timed(
         log, "Caption + Hashtag (Gemini)",
         lambda: router.metin_uret(content, prompt, CAPTION_SCHEMA, log, arama_kullan=False),
@@ -478,8 +484,15 @@ def _caption_calistir(router, reels_state, fact_state, editorial_state, video_st
 
 
 def _threads_model(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi=""):
+    # vergi_kilidi_talimati zaten content içinde taşınıyor; prompta tekrar
+    # eklenmez (çift talimat). Fiyat kilidi yalnızca doğrulanmış fiyat varsa
+    # prompta eklenir.
     content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), vergi_kilidi_talimati(fact_state))
-    prompt = threads_promptunu_olustur(ton) + _qa_duzeltme_talimati("THREADS", qa_geri_bildirimi)
+    prompt = (
+        threads_promptunu_olustur(ton)
+        + fiyat_talimati(fact_state)
+        + _qa_duzeltme_talimati("THREADS", qa_geri_bildirimi)
+    )
     result, model = _run_timed(
         log, "Threads (Gemini)",
         lambda: router.metin_uret(content, prompt, THREADS_SCHEMA, log, arama_kullan=False),
