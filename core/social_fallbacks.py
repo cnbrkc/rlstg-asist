@@ -5,6 +5,8 @@ artifact kontrolü, model kimliği ve güvenli fallback metinleri tek yerde tan�
 """
 import re
 
+from core.fiyat_kilidi import turkiye_fiyati_metni
+
 # Yasak dosya/konum desenleri: file system yolları ve media uzantıları sosyal metin olarak gönderilemez.
 _ARTIFACT_PREFIXES = ("/tmp/", "/home/runner/", "data/", "./data/", "../")
 _ARTIFACT_EXTENSIONS = (".wav", ".mp3", ".m4a", ".aac", ".mp4", ".mov", ".webm")
@@ -77,13 +79,21 @@ def caption_fallback(fact_state, editorial_state, video_state) -> tuple:
     core = text(editorial.get("core_story"))
     why = text(editorial.get("why_it_matters"))
     fact = first_fact(fact_state)
+    # Doğrulanmış Türkiye fiyatı varsa fallback caption da onu taşır: kullanıcı
+    # "açıklamada fiyatları verelim" notuyla üretim istediğinde fiyat bilgisi
+    # yalnızca model caption'ında değil, güvenli fallback'te de görünmeli.
+    fiyat = turkiye_fiyati_metni(fact_state)
     parts = [
         f"{identity}: videonun ötesinde asıl merak edilen taraf biraz da burada başlıyor.",
+    ]
+    if fiyat:
+        parts.append(f"Türkiye fiyatı: {fiyat}.")
+    parts.extend([
         core or fact or "Videoda öne çıkan detayları Fact Lock sınırları içinde takip ediyoruz.",
         why or fact,
         "Rakamlar ve görünen detaylar bir yana, otomobilde asıl mesele bunların gerçek kullanımda ne ifade ettiği.",
         "Siz olsanız bu noktada hangi detaya daha çok önem verirdiniz?",
-    ]
+    ])
     return "\n\n".join(p for p in parts if p)[:900].rstrip(), list(DEFAULT_HASHTAGS)
 
 
@@ -115,5 +125,9 @@ def threads_fallback(fact_state, editorial_state, video_state) -> str:
     discussion = text(editorial.get("discussion_territory"))
     core = text(editorial.get("core_story"))
     fact = first_fact(fact_state)
-    body = discussion or core or fact or "Bu içerikte asıl mesele, videoda görünen detayın gerçek kullanımda ne ifade ettiği."
-    return limit_threads_text(f"{identity} tarafında bence tartışma tam burada başlıyor: {body}")
+    fiyat = turkiye_fiyati_metni(fact_state)
+    govde = []
+    if fiyat:
+        govde.append(f"Türkiye fiyatı {fiyat}")
+    govde.append(discussion or core or fact or "Bu içerikte asıl mesele, videoda görünen detayın gerçek kullanımda ne ifade ettiği.")
+    return limit_threads_text(f"{identity} tarafında bence tartışma tam burada başlıyor: " + "; ".join(govde))

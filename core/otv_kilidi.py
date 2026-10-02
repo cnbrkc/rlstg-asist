@@ -11,6 +11,8 @@ açıklama / Threads / kapağa aynı geçişle uygulanır.
 """
 import re
 
+from core.fiyat_kilidi import tl_tutari_coz
+
 # 24.07.2025 tarihli 10115 sayılı Cumhurbaşkanı Kararı ile güncellenen
 # 4760 sayılı Kanun (II) sayılı liste, 87.03. 2026 GİB listesi ve sektör
 # tabloları aynı dilimleri taşıyor. Matrah eşikleri değişirse burası güncellenir.
@@ -113,7 +115,7 @@ def _otv_baglami_mi(pencere: str, oran_konumu=None) -> bool:
     penceresinde görmek, MTV/KDV oranını ÖTV sanmaya yetmemelidir.
     """
     w = _fold(pencere)
-    otv_matches = list(re.finditer(r"\botv\b|ozel\s+tuketim", w))
+    otv_matches = list(re.finditer(r"\botv\b|ozel\s+tuketim|matrah", w))
     diger_matches = list(re.finditer(r"\bmtv\b|\bkdv\b|tasitlar\s+vergisi|motorlu\s+tasit", w))
     if not otv_matches:
         if diger_matches:
@@ -248,13 +250,33 @@ def _ayni_bicim(eslesme, oran: int, kaynak: str) -> str:
 
 
 def _aralik_ifadesi(izinli, bicim, buyuk=False) -> str:
+    """ARALIK kilidinin kanonik ifadesi: iki UÇ yeterlidir.
+
+    Eski sürüm izinli dilimlerin HEPSİNİ sayıyordu ("matrah dilimine göre %75
+    veya %80 veya %90 veya %100"). 01.10.2026 logunda bu ifade 20 kelimelik
+    duyuru seslendirmesinin kelime bütçesini tamamen yiyip fiyatı söyletmedi;
+    kullanıcı şikâyetçi oldu ("ÖTV matrahını 70,80,90,100 saymış boyuna").
+    Matrah doğrulanmadığında bandı iki uçla ("%75 ile %100 arasında") vermek
+    hem doğru hem kısadır; QA tek oranı da yasakladığı için tek uç yetmez.
+    """
     izinli = sorted(int(x) for x in izinli)
-    if bicim == "yuzde_kelime":
-        govde = " veya ".join(f"yüzde {sayi_yazi(x)}" for x in izinli)
+    if len(izinli) <= 2:
+        if bicim == "yuzde_kelime":
+            govde = " veya ".join(f"yüzde {sayi_yazi(x)}" for x in izinli)
+        else:
+            govde = " veya ".join(f"%{x}" for x in izinli)
+    elif bicim == "yuzde_kelime":
+        govde = f"yüzde {sayi_yazi(izinli[0])} ile yüzde {sayi_yazi(izinli[-1])} arasında"
     else:
-        govde = " veya ".join(f"%{x}" for x in izinli)
+        govde = f"%{izinli[0]} ile %{izinli[-1]} arasında"
     yeni = f"matrah dilimine göre {govde}"
     return yeni.upper() if buyuk else yeni
+
+
+# Eşleşmenin hemen önündeki "matrah dilimine göre / matraha göre" bağlamı.
+_ON_MATRAH_BAGLAMI = re.compile(r"(?:\s*(?:matrah\w*\s+)?(?:dilimine\s+g[öö]re|g[öö]re))+\s*$", re.I)
+# Eşleşmeler arasında çaprakalıntı bırakan bağlaçlar ("veya", "ya da", ",").
+_ARA_BAGLAC = re.compile(r"\s*(?:veya|ya\s*da|,)\s*", re.I)
 
 
 def metni_otv_kilidine_cek(metin: str, kilit: dict, marka: str = "") -> str:
@@ -286,11 +308,31 @@ def metni_otv_kilidine_cek(metin: str, kilit: dict, marka: str = "") -> str:
         if izinli and bulunan == izinli:
             return metin
         ifade = _aralik_ifadesi(izinli or bulunan, eslesmeler[0].bicim, eslesmeler[0].bicim and metin[eslesmeler[0].bas:eslesmeler[0].son].isupper())
-        yeni = metin
-        for i, e in enumerate(reversed(eslesmeler)):
-            parca = ifade if i == len(eslesmeler) - 1 else ""
-            yeni = yeni[:e.bas] + parca + yeni[e.son:]
-        return re.sub(r"[ \t]{2,}", " ", yeni).strip()
+        # Kanonik ifade "matrah dilimine göre" bağlamını zaten taşır: ilk
+        # eşleşmenin önündeki aynı bağlam ifadesi yeniden yazılmaz (aksi halde
+        # "matrah dilimine göre matrah dilimine göre %75 ..." çift ifadesi
+        # üretiliyordu). Eşleşmeler arasındaki "veya / ya da" bağlaçları da
+        # kanonik ifadenin içinde karşılandığı için çıktıda bırakılmaz.
+        parcalar = []
+        onceki_son = 0
+        for i, e in enumerate(eslesmeler):
+            bas = e.bas
+            if i == 0:
+                on = _ON_MATRAH_BAGLAMI.search(metin[:bas])
+                if on:
+                    bas = on.start()
+            else:
+                if _ARA_BAGLAC.fullmatch(metin[onceki_son:bas]):
+                    bas = onceki_son
+            parcalar.append(metin[onceki_son:bas])
+            govde = ifade if i == 0 else ""
+            if govde and parcalar[-1] and not parcalar[-1][-1].isspace() and metin[bas:e.bas][:1].isspace():
+                # Yutulan bağlam ifadesi kelimeleri birleştirmesin ("ÖTVmatrah").
+                govde = f" {govde}"
+            parcalar.append(govde)
+            onceki_son = e.son
+        parcalar.append(metin[onceki_son:])
+        return re.sub(r"[ \t]{2,}", " ", "".join(parcalar)).strip()
     if durum == "YASAK":
         yeni = metin
         for e in reversed(eslesmeler):
@@ -356,6 +398,33 @@ def _cc_adaylari(metin: str, model_zorunlu: bool, model: str):
             continue
         if 0.6 <= litre <= 7.0:
             yield int(round(litre * 1000))
+
+
+# Araç için AÇIKÇA belirtilmiş matrah ("matrahı 1.000.000 TL"). Tablo eşik
+# değerleri ("matrahı 850.000 TL'ye kadar olanlar") matrah DEĞİLDİR; _esik_mi
+# ve model bağlamı korumasıyla ayıklanır. Satış fiyatı da matrah değildir
+# (matrah vergi tabanıdır) — bu yüzden yalnızca 'matrah' kelimesiyle geçen
+# tutarlar kullanılır.
+_MATRAH_TUTAR = re.compile(
+    r"matrah\w{0,5}\s+(?:\S+\s+){0,2}?(\d[\d.,]*)\s*((?:bin|milyon))?\s*(?:TL|₺|lira)",
+    re.I,
+)
+_MATRAH_ALT = 100_000
+_MATRAH_UST = 20_000_000
+
+
+def _matrah_adaylari(metin: str, model_zorunlu: bool, model: str):
+    ham = str(metin or "")
+    model_kat = _fold(model)
+    for m in _MATRAH_TUTAR.finditer(ham):
+        pencere = ham[max(0, m.start() - 90):m.end() + 60]
+        if _esik_mi(pencere):
+            continue
+        if model_zorunlu and model_kat and model_kat not in _fold(ham[max(0, m.start() - 220):m.end() + 80]):
+            continue
+        deger = tl_tutari_coz(m.group(1), m.group(2) or "")
+        if deger is not None and _MATRAH_ALT <= deger <= _MATRAH_UST:
+            yield deger
 
 
 def _kw_adaylari(metin: str, model_zorunlu: bool, model: str):
@@ -549,15 +618,22 @@ def otv_kilidi_hesapla(fact_state, web_metni="", video_state=None) -> dict:
         list(_kw_adaylari(fact_blob, False, model)) + list(_kw_adaylari(web, True, model)),
         15,
     )
+    # Matrah yalnızca açıkça yazılmışsa kullanılır (tablo eşikleri ve satış
+    # fiyatı matrah sayılmaz). Matrah bilinirse ARALIK tek orana iner.
+    matrah = _ortak_sayi(
+        list(_matrah_adaylari(fact_blob, False, model)) + list(_matrah_adaylari(web, True, model)),
+        80,
+    )
     tip = _tip_bul(fact_blob)
     if tip == "unknown":
         tip = _tip_bul(web if not model else "\n".join(
             c for c in re.split(r"\n+", web) if _fold(model) in _fold(c)
         ))
-    kilit = tablo_orani(tip, cc, kw)
+    kilit = tablo_orani(tip, cc, kw, matrah)
     kilit["tip"] = tip
     kilit["motor_hacmi_cc"] = cc
     kilit["elektrik_motor_kw"] = kw
+    kilit["matrah_tl"] = matrah
     kilit["marka"] = marka
     model_oranlar = _model_ozel_oranlar(web, model)
     if len(model_oranlar) >= 2 and len(set(model_oranlar)) == 1:
@@ -595,8 +671,12 @@ def vergi_kilidi_talimati(fact_state) -> str:
         return (
             f"\n\n🚨 ÖTV KİLİDİ: Bu araçta oran matraha göre {izinli} olabilir; TEK ORAN KİLİTLENMEDİ. "
             f"{kilit.get('gerekce') or ''} Tek bir yüzdeyi kesinmiş gibi yazmak YASAK. "
-            "Ya oranı hiç söyleme ya da matrah dilimine göre değiştiğini, her iki ucu da söyleyerek yaz. "
-            "Seslendirme ile açıklama farklı uç seçemez.\n"
+            "ÖNCELİK: vergi oranını SESLENDİRME ve KAPAK gibi kısa formatlarda HİÇ SÖYLEME; "
+            "uzun açıklamada bile en fazla 'vergi oranı matraha göre değişir' diye geçir. "
+            "Oranı mutlaka kullanman gerekiyorsa matrah dilimine göre değiştiğini, iki ucu da "
+            "söyleyerek yaz; seslendirme ile açıklama farklı uç seçemez. "
+            "Kelime/karakter bütçesini vergi dilimlerine değil, doğrulanmış fiyat ve somut "
+            "teknik verilere ayır.\n"
         )
     return (
         "\n\n🚨 ÖTV KİLİDİ: Bu araç için tek bir ÖTV yüzdesi doğrulanamadı. "
@@ -615,8 +695,12 @@ def _kanonik_fact(kilit) -> dict:
         ).strip()
         durum = "VERIFIED"
     elif kilit.get("durum") == "ARALIK":
-        izinli = " veya ".join(f"%{int(x)}" for x in (kilit.get("izinli") or []))
-        metin = f"Bu araçta ÖTV matraha göre {izinli} olabilir. Tek oran yazmak yasak. {kilit.get('gerekce') or ''}".strip()
+        izinli = [int(x) for x in (kilit.get("izinli") or [])]
+        # Kanondaki ifade de iki uçla sınırlı: Fact Lock'a "%75 veya %80 veya
+        # %90 veya %100" şeklinde tüm dilimleri yazmak, üretim ajanlarını
+        # bracket saymaya teşvik ediyordu (01.10.2026).
+        ifade = _aralik_ifadesi(izinli, "yuzde_isareti_son") if izinli else "matraha göre değişir"
+        metin = f"Bu araçta ÖTV {ifade} olabilir. Tek oran yazmak yasak. {kilit.get('gerekce') or ''}".strip()
         durum = "VERIFIED"
     else:
         metin = "Bu araç için tek bir ÖTV yüzdesi doğrulanamadı. Vergi yüzdesi yazmak yasak."
