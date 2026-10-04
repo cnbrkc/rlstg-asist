@@ -1149,6 +1149,13 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
                 threads_state, model_threads = onceki_threads
             threads_state = _threads_state_normalize(threads_state)
 
+    # Son turda yeniden üretilen sosyal metinler kilit geçişinden kaçmasın:
+    # döngü başında uygulanan kilit, sonrasında üretilen caption/threads için
+    # tekrarlanır (işlem idempotenttir).
+    caption_state, threads_state = _otv_sosyal_kilitle(
+        reels_state, caption_state, threads_state, fact_state, log,
+    )
+
     # Yenileme bitti ama QA yalnızca videoyu DEĞİŞTİRMEYEN katmanları işaretledi
     # (caption / threads / kapak metni) ya da yalnız DUO scriptini işaretledi ve
     # elde geçerli bir TTS varsa render boğulmaz; sorunlar raporda uyarı olarak

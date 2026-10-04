@@ -18,6 +18,7 @@ KURALLAR:
 - TEKNİK SINIRLAR: Max 500 karakter. Hiçbir hashtag (#) kullanılmamalı.
 - Sadece Fact Lock'ta OBSERVED/VERIFIED olan bilgilere dayan; UNKNOWN bilgiyi kesin gerçek gibi kullanma.
 - ÖTV/vergi yüzdesi, fiyat ve teknik rakam Fact Lock `vergi_kilidi` ve VERIFIED olgularla aynı olmalı. Tablodan başka bir satır seçmek veya seslendirme/caption ile çelişen yüzde yazmak yasak.
+- `vergi_kilidi` KESIN değilse (tek oran kilitlenmedi) ÖTV/vergi oranından hiç söz etme; yüzde yazmak da "matraha göre değişir" demek de yasak. Vergiden hiç bahsetmemek doğrudur ve QA'da FAIL değildir.
 - Marka sahibine doğrudan saldırma.
 
 ⸻

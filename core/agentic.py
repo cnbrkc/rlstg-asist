@@ -213,9 +213,18 @@ def _kelime_sayisi(metin):
 
 
 def _senaryo_metni(script_state):
-    """Senaryonun seslendirilecek tamamı: tüm segment metinleri + kapanış sorusu."""
-    segments = [seg for seg in ((script_state or {}).get("segments") or []) if isinstance(seg, dict)]
-    metin = " ".join(str(seg.get("text", "") or "").strip() for seg in segments)
+    """Senaryonun seslendirilecek tamamı: tüm segment metinleri + kapanış sorusu.
+
+    ÖTV kilidi bir segmenti tamamen boşaltabilir (doğrulanmamış vergi cümlesi
+    silinir); boş segmentler birleştirmeye alınmaz ki metin ve kelime ölçüsü
+    çift boşluk taşımasın.
+    """
+    segments = [
+        str(seg.get("text", "") or "").strip()
+        for seg in ((script_state or {}).get("segments") or [])
+        if isinstance(seg, dict)
+    ]
+    metin = " ".join(s for s in segments if s)
     soru = str((script_state or {}).get("yorum_tetikleyici_soru") or "").strip()
     return f"{metin} {soru}".strip()
 
