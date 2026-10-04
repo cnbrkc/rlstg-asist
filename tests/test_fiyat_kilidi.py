@@ -8,9 +8,9 @@ açıklama kelime bütçesini "matrah dilimine göre %75 veya %80 veya %90 veya
 %100" bracket'larına harcadı — fiyat hiç söylenmedi.
 
 Bu testler: (1) fiyat varsa talimat üretilir ve TL dışı/olumsuz metinler
-fiyat sayılmaz, (2) ÖTV ARALIK kanonik ifadesi iki uçla sınırlıdır ve fiyat
-cümlesini ezmez, (3) uçtan uca akışta fiyat hem Fact Lock'a hem seslendirme
-kilidine ulaşır.
+fiyat sayılmaz, (2) ÖTV ARALIK kilidinde vergi geçişi tamamen çıkarılır ve
+fiyat cümlesi korunur, (3) uçtan uca akışta fiyat hem Fact Lock'a hem
+seslendirme kilidine ulaşır.
 """
 import os
 import sys
@@ -23,7 +23,7 @@ os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
 import core.web_search as web_search
 from core.fiyat_kilidi import fiyat_talimati, metindeki_tl_tutarlar, turkiye_fiyati_metni
-from core.otv_kilidi import metni_otv_kilidine_cek, otv_kilidi_hesapla, senaryoyu_otv_kilidine_cek
+from core.otv_kilidi import metindeki_otv_oranlari, metni_otv_kilidine_cek, otv_kilidi_hesapla, senaryoyu_otv_kilidine_cek
 from core.pipeline import _research_calistir
 
 
@@ -119,27 +119,35 @@ class FiyatMetniTests(unittest.TestCase):
 
 
 class OtvAralikFiyatTests(unittest.TestCase):
-    """ARALIK kilidi fiyat cümlesini ezmez ve bracket'ları saydırmaz."""
+    """ARALIK kilidi: tek oran kilitlenmediği için vergi geçişi metinden ÇIKARILIR.
+
+    04.10.2026 geri bildirimi: "Net ÖTV ve matrah yoksa bundan bahsetmek zorunda
+    değiliz." Eski davranış kanonik "%75 ile %100 arasında" ifadesini yazıyor,
+    ikinci uygulamada "arasında ile arasında" ikilemesiyle açıklamayı bozuyordu.
+    """
 
     def setUp(self):
         self.kilit = {"durum": "ARALIK", "izinli": [75, 80, 90, 100], "marka": "Kia"}
 
-    def test_kanonik_ifade_iki_ucla_sinirli(self):
+    def test_aralikta_vergi_gecisi_tamamen_silinir(self):
         metin = metni_otv_kilidine_cek("ÖTV matrah dilimine göre yüzde 75 veya yüzde 100 olabilir.", self.kilit)
-        self.assertIn("%75 ile %100 arasında", metin)
+        self.assertEqual([], metindeki_otv_oranlari(metin))
+        self.assertNotIn("%75", metin)
         self.assertNotIn("%80", metin)
         self.assertNotIn("%90", metin)
-        self.assertNotIn("matrah dilimine göre matrah", metin)
+        self.assertNotIn("%100", metin)
+        self.assertNotIn("matrah", metin.casefold())
 
-    def test_tek_yanlis_oran_iki_uca_cekiliyor(self):
+    def test_tek_yanlis_oran_metinden_cikarilir(self):
         metin = metni_otv_kilidine_cek("Bu araçta ÖTV %75 uygulanıyor.", self.kilit)
-        self.assertEqual([75, 100], __import__("core.otv_kilidi", fromlist=["x"]).metindeki_otv_oranlari(metin))
+        self.assertEqual([], metindeki_otv_oranlari(metin))
+        self.assertNotIn("ÖTV", metin)
 
     def test_fiyat_cumlesi_kilitten_etkilenmez(self):
         metin = metni_otv_kilidine_cek("Fiyatı 1.325.000 TL'den başlıyor.", self.kilit)
         self.assertEqual("Fiyatı 1.325.000 TL'den başlıyor.", metin)
 
-    def test_seslendirme_kilitle_fiyati_korur(self):
+    def test_seslendirme_kilitle_fiyati_korur_vergiyi_atmaz(self):
         script = {
             "segments": [{"speaker": "female", "tts_tag": "", "text": (
                 "Kia Seltos Türkiye'ye geldi. Fiyatı 1.325.000 TL'den başlıyor. "
@@ -150,8 +158,24 @@ class OtvAralikFiyatTests(unittest.TestCase):
         yeni = senaryoyu_otv_kilidine_cek(script, {"vergi_kilidi": self.kilit}, lambda *_: None)
         metin = yeni["segments"][0]["text"]
         self.assertIn("1.325.000 TL", metin)
-        self.assertIn("%75 ile %100 arasında", metin)
-        self.assertNotIn("matrah dilimine göre matrah", metin)
+        self.assertEqual([], metindeki_otv_oranlari(metin))
+        self.assertNotIn("matrah", metin.casefold())
+
+    def test_kilitleme_idempotent_ve_ikileme_uretmez(self):
+        """Aynı metne ikinci kez uygulanmak çıktıyı değiştirmemeli (04.10.2026:
+        'matrah dilimine göre %75 ile %100 arasında ile arasında' hatası)."""
+        metin = "Kia Seltos geldi. ÖTV matrah dilimine göre %75 ile %100 arasında değişiyor. Fiyat 1.325.000 TL."
+        ilk = metni_otv_kilidine_cek(metin, self.kilit)
+        ikinci = metni_otv_kilidine_cek(ilk, self.kilit)
+        self.assertEqual(ilk, ikinci)
+        self.assertNotIn("arasında ile arasında", ikinci)
+        self.assertIn("1.325.000 TL", ikinci)
+
+    def test_aralik_kanonik_fact_tek_oran_yazmaz(self):
+        from core.otv_kilidi import _kanonik_fact
+        fact = _kanonik_fact(self.kilit)
+        self.assertEqual("UNKNOWN", fact["status"])
+        self.assertEqual([], metindeki_otv_oranlari(fact["fact"]))
 
 
 class MatrahKilidiTests(unittest.TestCase):

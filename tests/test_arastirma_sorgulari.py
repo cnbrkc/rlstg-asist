@@ -93,23 +93,25 @@ class BasitlestirilmisYenidenDenemeTests(unittest.TestCase):
     def test_sonucsuz_uzun_sorgu_kisaltilip_tekrar_denenir(self):
         state = _video_state()
         cagri = {}
+        uzun = "Kia Seltos kullanıcı şikayet sorun gizli kusur"
 
         def fake_sorgu(sorgu, max_sonuc=4, log_ekle=None, hata_bildir=None):
             cagri[sorgu] = cagri.get(sorgu, 0) + 1
             # Uzun/terim ağırlıklı sorgu sonuçsuz; kısaltılmış hâli veri getirir.
-            if sorgu.endswith("elektrik motor gücü kW"):
+            if sorgu == uzun:
                 return []
-            if sorgu == "Kia Seltos motor silindir hacmi cc":
-                return [{"baslik": "Kia Seltos 1.6", "icerik": "Motor hacmi 1599 cc.", "kaynak": "u"}]
+            if sorgu == "Kia Seltos kullanıcı şikayet sorun gizli":
+                return [{"baslik": "Kia Seltos şikayet", "icerik": "Kullanıcılar 1599 cc motoru eleştiriyor.", "kaynak": "u"}]
             return [{"baslik": "x", "icerik": "y", "kaynak": ""}]
 
         logs = []
         with patch.object(web_search, "duckduckgo_sorgu", side_effect=fake_sorgu), \
              patch.dict(os.environ, {"WEB_SEARCH_PARALLEL": "1"}):
             metin = web_search.web_arastirma_yap(state, logs.append)
+        self.assertIn(uzun, web_search.arastirma_sorgulari_olustur(state))
         self.assertIn("1599 cc", metin)
         self.assertTrue(any("basitleştirilip tekrar deneniyor" in l for l in logs))
-        self.assertEqual(cagri.get("Kia Seltos motor silindir hacmi cc"), 1)
+        self.assertEqual(cagri.get("Kia Seltos kullanıcı şikayet sorun gizli"), 1)
 
     def test_ayni_kalan_sorgu_tekrar_denenmez(self):
         """Kısaltma sorguyu değiştirmiyorsa (zaten kısa sorgu) ikinci deneme yok."""
