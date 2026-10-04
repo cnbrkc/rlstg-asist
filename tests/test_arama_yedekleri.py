@@ -259,11 +259,6 @@ class KatmanSirasiTests(unittest.TestCase):
         self.assertTrue(any(k[2].get("backend") for k in DDGS.cagrilar))
 
     def test_haber_rotasyonu_devreye_girer(self):
-        def sonuc(sorgu, kwargs):
-            return []
-
-        DDGS = _sahte_ddgs(sonuc)
-
         class _HaberDDGS(_SahteDDGS):
             def text(self, sorgu, **kwargs):
                 return []
