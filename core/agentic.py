@@ -233,7 +233,8 @@ def _segment_butcesi_olustur(hedef, minimum, maksimum, mod):
     """Modelin 'kısaca özetle' refleksini kıran somut yapısal bütçe — CÜMLE TABANLI.
     Kelime hedefini tek tek saymak flash serisinin yapamadığı iştir; cümle
     sayabildiği için hedef kelime → cümle hedefine çevrilir (TAM N cümle +
-    cümle başına kelime aralığı). Replik sayısı cümle sayısından türetilir.
+    cümle başına kelime aralığı). DUO tur sayısı bu bütçeden türetilmez;
+    konuşmacı düşüncesini tamamladığında söz değişir.
     Nihai ölçü kod tarafındaki deterministik kelime kontrolüdür (değişmez)."""
     try:
         hedef = int(hedef or 0)
@@ -250,18 +251,31 @@ def _segment_butcesi_olustur(hedef, minimum, maksimum, mod):
     cumle_max = max(hedef_cumle, round(maksimum / CUMLE_KELIME_MIN))
     replik_min = max(4, -(-hedef_cumle // 2))
     replik_max = max(replik_min + 1, hedef_cumle)
-    sonu = " DUO modunda iki konuşmacının cümleleri BİRLİKTE bu bütçeyi oluşturur." if mod == "DUO" else ""
+    if mod == "DUO":
+        tur_butcesi = (
+            "DUO SÖZ ALMA: Tur sayısı için alt/üst kota YOK; bir segment, aynı konuşmacının kesintisiz söz aldığı düşünce bloğudur. "
+            "Bir tur 3-5 cümle veya düşünce gerektiriyorsa daha uzun olabilir; tek cümlelik cevap da doğaldır. "
+            "Sırf cümle bitti diye konuşmacıyı değiştirme veya aynı kişinin sözünü ayrı segmentlere parçalama. "
+            "Örneğin biri 3 cümlede derdini açar, diğeri o derdi 5 cümlede ele alır; bu bir örnek, tekrar edilecek 3/5 şablonu DEĞİL. "
+            "Söz, düşünce tamamlandığında ya da anlamlı bir itiraz/katkı geldiğinde değişsin; 1/1 veya 1/2/1 mekanik salınımına DİZME. "
+            "Kısa tepki yalnız gerçekten gerekiyorsa gelsin; tepki kotası YOK, tepkiyi mümkünse aynı kişinin devam eden cevabına kat. "
+            "İki konuşmacının cümleleri BİRLİKTE toplam süre/kelime bütçesini oluşturur; uzun tur toplam bütçeye ek süre değildir. "
+        )
+    else:
+        tur_butcesi = (
+            f"Replikleri {replik_min}-{replik_max} tura böl; her tur 1-3 cümle — kısa tepki replikleri tek başına bir turdur ve her tur yeni bilgi, kanıt veya tepki taşımalı. "
+            "Tur sahibi değişken olsun: bazen aynı konuşmacı 2-3 tur üst üste devam eder, bazen turlar 1-2 kelimelik hızlı tepkilerle el değiştirir; "
+            "cümleleri kadın-erkek-kadın-erkek mekanik salınımına DİZME. "
+        )
     return (
         f"🔢 SÜRE BÜTÇESİ (CÜMLE TABANLI): Seslendirme metnini TAM {hedef_cumle} CÜMLE yaz; kabul aralığı {cumle_min}-{cumle_max} cümle. "
         f"Cümleler ORTALAMA {CUMLE_KELIME_MIN}-{CUMLE_KELIME_MAX} kelimelik sohbet cümleleri olsun; 18+ kelimelik cümle YASAK. "
-        f"RİTİM ÇEŞİTLİLİĞİ ZORUNLU: aralara 1-5 kelimelik KISA TEPKİ cümleleri serpiştir ('Oha!', 'Yok artık!', 'Hah, iyiymiş!', 'Bir saniye ya!') — "
+        "RİTİM ÇEŞİTLİLİĞİ: Gerektiğinde 1-5 kelimelik KISA TEPKİ cümleleri kullan ('Oha!', 'Yok artık!', 'Hah, iyiymiş!', 'Bir saniye ya!') — "
         f"bunlar ritmi kıran gerçek konuşma tepkileridir, boşluk değildir; her cümleyi {CUMLE_KELIME_MIN}-{CUMLE_KELIME_MAX} kelimeye doldurma. "
-        f"Yalnız kelime doldurmak için yazılmış, anlam taşımayan 'Evet.', 'Doğru.', 'Yani.' doldurmaları YASAK; "
-        f"'Evet ama...' gibi tepki + karşı argüman taşıyan turlar SERBEST. "
-        f"Cümleleri TEK TEK SAY (1, 2, 3, ...): hedefe ulaşmadan bitirmek YASAK. "
-        f"Replikleri {replik_min}-{replik_max} tura böl; her tur 1-3 cümle — kısa tepki replikleri tek başına bir turdur ve her tur yeni bilgi, kanıt veya tepki taşımalı. "
-        f"Tur sahibi değişken olsun: bazen aynı konuşmacı 2-3 tur üst üste devam eder, bazen turlar 1-2 kelimelik hızlı tepkilerle el değiştirir; "
-        f"cümleleri kadın-erkek-kadın-erkek mekanik salınımına DİZME.{sonu} "
+        "Yalnız kelime doldurmak için yazılmış, anlam taşımayan 'Evet.', 'Doğru.', 'Yani.' doldurmaları YASAK; "
+        "'Evet ama...' gibi tepki + karşı argüman taşıyan turlar SERBEST. "
+        "Cümleleri TEK TEK SAY (1, 2, 3, ...): hedefe ulaşmadan bitirmek YASAK. "
+        f"{tur_butcesi}"
         "Kelime hedefi bu bütçeden doğar: cümle sayısını yakalarsan kelime aralığına zaten yaklaşırsın."
     )
 
@@ -554,17 +568,29 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
     if mod == "DUO":
         karakter_bilgisi = "Karakterler: Autonoe (şüpheci, zeki kadın), Charon (iddialı, kanıtlayan erkek). İki kişilik doğal muhabbet."
         diyalog_kurallari = (
-            "DUO DİYALOG OMURGASI: HOOK → FRICTION → PROOF → REVERSAL → PAYOFF/CALLBACK kur; ilk iki tur mümkünse farklı konuşmacılardan gelsin.\n"
-            "LEXİCAL UPTAKE: 2. turdan itibaren repliklerin çoğu önceki replikteki somut bir iddia, rakam veya kelimeyi yakalasın.\n"
-            "ATIŞMA VE KIŞKIRTMA: Bu bir sunum değil, karşılıklı atışma. Karakterler birbirinin sözünü hafif iğneleme, alay ve ukala dokundurmalarla geri çevirsin; "
-            "arada seyirciyi kışkırtan, ikiye bölen iddialı cümleler kurulsun (\"Bu paraya bunu alana kim 'dur' diyecek?\"). "
-            "Karakterler metni sırayla okuyormuş gibi değil, gerçekten muhabbet edip kendi istediklerini söylüyor gibi dursun.\n"
-            "KONUŞMA TEPKİLERİ (can damarı): Şaşkınlık, onay, itiraz, gülme, 'Bir saniye ya!', 'Yok artık!', 'Hah!' gibi kısa tepki replikleri senaryonun "
-            "can damarıdır; bunları YASAKLAMA, SERBEST BIRAK ve kullan. Tepki repliklerine de uygun tts_tag ver.\n"
-            "ASİMETRİK RİTİM: Replik uzunlukları eşit olmasın; bazen aynı konuşmacı 2-3 replik üst üste konuşsun, bazen turlar 1-2 kelimelik hızlı tepkilerle el değiştirsin. "
-            "Mekanik kadın-erkek-kadın salınımı, röportaj tipi soru-cevap ve aynı fikrin tekrarı YASAK.\n"
-            "TTS ETİKETİ: YAZDIĞIN her repliğe uygun bir duygu/tepki etiketi ver (tts_tag; boş bırakma) ve etiketleri tekdüze yapma: "
-            "[şaşırarak], [gülerek], [alaycı], [kızgin], [vurgulu], [meraklı], [heyecanlı] gibi etiketleri dönüşümlü kullan.\n"
+            "DUO DİYALOG OMURGASI: HOOK → FRICTION → PROOF → REVERSAL → PAYOFF/CALLBACK bir hikâye akışıdır, her adımda ses değiştirme komutu DEĞİL.\n"
+            "DÜŞÜNCE BLOKLARI: Bir segment aynı kişinin kesintisiz söz aldığı bütündür. Tur/cümle kotası YOK. "
+            "Biri fikrini, gerekçesini ve sonucunu 3-5 cümlede veya gerekirse daha uzun anlatabilsin; diğeri onu dinleyip aynı somut meseleye kendi gerekçesiyle cevap versin. "
+            "Sırf cümle bitti diye söz değiştirme; aynı kişinin devam eden sözünü yapay biçimde 2-3 replik üst üste parçalama.\n"
+            "LEXİCAL UPTAKE: Cevap önceki sözün iddiasını, kaygısını veya sonucunu gerçekten ele alsın. "
+            "Aynı kelimeyi tekrar edip yeni konuya geçmek cevap değildir. Karşı tarafın sözünü çıkardığında cevap hiç değişmeden çalışıyorsa yeniden yaz. "
+            "Bir kişi örneğin kullanım derdini açsın; diğeri o derdin neden önemli olduğunu tartışıp doğrulanmış kanıtla yanıtlasın. "
+            "Uzun turlar birbirinden kopuk iki monoloğa dönüşmesin.\n"
+            "ATIŞMA VE KIŞKIRTMA: Karşılıklı atışma ve seyirciyi kışkırtan görüşler konuya uygunsa gelsin; her turda itiraz, alay veya espri ZORUNLU DEĞİL. "
+            "Katılmak, bir noktayı kabul edip derinleştirmek, düşünerek fikrini değiştirmek de gerçek diyalogdur. "
+            "Karakterler metni sırayla okumak yerine kendi istediklerini söylüyor ve birbirini dinliyor gibi dursun. "
+            "Şüpheci kadın/kanıtlayan erkek rolleri sabit görev paylaşımı DEĞİL; iki kişi de bilgi verebilir, şüphe duyabilir ve ikna olabilir.\n"
+            "KONUŞMA TEPKİLERİ: Kısa tepki repliklerini SERBEST BIRAK ama kota koyma. 'Bir saniye ya!' veya 'Hah!' tek başına doğallık sağlamaz. "
+            "Tepkiyi mümkünse aynı kişinin gerekçeli cevabıyla aynı segmentte sürdür; her uzun açıklamayı ünlemle bölme.\n"
+            "ASİMETRİK RİTİM: Bazen biri 3 cümle anlatır, diğeri 5 cümleyle karşılık verir; bazen kısa bir cevap yeter. "
+            "Bu sayılar örnektir; yeni bir 3/5 rutini kurma, kısa videoda uzun tur zorlaması yapma. "
+            "Mekanik kadın-erkek-kadın salınımı kadar sürekli 1/2/1 cümle paslaşması da YASAK; doğal olarak dönüşümlü konuşmak tek başına sorun değildir. "
+            "Yeterli süre varsa esas akışı gelişmiş anlatım ve gerekçeli cevap bloklarıyla kur; tamamını kısa paslaşmalardan oluşturma. "
+            "Söz değişimini düşüncenin tamamlanması ve anlamlı katkı belirlesin, cümle sayacı değil. "
+            "İçerik tonu bilgi/yorum dağılımını belirler, ses değiştirme sırasını DEĞİL; yorum da aynı konuşmacının bloğunda kalabilir.\n"
+            "TTS ETİKETİ: Her düşünce bloğuna anlamına uygun tts_tag ver (boş bırakma). "
+            "Duygu sürüyorsa aynı etiket sürebilir; sırf çeşitlilik için etiket döndürme veya bloğu parçalama. "
+            "[meraklı], [savunarak], [vurgulu], [şaşırarak], [gülerek] gibi etiketler performans içindir, metin değildir.\n"
             "Kapanışta açılıştaki kelime/fikre callback yap; iki bağımsız monolog veya şarkıcı düeti hissi olmasın."
         )
     elif mod == "SOLO_FEMALE":
@@ -599,7 +625,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             "KURALLAR:\n"
             "1) MEVCUT REPLİKLERİ SİLME, KISAALTMA, ÖZETLEME VEYA DÜZELTME: çıktıdaki segments listesi önceki replikleri BİREBİR (aynı kelimeler, aynı sıra) içermek ZORUNDA; birini bile değiştirdiysen çıktı otomatik REDDEDİLİR.\n"
             "2) YENİ replikleri mevcut segmentlerin SONUNA ekle; TTS etiketini YALNIZCA tts_tag alanına yaz ([vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek], [meraklı], [heyecanlı]), text alanına veya cümlenin içine ASLA yazma. "
-            "Yeni repliklerin HER BİRİNE uygun bir tts_tag yaz (boş bırakma, etiketleri tekdüze yapma). Doğru speaker ver; yeni repliklere kısa tepki girişiyle başlamak (\"Hah, peki şuna bakın...\") SERBESTTİR ve doğaldır.\n"
+            "Yeni repliklerin HER BİRİNE anlamına uygun bir tts_tag yaz (boş bırakma, sırf çeşitlilik için etiket döndürme). Doğru speaker ver; yeni repliklere kısa tepki girişiyle başlamak (\"Hah, peki şuna bakın...\") SERBESTTİR ve doğaldır.\n"
             "3) Yeni replikler SADECE girdideki HOOK / DETECTIVE / FACT LOCK (yalnız OBSERVED-VERIFIED) / EDITORIAL verilerinden beslensin: yeni rakam, karşılaştırma, Türkiye maliyeti, kronik şikayet, gerçek kullanım senaryosu getir. "
             "Aynı fikri farklı cümlelerle yeniden anlatmak MÜKERRETTİR ve çıktı otomatik REDDEDİLİR.\n"
             "4) Kapanış sorusu REPLİK DEĞİLDİR: yorum_tetikleyici_soru alanını AYNEN koru ve segments'e soru cümlesi ekleme — sistem soruyu seslendirmenin EN SONUNA otomatik ekler. "
@@ -614,7 +640,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             "Kanca ve Dedektif verilerini kullanarak doğal bir anlatım yaz.\n"
             f"{diyalog_kurallari}\n"
             "TTS ETİKETLERİ: Duygu/vurgu bilgisini YALNIZCA tts_tag alanına yaz. Örnek: [vurgulu], [alaycı], [savunarak], [şaşırarak], [gülerek], [meraklı], [heyecanlı], [kızgin], [fısıldayarak], [duraksayarak]. "
-            "Her repliğe uygun bir etiket yaz, boş bırakma; etiketleri tekdüze yapma — arka arkaya aynı etiketi kullanma. "
+            "Her repliğe anlamına uygun bir etiket yaz, boş bırakma; duygu sürüyorsa aynı etiket sürebilir, sırf çeşitlilik için değiştirme. "
             "Bu etiketler seslendirme talimatıdır; TTS onları kelime olarak OKUMAZ, prosodiye çevirir. "
             "text alanına, cümle başına veya cümlenin içine etiket, parantez içi sahne yönergesi veya 'vurgulu/alaycı/savunarak' kelimesini yönerge diye YAZMA. "
             "text'te yalnız izleyicinin duyması gereken kelimeler olsun.\n"
@@ -654,7 +680,11 @@ def _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=""
         "Sen trol, şüpheci ve zor beğenen bir Türk izleyicisisin. Bu senaryoyu oku.\n"
         "Robotik mi? Sıkıcı mı? Sonundaki soru yorum yaptıracak kadar kışkırtıcı mı?\n"
         "Karakterler metni sırayla okuyormuş gibi mi (cümleler tek tek, kadın-erkek-kadın mekanik salınımında), yoksa gerçekten atışıp kendi istediklerini söylüyorlar gibi mi? "
-        "Kısa tepki replikleri (şaşkınlık, gülme, itiraz) ve doğal konuşma tepkileri var mı, yoksa her replik aynı düz tonda mı?\n"
+        "İki konuşmacı varsa: Her biri düşüncesini tamamlayabiliyor mu, yoksa 1/1 ya da 1/2/1 cümle paslaşmasına mı sıkışmış? "
+        "3-5 cümlelik veya daha uzun, anlamlı bir söz alma kusur değildir; kısa videoda uzun tur zorunlu değildir. "
+        "Cevap gerçekten önceki kişinin kaygısına/iddiasına gerekçeli karşılık mı, yoksa kelime tekrarından sonra bağımsız anlatım mı? "
+        "Kısa tepki replikleri, atışma, eşit konuşma payı veya sürekli etiket değişimi zorunlu DEĞİL; eksiklikleri tek başına red gerekçesi değildir. "
+        "Aynı konuşmacının ardışık segmentlerini tek söz alma olarak değerlendir; JSON'u bölerek sahte ritim yaratmayı önerme.\n"
         "Eğer 10 üzerinden 7 veya üzeriyse approved: true yap.\n"
         "Değilse approved: false yap ve SADECE NET BİR REVİZE TALİMATI (feedback) ver. Uzatma."
     )

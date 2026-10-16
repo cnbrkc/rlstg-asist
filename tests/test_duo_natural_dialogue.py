@@ -1,19 +1,9 @@
-"""DUO diyalog doğallığı regresyon testleri (Eylül 2026 monotonluk düzeltmesi).
+"""DUO doğallık regresyonları: cümle paslaşması değil, tamamlanan düşünceler.
 
-Kullanıcı şikâyeti: seslendirme "1 cümle erkek 1 cümle kadın" mekanik salınımına
-dönmüş; karakterler metni sırayla okuyormuş gibi, konuşma tepkileri kaybolmuş,
-teslimat çok monoton.
-
-Kök nedenler ve kilitleyen kontroller:
-1. Cümle bütçesi her cümleyi 9-13 kelimeye zorlayıp 'Evet', 'Doğru' gibi kısa
-   tepki cümlelerini yasaklayarak ritmi tek düzeliğe itiyordu → artık kısa tepki
-   cümleleri serbest/istenen, mekanik salınım açıkça yasak.
-2. DUO diyalog kurallarında istenen pozitif desen (atışma, seyirciyi kışkırtma,
-   bazen aynı konuşmacının 2-3 tur üst üste konuşması, tepki replikleri) yoktu.
-3. tts_tag boş bırakılabiliyor → etiketsiz segment teslimat notuna girmiyor,
-   TTS'e sıfır prosodi gidiyordu → her repliğe etiket zorunlu.
-4. Multi-speaker TTS yönetmen notları sesli tepkileri tamamen bastırıyordu.
-5. QA duo_check monoton ritmi FAIL saymıyordu.
+Toplam süre/kelime sözleşmesi korunur; DUO'da tur sayısı ve 1-3 cümle sınırı
+kaldırılır. Kısa tepkiler serbesttir ama zorunlu değildir. Yazar, uzatma,
+eleştirmen, QA ve TTS aynı anlam-odaklı söz alma yaklaşımını kullanmalıdır.
+Bu testler prompt sözleşmesini sınar; canlı modelin doğallığını ölçmez.
 """
 import os
 import sys
@@ -23,7 +13,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("GEMINI_API_KEY", "test-only")
 
-from core.agentic import _script_writer_calistir, _segment_butcesi_olustur
+from core.agentic import (
+    _critic_calistir,
+    _script_writer_calistir,
+    _segment_butcesi_olustur,
+)
 from core.prompts import qa_promptunu_olustur
 from core.router import SmartRouter
 from core.tts_delivery import replik_tts_hazirla, teslimat_blogu
@@ -53,7 +47,7 @@ def _bos_script():
 
 
 class CumleButcesiRitimTestleri(unittest.TestCase):
-    """Bütçe kısa tepki cümlelerine izin vermeli, mekanik salınımı yasaklamalı."""
+    """Toplam bütçe korunmalı ama söz alma cümle sayısıyla sınırlandırılmamalı."""
 
     def setUp(self):
         self.butce = _segment_butcesi_olustur(350, 315, 385, "DUO")
@@ -79,9 +73,22 @@ class CumleButcesiRitimTestleri(unittest.TestCase):
     def test_mekanik_salinim_yasak(self):
         self.assertIn("mekanik salınımına DİZME", self.butce)
 
-    def test_ust_uste_konusma_ozgurlugu(self):
-        self.assertIn("2-3 tur üst üste", self.butce)
-        self.assertIn("1-3 cümle", self.butce)
+    def test_uzun_dusunce_bloklari_ve_kotasiz_tur(self):
+        self.assertIn("Tur sayısı için alt/üst kota YOK", self.butce)
+        self.assertIn("3-5 cümle", self.butce)
+        self.assertIn("daha uzun olabilir", self.butce)
+        self.assertIn("tepki kotası YOK", self.butce)
+        self.assertNotIn("her tur 1-3 cümle", self.butce)
+        self.assertNotIn("16-32 tura böl", self.butce)
+
+    def test_kisa_ve_uzun_videoda_tur_kotasi_yok(self):
+        for hedef in (35, 90, 175, 350, 700):
+            with self.subTest(hedef=hedef):
+                butce = _segment_butcesi_olustur(hedef, hedef * .9, hedef * 1.1, "DUO")
+                self.assertNotIn("tura böl", butce)
+                self.assertNotIn("her tur 1-3", butce)
+                self.assertIn("toplam süre/kelime bütçesini", butce)
+                self.assertIn("3/5 şablonu DEĞİL", butce)
 
     def test_kisa_tepki_cumlesi_hedefi_degistirmez(self):
         """350 kelime hedefi için cümle hedefi değişmemeli (test sözleşmesi)."""
@@ -90,7 +97,7 @@ class CumleButcesiRitimTestleri(unittest.TestCase):
 
 
 class DuoDiyalogPromptTestleri(unittest.TestCase):
-    """Script Writer DUO promptu atışma/kışkırtma/tepki desenini istemeli."""
+    """Script Writer, kısa paslaşma yerine birbirine bağlı düşünceler istemeli."""
 
     def setUp(self):
         router = _Router(_bos_script())
@@ -104,19 +111,53 @@ class DuoDiyalogPromptTestleri(unittest.TestCase):
 
     def test_atisma_ve_kiskirtma_isteniyor(self):
         self.assertIn("ATIŞMA VE KIŞKIRTMA", self.prompt)
-        self.assertIn("karşılıklı atışma", self.prompt)
+        self.assertIn("Karşılıklı atışma", self.prompt)
         self.assertIn("seyirciyi kışkırtan", self.prompt)
         self.assertIn("kendi istediklerini söylüyor", self.prompt)
 
-    def test_konusma_tepkileri_can_damari(self):
+    def test_tepkiler_serbest_ama_zorunlu_degil(self):
         self.assertIn("KONUŞMA TEPKİLERİ", self.prompt)
-        self.assertIn("can damarı", self.prompt)
-        self.assertIn("SERBEST BIRAK", self.prompt)
+        self.assertIn("SERBEST BIRAK ama kota koyma", self.prompt)
+        self.assertIn("aynı segmentte sürdür", self.prompt)
+        self.assertNotIn("can damarıdır", self.prompt)
 
-    def test_ust_uste_konusma_ve_asimetri(self):
-        self.assertIn("2-3 replik üst üste", self.prompt)
+    def test_dusunce_bloklari_ve_asimetri(self):
+        self.assertIn("DÜŞÜNCE BLOKLARI", self.prompt)
+        self.assertIn("Tur/cümle kotası YOK", self.prompt)
         self.assertIn("ASİMETRİK RİTİM", self.prompt)
         self.assertIn("Mekanik kadın-erkek-kadın salınımı", self.prompt)
+        self.assertIn("yeni bir 3/5 rutini kurma", self.prompt)
+        self.assertNotIn("ilk iki tur mümkünse farklı", self.prompt)
+        self.assertNotIn("her tur 1-3 cümle", self.prompt)
+
+    def test_cevap_anlamsal_olarak_onceki_soze_bagli(self):
+        self.assertIn("iddiasını, kaygısını veya sonucunu", self.prompt)
+        self.assertIn("cevap hiç değişmeden çalışıyorsa yeniden yaz", self.prompt)
+        self.assertIn("iki monoloğa dönüşmesin", self.prompt)
+        self.assertIn("iki kişi de bilgi verebilir", self.prompt)
+
+    def test_duygu_degisimi_kotasi_yok(self):
+        self.assertIn("aynı etiket sürebilir", self.prompt)
+        self.assertNotIn("arka arkaya aynı etiketi kullanma", self.prompt)
+        self.assertNotIn("etiketleri dönüşümlü kullan", self.prompt)
+
+    def test_uzatma_ve_qa_revizyonu_ayni_diyalog_kurallarini_tasir(self):
+        for ek in (
+            {"mevcut_script": _bos_script(), "mevcut_kelime": 100, "eksik_kelime": 250},
+            {"qa_geri_bildirimi": "Mekanik kısa paslaşmayı düzelt."},
+            {"feedback": "Cevap önceki sözü ele alsın."},
+        ):
+            with self.subTest(ek=ek):
+                router = _Router(_bos_script())
+                _script_writer_calistir(
+                    router, {}, {}, {}, {}, {}, SURE, lambda *_: None,
+                    mod="DUO", hedef_kelime=350, **ek,
+                )
+                prompt = router.prompts[0]
+                self.assertIn("DÜŞÜNCE BLOKLARI", prompt)
+                self.assertIn("Tur/cümle kotası YOK", prompt)
+                self.assertIn("kısa videoda uzun tur zorlaması yapma", prompt)
+                self.assertNotIn("arka arkaya aynı etiketi kullanma", prompt)
 
     def test_tts_etiketi_zorunlu(self):
         self.assertIn("boş bırakma", self.prompt)
@@ -200,8 +241,11 @@ class TtsYonetmenNotlariTestleri(unittest.TestCase):
         self.assertIn("chuckle", self.prompt)
         self.assertIn("scoff", self.prompt)
 
-    def test_ust_uste_konusma_zemini_var(self):
+    def test_uzun_tur_tek_dusunce_olarak_seslendirilir(self):
         self.assertIn("two or three lines in a row", self.prompt)
+        self.assertIn("three to five sentences or more", self.prompt)
+        self.assertIn("not a fresh announcement at every sentence", self.prompt)
+        self.assertIn("do not insert reactions or extra speaker changes", self.prompt)
 
     def test_atma_enerjisi_tanimli(self):
         casefold = self.prompt.casefold()
@@ -221,18 +265,39 @@ class QaMonotonlukKontrolTestleri(unittest.TestCase):
         self.qa = qa_promptunu_olustur("dengeli")
 
     def test_tepki_replikleri_sorgulanıyor(self):
-        self.assertIn("kısa tepki replikleri", self.qa)
+        self.assertIn("Kısa tepki replikleri", self.qa)
         self.assertIn("karşılıklı atışma", self.qa)
 
     def test_ust_uste_konusma_ve_mekanik_okuma_fail(self):
         self.assertIn("2-3 tur üst üste", self.qa)
         self.assertIn("monoton ritim", self.qa)
         self.assertIn("kadın-erkek-kadın-erkek", self.qa)
-        self.assertIn("kışkırtmayan düz anlatım da FAIL", self.qa)
+        self.assertNotIn("kışkırtmayan düz anlatım da FAIL", self.qa)
+        self.assertIn("bunlar yok diye FAIL verme", self.qa)
+        self.assertIn("uzun diye FAIL verme", self.qa)
+        self.assertIn("kısa videoda uzun tur zorunlu değildir", self.qa)
+        self.assertIn("tek başına FAIL değildir", self.qa)
+
+    def test_segment_sayisi_degil_gercek_soz_alma_ve_anlam(self):
+        self.assertIn("SÖZ ALMA BAZINDA", self.qa)
+        self.assertIn("ardışık segmentlerini tek blok say", self.qa)
+        self.assertIn("cevabı değişmeden çalışıyorsa", self.qa)
 
     def test_mevcut_duo_kontrolleri_korunmus(self):
         self.assertIn("hook→friction→proof→reversal→payoff", self.qa)
         self.assertIn("şarkıcı düeti", self.qa)
+
+
+class CriticDusunceBlokTestleri(unittest.TestCase):
+    def test_elestirmen_yazari_kisa_paslasmaya_geri_itmez(self):
+        router = _Router({"score": 8, "approved": True, "feedback": ""})
+        _critic_calistir(router, _bos_script(), {}, lambda *_: None)
+        prompt = router.prompts[0]
+        self.assertIn("3-5 cümlelik veya daha uzun", prompt)
+        self.assertIn("kısa videoda uzun tur zorunlu değildir", prompt)
+        self.assertIn("eksiklikleri tek başına red gerekçesi değildir", prompt)
+        self.assertIn("önceki kişinin kaygısına/iddiasına", prompt)
+        self.assertIn("ardışık segmentlerini tek söz alma", prompt)
 
 
 if __name__ == "__main__":
