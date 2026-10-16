@@ -7,10 +7,11 @@ or identical pauses that can create a staged duet cadence.
 import os
 import sys
 import unittest
+from unittest.mock import Mock
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.duo_audio import _duo_transcript
+from core.duo_audio import _duo_transcript, duo_ses_uret
 
 
 class DuoAudioTests(unittest.TestCase):
@@ -45,6 +46,41 @@ class DuoAudioTests(unittest.TestCase):
                 "Autonoe: İşte şimdi oldu.",
             ],
         )
+
+    def test_three_sentence_thought_and_five_sentence_reply_reach_tts_intact(self):
+        thought = (
+            "Evde şarj edememek benim için asıl mesele. "
+            "Aracı seçerken yalnız menzile bakmak yetmiyor. "
+            "Haftanın planını da buna göre yapmak istemiyorum."
+        )
+        reply = (
+            "O plan meselesinde sana katılıyorum. "
+            "Ben de önce nerede şarj edeceğime bakardım. "
+            "Menzil rakamı tek başına o derdi çözmüyor. "
+            "Ama senin kullanımını konuşmadan da kesin hüküm vermeyelim. "
+            "Asıl hesabı kendi rutinin üzerinden yapmak lazım."
+        )
+        segments = [
+            {"speaker": "female", "text": thought, "tts_tag": "[meraklı]"},
+            {"speaker": "male", "text": reply, "tts_tag": "[vurgulu]"},
+        ]
+        router = Mock()
+        router.coklu_ses_uret.return_value = (True, "fake-tts")
+        self.assertEqual(
+            duo_ses_uret(router, segments, "unused.wav", lambda *_: None),
+            (True, "fake-tts"),
+        )
+        router.coklu_ses_uret.assert_called_once()
+        args, kwargs = router.coklu_ses_uret.call_args
+        self.assertEqual(args[0], f"Autonoe: {thought}\nCharon: {reply}")
+        self.assertEqual(args[1], [("Autonoe", "Autonoe"), ("Charon", "Charon")])
+        self.assertEqual(args[0].count("Autonoe:"), 1)
+        self.assertEqual(args[0].count("Charon:"), 1)
+        self.assertIn("Turn 1 (female)", kwargs["teslimat"])
+        self.assertIn("Turn 2 (male)", kwargs["teslimat"])
+        self.assertNotIn("Turn 3", kwargs["teslimat"])
+        self.assertEqual(segments[0]["text"], thought)
+        self.assertEqual(segments[1]["text"], reply)
 
     def test_transcript_skips_invalid_segments(self):
         segments = [
