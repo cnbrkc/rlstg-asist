@@ -47,6 +47,83 @@ def icerik_tonu_talimati(icerik_tonu, asama="içerik"):
         "Buna karşılık seçili türü varsayılan 'dengeli' tona yuvarlama ve başka bir türün yaklaşımıyla ezme."
     )
 
+# --- Kullanıcı notu (Telegram'da videoyla birlikte gönderilen açıklama) --------
+# Kök neden (18.10.2026 üretim şikâyeti): kullanıcı videoyu bir açıklamayla
+# gönderdiğinde bu not YALNIZCA Forensic ve Editorial aşamalarına gidiyordu.
+# `pipeline._qa_regeneration_loop` production_notes'u parametre olarak alıp
+# HİÇBİR yere taşımıyordu; Research, Detective, Hook, Script Writer, Metadata,
+# Threads ve Final QA notu hiç görmüyordu. Forensic aşaması aracı başka bir
+# modele benzettiğinde üretimin geri kalanı kullanıcının yazdığını değil o yanlış
+# kimliği takip ediyordu ("x gönderiyorum, sürekli x videosu hazırlıyor").
+# Çözüm: notun etiketi ve öncelik kuralları TEK kaynaktan üretilir; not ham
+# metin olarak pipeline'da dolaşır ve her aşamaya aynı biçimde girer.
+KULLANICI_NOTU_BASLIGI = "KULLANICI NOTU (içeriğin sahibinin yazdığı açıklama)"
+# Worker bir süre notu bu önekle sarıp gönderiyordu; eski kuyruk verisi ve
+# workflow_dispatch ile elle tetikleme hâlâ önekli gelebilir.
+KULLANICI_NOTU_ESKI_ON_EKLER = (
+    "KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):",
+    "KULLANICI TELEGRAM NOTU:",
+    "ÖNEMLİ VİDEO ANALİZ NOTLARI:",
+)
+# Telegram video caption sınırı 1024; tavan savunma amaçlıdır (prompt şişmesin).
+KULLANICI_NOTU_AZAMI_KARAKTER = 1200
+
+
+def kullanici_notu_temizle(notes) -> str:
+    """Kullanıcı notunu tek kanonik biçime indirger (önek/boşluk temizliği).
+
+    Boş/None girdi '' döner; böylece çağıran taraf `if kullanici_notu:` ile
+    notun varlığını test edebilir.
+    """
+    ham = str(notes or "").strip()
+    if not ham:
+        return ""
+    for on_ek in KULLANICI_NOTU_ESKI_ON_EKLER:
+        if ham.casefold().startswith(on_ek.casefold()):
+            ham = ham[len(on_ek):].strip()
+            break
+    ham = " ".join(ham.split())
+    return ham[:KULLANICI_NOTU_AZAMI_KARAKTER].strip()
+
+
+def kullanici_notu_icerik(notes) -> str:
+    """Notun content (GİRDİ) bloğu; not yoksa boş dize.
+
+    Not metni prompt'ta BİR KEZ görünmelidir (bkz. tests/test_prompts.py);
+    bu yüzden kurallar metni buraya değil `kullanici_notu_kurallari` içine yazılır.
+    """
+    not_metni = kullanici_notu_temizle(notes)
+    return durumu_metne_donustur(KULLANICI_NOTU_BASLIGI, not_metni) if not_metni else ""
+
+
+def kullanici_notu_kurallari(notes) -> str:
+    """Notun prompt tarafındaki ÖNCELİK KURALLARI; not metnini tekrarlamaz.
+
+    Kullanıcının talebi iki yönlü bağlayıcıdır: notta yazan yok sayılamaz,
+    ama not TEK kaynak da değildir (video gözlemi + Fact Lock ile birlikte
+    kullanılır; doğrulanabilir rakamlarda Fact Lock üstündür).
+    """
+    if not kullanici_notu_temizle(notes):
+        return ""
+    return (
+        f"\n\n🚨 KULLANICI NOTU KİLİDİ — İÇERİĞİN SAHİBİNDEN GELEN TALEP 🚨\n"
+        f"Sana verilen girdide \"{KULLANICI_NOTU_BASLIGI}\" başlığıyla bir metin var. "
+        "Bu metni bu içeriğin sahibi yazdı; tavsiye değil üretim sözleşmesidir ve YOK SAYILAMAZ.\n"
+        "1) KİMLİK KİLİDİ: Notta geçen marka/model/versiyon adı BİREBİR kullanılır. Başka bir "
+        "markaya veya modele benzetme, yakın ada yuvarlama, kısaltma YASAK. Not ile video "
+        "görüntüsü çelişse bile nottaki ad esastır ve içerik o konu etrafında kurulur.\n"
+        "2) TALEP KİLİDİ: Nottaki somut talepler (vurgulanacak özellik, açı, karşılaştırma, "
+        "soru, kaçınılacak konu) üretime yansıtılır; sessizce düşürülmez.\n"
+        "3) NOT TEK KAYNAK DEĞİLDİR: Not bir öncelik kilididir; video gözlemi, Fact Lock ve "
+        "araştırma verisiyle BİRLİKTE kullanılır. Not kısa veya eksik diye içerik daraltılmaz, "
+        "notun kapsamadığı alanlarda normal üretim akışı sürer.\n"
+        "4) RAKAM KİLİDİ: Nottaki fiyat/ÖTV/vergi/teknik rakam Fact Lock'ta OBSERVED veya "
+        "VERIFIED değilse kesin gerçek gibi söylenmez; ya hiç kullanılmaz ya da açıkça iddia "
+        "olarak işaretlenir. Fact Lock ve vergi/ÖTV kilidi bu konuda notun üstündedir.\n"
+        "5) Notu kopyala-yapıştır blok olarak koyma; içeriğin doğal diline yedir."
+    )
+
+
 def forensic_analiz_promptunu_olustur(ek_notlar="", sure_saniye=0):
     # ek_notlar zaten pipeline.py tarafından güvenli şekilde ekleniyor. Global değişkene gerek yok.
     template = _oku("forensic_analysis_prompt.txt")

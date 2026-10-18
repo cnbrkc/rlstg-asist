@@ -177,6 +177,26 @@ segments:[{speaker,text,style}], contract:{mode}, conversation_design:{}, model:
   hook_families[1], turkiye_ilgi_kancasi` (Fact Lock'taki en yüksek `onem_puani`'li
   sinyalin `guvenli_anlatim`), `metadata`.
 
+## 3b. Kullanıcı notu sözleşmesi (video açıklaması)
+
+Kullanıcının videoyla gönderdiği caption **tek kanonik metne** indirgenir
+(`core.prompts.kullanici_notu_temizle`; eski worker öneki temizlenir, 1200 kr tavan)
+ve Forensic → Research → Editorial → Detective/Hook/Script/Metadata → Caption →
+Threads → Final QA zincirinin **her** halkasına taşınır. Etiket ve öncelik kuralları
+tek kaynaktan gelir: `kullanici_notu_icerik` (GİRDİ bloğu, not metni prompt'ta BİR
+kez görünür) + `kullanici_notu_kurallari` (talimat bloğu, not metnini TEKRARLAMAZ).
+
+Öncelik sırası: 1) nottaki marka/model/versiyon BİREBİR kullanılır (video görüntüsü
+çelişse bile) 2) nottaki somut talepler üretime yansıtılır 3) not TEK kaynak değildir;
+video gözlemi + Fact Lock ile birlikte kullanılır 4) doğrulanabilir rakamlarda
+(fiyat/ÖTV/teknik) Fact Lock ve vergi kilidi notun üstündedir.
+
+Kimlik çelişkisi koruması: forensic kimliğin marka/model/variant parçaları notta hiç
+geçmiyorsa (`web_search.kimlik_notla_celisiyor_mu`) uyarı loglanır ve kullanıcının
+kendi konusu için ek bir kısa web sorgusu çalıştırılır
+(`web_search.kullanici_notu_arastirmasi`; asla istisna sızdırmaz). QA `model_check`
+kullanıcının yazdığı model yerine başka model anlatılmasını FAIL sayar.
+
 ## 4. Ses modu sözleşmesi
 
 **Karar hiyerarşisi (üst→alt):**
@@ -262,7 +282,10 @@ kesin Türkiye fiyatı/ÖTV UYDURMAZ; `turkiye_satis_durumu` mutlaka taşınır.
 
 ## 8. Medya sözleşmesi
 
-- TTS ham PCM 24kHz/mono/16bit → atempo **1.20×** (`SES_HIZ_CARPANI`) → render'da AAC.
+- TTS ham PCM 24kHz/mono/16bit → atempo **`SES_HIZ_CARPANI`** (`core/config.py` tek
+  kaynak; değeri buradan oku, dosyalara sabit sayı yazma) → render'da AAC.
+  Telegram raporundaki `⚡ TTS hız` satırı da aynı sabiti okur
+  (`worker._tts_hiz_etiketi`) — rapora sabit değer YAZILMAZ.
 - Final: 48kHz mono AAC 192k; video H.264 `veryfast` CRF20 `yuv420p`, kaynak FPS korunur.
 - Senkron: `hedef = ceil(ses_suresi)`; `video_hiz = video_sure / hedef`
   **0.50×–1.50×** aralığa kırpılır; süre oranı (0.85–1.15) yalnız log, WAV'i korur.

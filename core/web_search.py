@@ -393,6 +393,70 @@ def arastirma_sorgulari_olustur(video_state: Dict[str, Any]) -> List[str]:
     return sorgular[:8]
 
 
+def kimlik_notla_celisiyor_mu(video_state: Dict[str, Any], kullanici_notu: str) -> bool:
+    """Forensic kimliği kullanıcı notunda HİÇ geçmiyorsa True.
+
+    Kullanıcının şikâyeti deterministik olarak yakalanır: "X gönderiyorum,
+    analiz başka araca benzetip sürekli onun videosunu hazırlıyor." Not boşsa
+    veya forensic bir kimlik üretmediyse karşılaştırılacak bir şey olmadığı
+    için çelişki YOKTUR (yanlış alarm üretmeyiz).
+    """
+    not_metni = _fold_metin(kullanici_notu or "").strip()
+    if not not_metni:
+        return False
+    kimlik = (video_state or {}).get("video_identity") or {}
+    if not isinstance(kimlik, dict):
+        return False
+    parcalar = [_kimlik_parcasi(kimlik.get(alan)) for alan in ("brand", "exact_model", "variant")]
+    parcalar = [p for p in parcalar if p]
+    if not parcalar:
+        return False
+    return not any(_fold_metin(p) in not_metni for p in parcalar)
+
+
+def kullanici_notu_sorgusu(kullanici_notu: str) -> str:
+    """Kullanıcı notundan TEK kısa kimlik sorgusu üretir (araştırma yedeği).
+
+    Sorgu kısa tutulur: ddgs uzun/terim yığını sorgularda "No results found"
+    dönüyor (bkz. modül başındaki 04.10.2026 notu).
+    """
+    kimlik = _kisa_sorgu(_temizle_metin(kullanici_notu, 120), azami_kelime=4)
+    kimlik = _yer_tutucu_tokenlari_at(kimlik)
+    if not kimlik:
+        return ""
+    return _yer_tutucu_tokenlari_at(f"{kimlik} özellikleri Türkiye")
+
+
+def kullanici_notu_arastirmasi(kullanici_notu: str, log_ekle) -> str:
+    """Not forensic kimliğiyle çelişiyorsa notun KENDİ konusu için ek arama.
+
+    Forensic aracı yanlış modele benzettiğinde Fact Lock yanlış aracın
+    verisiyle kilitlenir ve kullanıcının yazdığı konu hiç araştırılmamış olur.
+    Bu ek tur yalnız o durumda çalışır; asla istisna sızdırmaz (arama katmanı
+    üretimi durdurmaz).
+    """
+    sorgu = kullanici_notu_sorgusu(kullanici_notu)
+    if not sorgu:
+        return ""
+    try:
+        sonuclar = duckduckgo_sorgu(sorgu, max_sonuc=4, log_ekle=log_ekle)
+    except Exception as exc:
+        if callable(log_ekle):
+            log_ekle(f"⚠️ Kullanıcı notu ek araması yapılamadı: {type(exc).__name__}: {str(exc)[:120]}")
+        return ""
+    if not sonuclar:
+        if callable(log_ekle):
+            log_ekle(f"⚠️ Kullanıcı notu kimliği için ek arama sonuçsuz kaldı: '{sorgu[:60]}'")
+        return ""
+    satirlar = [f"SORGU (KULLANICI NOTUNUN KİMLİĞİ): {sorgu}"]
+    for i, s in enumerate(sonuclar, 1):
+        satirlar.append(f"  [{i}] {s.get('baslik', '')}")
+        satirlar.append(f"      {s.get('icerik', '')}")
+    if callable(log_ekle):
+        log_ekle(f"🔍 Kullanıcı notu kimliği için ek araştırma eklendi: '{sorgu[:60]}' → {len(sonuclar)} sonuç")
+    return "\n".join(satirlar)
+
+
 def otv_ek_arastirma(video_state: Dict[str, Any], log_ekle) -> str:
     """İlk tur tek ÖTV oranı kilitleyemediyse modele özel teknik + vergi sorgusu.
 

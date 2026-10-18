@@ -63,7 +63,7 @@ export default {
       textInput = String(message.text).trim();
       inputType = "text";
     } else {
-      if (message.text === "/start") await telegram(env, "sendMessage", { chat_id: chatId, text: "🤖 Reels Asistanı hazır.\n\n🎥 Video gönderirsen videoyu düzenleyip final videoyu üretirim.\n📝 Sadece metin gönderirsen ses + açıklama + başlık + Threads üretirim.\n\nVideoyu açıklamayla birlikte gönderebilirsin; açıklama otomatik olarak analiz notu kabul edilir." });
+      if (message.text === "/start") await telegram(env, "sendMessage", { chat_id: chatId, text: "🤖 Reels Asistanı hazır.\n\n🎥 Video gönderirsen videoyu düzenleyip final videoyu üretirim.\n📝 Sadece metin gönderirsen ses + açıklama + başlık + Threads üretirim.\n\nVideoyu açıklamayla birlikte gönderebilirsin; açıklamaya yazdığın marka/model ve talepler analizin HER aşamasında (analiz → araştırma → senaryo → caption → QA) öncelikli olarak kullanılır." });
       return new Response("OK", { status: 200 });
     }
 

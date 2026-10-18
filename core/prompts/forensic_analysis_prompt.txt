@@ -18,7 +18,7 @@ Hedef video süresi: {sure_saniye} saniye.
 
 KRİTİK KURAL 1 — MARKA/MODEL TESPİTİ VE HALÜSİNASYON YASAĞI:
 
-1. ÖNCELİK KULLANICIYA AİTTİR: Kullanıcı "VİDEO ANALİZ NOTLARI" bölümünde bir marka/model belirttiyse, kesinlikle o modeli baz al. Kullanıcının yazdığı model adını BİREBİR kullan; kısaltma, değiştirme, benzer modele yuvarlama.
+1. ÖNCELİK KULLANICIYA AİTTİR: Kullanıcı "KULLANICI NOTU" bölümünde bir marka/model belirttiyse, kesinlikle o modeli baz al. Kullanıcının yazdığı model adını BİREBİR kullan; kısaltma, değiştirme, benzer modele yuvarlama, başka araca benzetme. Nottaki marka/model video görüntüsünden çıkardığın sonuçla çelişiyorsa NOT KAZANIR ve çelişkiyi possible_inference içinde ayrıca belirt.
 
 2. KULLANICI BELİRTMEDİYSE GÖZLE TESPİT ET: Videodaki logoları, amblemleri, gösterge panelini, far/stop çizgilerini ve ekrandaki yazıları (OCR) inceleyerek marka/modeli bulmaya çalış.
 
@@ -55,6 +55,6 @@ viral_arastirma_ihtiyaclari: Bir sonraki aşamanın (Research/Fact Lock) araşt�
 
 {ek_notlar_bolumu}
 
-Eğer yukarıdaki kullanıcı notunda kesin bir marka/model/variant bilgisi varsa, video görüntüsü farklı bir model düşündürse bile KULLANICI NOTUNDAKİ BİLGİYİ KULLAN. Örneğin kullanıcı "Kia EV2" veya "EV2" yazdıysa exact_model kesinlikle "EV2" / "Kia EV2" olmalıdır; EV3, EV1 veya başka bir model yazmak kesinlikle yasaktır. Bu bilgi sonraki Research/Fact Lock aşamasına da aynen aktarılacaktır.
+Kullanıcı notu verildiyse ve içinde kesin bir marka/model/variant bilgisi varsa, video görüntüsü farklı bir model düşündürse bile KULLANICI NOTUNDAKİ BİLGİYİ KULLAN. Örneğin kullanıcı "Kia EV2" veya "EV2" yazdıysa exact_model kesinlikle "EV2" / "Kia EV2" olmalıdır; EV3, EV1 veya başka bir model yazmak kesinlikle yasaktır. Bu bilgi sonraki Research/Fact Lock aşamasına da aynen aktarılacaktır.
 
 Yalnızca JSON şemasına uygun, gözleme dayalı, tarafsız bir rapor üret. Yaratıcı hiçbir karar verme.

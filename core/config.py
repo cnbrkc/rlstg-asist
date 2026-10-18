@@ -119,7 +119,12 @@ SES_KANAL = 1
 SES_GENISLIK = 2
 VIDEO_CRF = 20
 VIDEO_PRESET = "veryfast"
-SES_HIZ_CARPANI = 1.35
+# TTS atempo çarpanı. TEK DOĞRULUK KAYNAĞI burasıdır: hem core.media/core.router
+# sesi bu değerle hızlandırır hem de Telegram raporu aynı sabiti okur (eski
+# sürümde rapor satırına değer sabit metin olarak yazılmıştı; çarpan
+# değiştiğinde rapor gerçeği yansıtmıyordu). Bu değeri değiştirdiğinde başka
+# hiçbir dosyayı güncellemen gerekmez. Kullanıcı kararı (18.10.2026): 1.3.
+SES_HIZ_CARPANI = 1.3
 PIPELINE_ADIMLARI = [
     "🎥 Video analiz ediliyor (Forensic)...",
     "🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...",
