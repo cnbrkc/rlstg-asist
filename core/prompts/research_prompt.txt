@@ -16,7 +16,7 @@ Sana sunulan WEB ARAŞTIRMA SONUÇLARINI eleştirel biçimde analiz et. Her bilg
 
 ANALİZ STRATEJİSİ:
 
-1. KİMLİK DOĞRULAMA: Web sonuçlarındaki marka/model bilgisini Forensic analizle karşılaştır. Tutarsızlık varsa bunu açıkça belirt.
+1. KİMLİK DOĞRULAMA: Web sonuçlarındaki marka/model bilgisini Forensic analizle karşılaştır. Tutarsızlık varsa bunu açıkça belirt. KULLANICI NOTU verildiyse kimliği ONUNLA da karşılaştır: nottaki marka/model Forensic çıktısından farklıysa KULLANICI NOTUNU esas al, çelişkiyi arastirma_notu alanına yaz ve doğrulamayı NOTTAKİ marka/model üzerinden yap (yanlış aracın verisini bu araca YAZMA).
 2. TEKNİK VERİ ÇIKARIMI: Fiyat, menzil, beygir, şarj süresi gibi somut verileri web sonuçlarından çıkar. Kaynak belirt.
 3. TÜRKİYE PAZARI: Model belirliyse fiyat ayrıca sorulmamış olsa bile satış durumu, fiyat, ÖTV/MTV etkisi analiz et. Türkiye'de satılmıyorsa bunu net yaz.
 4. ÇELİŞKİ AVI (KRİTİK): Markanın/resmi kaynağın iddiası ile kullanıcı deneyimi/forum şikayetleri arasındaki UÇURUMU bul. Örnek: "Marka 500km menzil diyor ama kullanıcılar kışın 380km diyor." Bu çelişkiler DUO diyalogunun yakıtıdır.

@@ -27,7 +27,10 @@ from core.agentic import (
     agentic_icerik_uretimi, kapaklari_yeniden_uret,
 )
 from core.fiyat_kilidi import fiyat_talimati
-from core.web_search import otv_ek_arastirma, web_arastirma_yap
+from core.web_search import (
+    kimlik_notla_celisiyor_mu, kullanici_notu_arastirmasi,
+    otv_ek_arastirma, web_arastirma_yap,
+)
 from core.otv_kilidi import (
     kapaklari_otv_kilidine_cek,
     otv_kilidi_hesapla,
@@ -45,6 +48,7 @@ from core.prompts import (
     forensic_analiz_promptunu_olustur, research_promptunu_olustur, editorial_promptunu_olustur,
     caption_promptunu_olustur, threads_promptunu_olustur,
     qa_promptunu_olustur, durumu_metne_donustur, girdi_birlestir,
+    kullanici_notu_icerik, kullanici_notu_kurallari, kullanici_notu_temizle,
 )
 from core.media import (
     gecici_dosya_yolu, video_ve_sesi_birlestir,
@@ -301,9 +305,12 @@ def _gecici_hatada_tekrar_dene(
 
 
 def _forensic_analiz_calistir(router, video_bytes, mime_type, analiz_notlari, sure_saniye, log):
-    ek = ''
-    if analiz_notlari and analiz_notlari.strip():
-        ek = f"\nÖNEMLİ VİDEO ANALİZ NOTLARI:\n{analiz_notlari.strip()}\n"
+    # Kullanıcı notu tek kanonik biçimde enjekte edilir: öncelik kuralları +
+    # not metni BİR blokta (not prompt'ta bir kez görünür, bkz. test_prompts).
+    not_metni = kullanici_notu_temizle(analiz_notlari)
+    ek = ""
+    if not_metni:
+        ek = f"\n{kullanici_notu_icerik(not_metni)}\n\n{kullanici_notu_kurallari(not_metni).strip()}\n"
 
     def _tek_deneme():
         return router.video_analiz_et(
@@ -346,22 +353,39 @@ def _research_observed_fallback(video_state, exc, log):
     }
 
 
-def _research_calistir(router, video_state, log):
+def _research_calistir(router, video_state, log, kullanici_notu=""):
     video_state = _object_state_or_empty(video_state)
+    kullanici_notu = kullanici_notu_temizle(kullanici_notu)
     web_sonuclari = web_arastirma_yap(video_state, log)
+    if kullanici_notu and kimlik_notla_celisiyor_mu(video_state, kullanici_notu):
+        # Kullanıcının yazdığı marka/model forensic çıktısında hiç geçmiyor:
+        # araştırma yanlış araca kilitlenmiş demektir. Kullanıcının notu
+        # yok sayılmaz, kendi konusu için ek bir araştırma turu eklenir.
+        log(
+            "⚠️ Kullanıcı notundaki marka/model forensic kimlikle uyuşmuyor; "
+            "notun kendi konusu için ek araştırma yapılıyor (kullanıcı notu önceliklidir)."
+        )
+        ek_arama = kullanici_notu_arastirmasi(kullanici_notu, log)
+        if ek_arama:
+            web_sonuclari = f"{web_sonuclari}\n\n{ek_arama}".strip()
     content = girdi_birlestir(
         durumu_metne_donustur('VIDEO IDENTITY', video_state.get('video_identity', {})),
         durumu_metne_donustur('OBSERVED FACTS', video_state.get('observed_facts', [])),
         durumu_metne_donustur('UNKNOWNS', video_state.get('unknowns', [])),
         durumu_metne_donustur('POSSIBLE INFERENCE', video_state.get('possible_inference', [])),
         durumu_metne_donustur('ARAŞTIRMA İHTİYAÇLARI', video_state.get('viral_arastirma_ihtiyaclari', [])),
+        kullanici_notu_icerik(kullanici_notu),
         durumu_metne_donustur('WEB ARAŞTIRMA SONUÇLARI', web_sonuclari or "Web araştırması yapılamadı.")
     )
     try:
         with _istek_profili(router, "uzun_metin"):
             result, model = _run_timed(
                 log, "Research / Fact Lock (Agentic Web + Gemini Analiz)",
-                lambda: router.metin_uret(content, research_promptunu_olustur(), FACT_LOCK_SCHEMA, log, arama_kullan=False),
+                lambda: router.metin_uret(
+                    content,
+                    research_promptunu_olustur() + kullanici_notu_kurallari(kullanici_notu),
+                    FACT_LOCK_SCHEMA, log, arama_kullan=False,
+                ),
             )
     except Exception as exc:
         result, model = _research_observed_fallback(video_state, exc, log), "forensic-fallback"
@@ -428,11 +452,16 @@ def _editorial_oncelik_denetimi(editorial_state, log):
 
 
 def _editorial_calistir(router, video_state, fact_state, notes, log, ton=None):
-    content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE', video_state), durumu_metne_donustur('FACT LOCK', fact_state), notes or '', vergi_kilidi_talimati(fact_state))
+    kullanici_notu = kullanici_notu_temizle(notes)
+    content = girdi_birlestir(durumu_metne_donustur('VIDEO STATE', video_state), durumu_metne_donustur('FACT LOCK', fact_state), kullanici_notu_icerik(kullanici_notu), vergi_kilidi_talimati(fact_state))
     with _istek_profili(router, "uzun_metin"):
         result, model = _run_timed(
             log, "Editorial Brain (Gemini)",
-            lambda: router.metin_uret(content, editorial_promptunu_olustur(ton), EDITORIAL_SCHEMA, log, arama_kullan=False),
+            lambda: router.metin_uret(
+                content,
+                editorial_promptunu_olustur(ton) + kullanici_notu_kurallari(kullanici_notu),
+                EDITORIAL_SCHEMA, log, arama_kullan=False,
+            ),
         )
     return _editorial_oncelik_denetimi(result, log), model
 
@@ -447,12 +476,14 @@ def _qa_duzeltme_talimati(katman, qa_geri_bildirimi):
     )
 
 
-def _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
-    content = girdi_birlestir(durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('VIDEO', video_state))
+def _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi="", kullanici_notu=""):
+    kullanici_notu = kullanici_notu_temizle(kullanici_notu)
+    content = girdi_birlestir(durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('VIDEO', video_state), kullanici_notu_icerik(kullanici_notu))
     prompt = (
         caption_promptunu_olustur(ton)
         + vergi_kilidi_talimati(fact_state)
         + fiyat_talimati(fact_state)
+        + kullanici_notu_kurallari(kullanici_notu)
         + _qa_duzeltme_talimati("CAPTION", qa_geri_bildirimi)
     )
     result, model = _run_timed(
@@ -462,12 +493,12 @@ def _caption_model(router, reels_state, fact_state, editorial_state, video_state
     return _caption_state_normalize(result, log), model
 
 
-def _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi=""):
+def _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton=None, qa_geri_bildirimi="", kullanici_notu=""):
     """Sosyal korumalı caption: boş/artifact çıktı kabul edilmez; tek kontrollü
     yeniden üretim + Fact Lock tabanlı güvenli fallback."""
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi)
+            state, model = _caption_model(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi, kullanici_notu)
         except Exception as exc:
             log(f"⚠️ Caption üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"reels_aciklamasi": "", "reels_hashtagleri": []}, "hata"
@@ -483,14 +514,16 @@ def _caption_calistir(router, reels_state, fact_state, editorial_state, video_st
     return {"reels_aciklamasi": description, "reels_hashtagleri": hashtags}, "local-fallback"
 
 
-def _threads_model(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi=""):
+def _threads_model(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi="", kullanici_notu=""):
+    kullanici_notu = kullanici_notu_temizle(kullanici_notu)
     # vergi_kilidi_talimati zaten content içinde taşınıyor; prompta tekrar
     # eklenmez (çift talimat). Fiyat kilidi yalnızca doğrulanmış fiyat varsa
     # prompta eklenir.
-    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), vergi_kilidi_talimati(fact_state))
+    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), kullanici_notu_icerik(kullanici_notu), vergi_kilidi_talimati(fact_state))
     prompt = (
         threads_promptunu_olustur(ton)
         + fiyat_talimati(fact_state)
+        + kullanici_notu_kurallari(kullanici_notu)
         + _qa_duzeltme_talimati("THREADS", qa_geri_bildirimi)
     )
     result, model = _run_timed(
@@ -500,12 +533,12 @@ def _threads_model(router, video_state, fact_state, editorial_state, log, ton=No
     return _threads_state_normalize(result), model
 
 
-def _threads_calistir(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi=""):
+def _threads_calistir(router, video_state, fact_state, editorial_state, log, ton=None, qa_geri_bildirimi="", kullanici_notu=""):
     """Sosyal korumalı threads: boş/artifact çıktı kabul edilmez; tek kontrollü
     yeniden üretim + Fact Lock tabanlı güvenli fallback."""
     for attempt in range(SOCIAL_REGEN_MAX + 1):
         try:
-            state, model = _threads_model(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi)
+            state, model = _threads_model(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi, kullanici_notu)
         except Exception as exc:
             log(f"⚠️ Threads üretimi hata verdi: {str(exc)[:160]}")
             state, model = {"threads_aciklamasi": ""}, "hata"
@@ -879,16 +912,17 @@ def _otv_qa_zorla(qa_state, reels_state, caption_state, threads_state, fact_stat
     return qa_state
 
 
-def _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan=None, duo_script=None, ton=None):
+def _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan=None, duo_script=None, ton=None, kullanici_notu=""):
+    kullanici_notu = kullanici_notu_temizle(kullanici_notu)
     # QA'nın denetlediği Threads metni, kullanıcıya teslim edilecek 500-char
     # canonical sürümle aynı olmalı.
     threads_state = _threads_state_normalize(threads_state)
-    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('DUO PLAN', duo_plan or {}), durumu_metne_donustur('DUO SCRIPT', duo_script or {}), durumu_metne_donustur('CAPTION', caption_state), durumu_metne_donustur('THREADS', threads_state), f'VIDEO SÜRESİ: {sure_saniye}', f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}', vergi_kilidi_talimati(fact_state))
+    content = girdi_birlestir(durumu_metne_donustur('VIDEO', video_state), durumu_metne_donustur('FACT LOCK', fact_state), durumu_metne_donustur('EDITORIAL', editorial_state), durumu_metne_donustur('REELS', reels_state), durumu_metne_donustur('DUO PLAN', duo_plan or {}), durumu_metne_donustur('DUO SCRIPT', duo_script or {}), durumu_metne_donustur('CAPTION', caption_state), durumu_metne_donustur('THREADS', threads_state), kullanici_notu_icerik(kullanici_notu), f'VIDEO SÜRESİ: {sure_saniye}', f'SEÇİLEN İÇERİK TÜRÜ: {ton or "dengeli"}', vergi_kilidi_talimati(fact_state))
     try:
         with _istek_profili(router, "uzun_metin"):
             result, model = _run_timed(
                 log, "Final QA (Gemini)",
-                lambda: router.metin_uret(content, qa_promptunu_olustur(ton), QA_SCHEMA, log, arama_kullan=False),
+                lambda: router.metin_uret(content, qa_promptunu_olustur(ton) + kullanici_notu_kurallari(kullanici_notu), QA_SCHEMA, log, arama_kullan=False),
             )
     except Exception as exc:
         # QA API'si (tüm model+key + aşırı-yük tekrarları) geçici olarak
@@ -902,14 +936,14 @@ def _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, 
     return result, model
 
 
-def _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton):
+def _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton, kullanici_notu=""):
     """Metadata ajanı açıklama/hashtag vermediyse Caption ajanı ile tamamlar."""
     caption_state = _caption_state_normalize(caption_state, log)
     if caption_state.get("reels_aciklamasi") and caption_state.get("reels_hashtagleri"):
         return caption_state, model_caption
     log("⚠️ Metadata ajanı eksik caption/hashtag döndü; Caption ajanı ile tamamlanıyor.")
     try:
-        yeni, model = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton)
+        yeni, model = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton, kullanici_notu=kullanici_notu)
     except Exception as exc:
         log(f"⚠️ Caption tamamlama başarısız; worker sosyal fallback'i devreye girecek: {str(exc)[:160]}")
         return caption_state, model_caption
@@ -944,7 +978,7 @@ def _arka_planda(fn, *args, **kwargs):
         havuz.shutdown(wait=False)
 
 
-def _threads_future_sonucu(future, router, video_state, fact_state, editorial_state, log, ton, timeout_s=300.0):
+def _threads_future_sonucu(future, router, video_state, fact_state, editorial_state, log, ton, timeout_s=300.0, kullanici_notu=""):
     try:
         return future.result(timeout=timeout_s)
     except TimeoutError:
@@ -952,10 +986,10 @@ def _threads_future_sonucu(future, router, video_state, fact_state, editorial_st
         # takılan kol iptal edilip senkron yol taze bir çağrıyla denenir.
         future.cancel()
         log(f"⚠️ Paralel Threads kolu {timeout_s:.0f} sn içinde bitmedi; senkron yeniden deneniyor.")
-        return _threads_calistir(router, video_state, fact_state, editorial_state, log, ton)
+        return _threads_calistir(router, video_state, fact_state, editorial_state, log, ton, kullanici_notu=kullanici_notu)
     except Exception as exc:
         log(f"⚠️ Paralel Threads kolu hata verdi; senkron yeniden deneniyor: {type(exc).__name__}: {str(exc)[:160]}")
-        return _threads_calistir(router, video_state, fact_state, editorial_state, log, ton)
+        return _threads_calistir(router, video_state, fact_state, editorial_state, log, ton, kullanici_notu=kullanici_notu)
 
 
 def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, duo_plan, duo_script, sure_saniye, ton, legacy_voice, log, voice_initial_instruction='', production_notes='', ses_modu_notlari=None, editorial_hazirlayici=None):
@@ -980,6 +1014,13 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
     kullanilan_ses_modeli = None
     ses_modu = 'LEGACY'
     ses_dosyasi = ''
+    # KÖK NEDEN DÜZELTMESİ (18.10.2026): production_notes bu fonksiyona
+    # parametre olarak geliyordu ama hiçbir ajana taşınmıyordu; kullanıcının
+    # videoyla gönderdiği açıklama Forensic + Editorial'dan sonra kayboluyordu.
+    # Artık 4 ajanın hepsine, Metadata/Caption/Threads ve Final QA'ya gider.
+    kullanici_notu = kullanici_notu_temizle(production_notes)
+    if kullanici_notu:
+        log(f"📝 Kullanıcı notu üretim katmanlarına taşındı ({len(kullanici_notu)} karakter): Detective/Hook/Script/Metadata/Caption/Threads/QA.")
 
     editorial_ilk = editorial_state
     editorial_cache = {}
@@ -1000,7 +1041,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
 
     # Threads yalnız video/fact/editorial'a bağlıdır: agentic döngüyle EŞZAMANLI
     # başlar (seri akışta Metadata'dan sonra ~15 sn bekliyordu).
-    threads_future = _arka_planda(_threads_calistir, router, video_state, fact_state, editorial_ilk, log, ton)
+    threads_future = _arka_planda(_threads_calistir, router, video_state, fact_state, editorial_ilk, log, ton, kullanici_notu=kullanici_notu)
 
     # QA yenilemesinde Detective/Hook çıktıları yeniden kullanılır.
     baglam = {}
@@ -1009,7 +1050,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
     reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli, ses_modu, ses_dosyasi, metadata_state = agentic_icerik_uretimi(
         router, video_state, fact_state, editorial_ilk, sure_saniye, ton, legacy_voice, log,
         mod_karari=_mod_karari_saglayici if callable(editorial_hazirlayici) else _mod_karari_al(editorial_ilk),
-        baglam=baglam,
+        baglam=baglam, production_notes=kullanici_notu,
     )
     editorial_state = _editorial_son()
     mod_karari = _mod_karari_al(editorial_state)
@@ -1017,15 +1058,15 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
     # Metadata'dan Caption'ı al
     caption_state = _caption_state_normalize(metadata_state, log)
     model_caption = "agentic"
-    caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton)
+    caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton, kullanici_notu=kullanici_notu)
 
     # Threads (paralel koldan)
-    threads_state, model_threads = _threads_future_sonucu(threads_future, router, video_state, fact_state, editorial_state, log, ton)
+    threads_state, model_threads = _threads_future_sonucu(threads_future, router, video_state, fact_state, editorial_state, log, ton, kullanici_notu=kullanici_notu)
 
     for qa_round in range(MAX_QA_REGEN + SOCIAL_QA_EXTRA_REGEN + 1):
         qa_rounds = qa_round
         caption_state, threads_state = _otv_sosyal_kilitle(reels_state, caption_state, threads_state, fact_state, log)
-        qa_state, _ = _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan, duo_script, ton)
+        qa_state, _ = _qa_calistir(router, video_state, fact_state, editorial_state, reels_state, caption_state, threads_state, sure_saniye, log, duo_plan, duo_script, ton, kullanici_notu=kullanici_notu)
         qa_state = _otv_qa_zorla(qa_state, reels_state, caption_state, threads_state, fact_state, log)
         if not isinstance(qa_state, dict):
             qa_state = _object_state_or_empty(qa_state)
@@ -1099,6 +1140,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
                 reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli, ses_modu, ses_dosyasi, metadata_state = agentic_icerik_uretimi(
                     router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log,
                     mod_karari=mod_karari, baglam=baglam, qa_geri_bildirimi=geri_bildirim,
+                    production_notes=kullanici_notu,
                 )
                 if not ses_basarili and onceki[4]:
                     # Yeni tur ses üretemediyse elde kalan geçerli üretim çöpe atılmaz.
@@ -1107,7 +1149,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
                 elif not caption_needed:
                     caption_state = _caption_state_normalize(metadata_state)
                     model_caption = "agentic"
-                    caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton)
+                    caption_state, model_caption = _caption_eksikse_tamamla(router, caption_state, model_caption, reels_state, fact_state, editorial_state, video_state, log, ton, kullanici_notu=kullanici_notu)
             except Exception as exc:
                 # QA yenilemesi API yoğunluğunda düşerse elde kalan geçerli
                 # üretim çöpe atılmaz; önceki sürüm korunur.
@@ -1126,7 +1168,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
         if caption_needed:
             onceki_caption = (caption_state, model_caption)
             try:
-                caption_state, model_caption = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi=geri_bildirim)
+                caption_state, model_caption = _caption_calistir(router, reels_state, fact_state, editorial_state, video_state, log, ton, qa_geri_bildirimi=geri_bildirim, kullanici_notu=kullanici_notu)
             except Exception as exc:
                 log(f"⚠️ Caption yenilemesi üretilemedi; önceki caption korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
                 caption_state, model_caption = onceki_caption
@@ -1140,7 +1182,7 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
         if downstream_threads:
             onceki_threads = (threads_state, model_threads)
             try:
-                threads_state, model_threads = _threads_calistir(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi=geri_bildirim)
+                threads_state, model_threads = _threads_calistir(router, video_state, fact_state, editorial_state, log, ton, qa_geri_bildirimi=geri_bildirim, kullanici_notu=kullanici_notu)
             except Exception as exc:
                 log(f"⚠️ Threads yenilemesi üretilemedi; önceki Threads metni korunuyor: {type(exc).__name__}: {str(exc)[:160]}")
                 threads_state, model_threads = onceki_threads
@@ -1192,17 +1234,21 @@ def pipeline_calistir(router, video_bytes, mime_type, temp_input_video, video_an
 
     state = {'content_tone': str(icerik_tonu or 'dengeli').strip().lower()}
     log_ekle(f"🎯 İçerik türü runtime kilidi aktif: {state['content_tone']}")
+    # Kullanıcının notu TEK kanonik metne indirgenir ve her aşamaya aynı değer
+    # gider (eski worker öneki temizlenir); Forensic'ten Final QA'ya kadar.
+    kullanici_notu = kullanici_notu_temizle(video_analiz_notlari) or kullanici_notu_temizle(metin_uretim_notlari)
+    state['kullanici_notu'] = kullanici_notu
     _ilerleme(ilerlemeyi_guncelle, 1); log_ekle('🎥 Video analiz ediliyor (Forensic)...')
-    video_state, _ = _forensic_analiz_calistir(router, video_bytes, mime_type, video_analiz_notlari, sure_saniye, log_ekle); state['video_state'] = video_state
+    video_state, _ = _forensic_analiz_calistir(router, video_bytes, mime_type, kullanici_notu, sure_saniye, log_ekle); state['video_state'] = video_state
     _ilerleme(ilerlemeyi_guncelle, 2); log_ekle('🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...')
-    fact_state, _ = _research_calistir(router, video_state, log_ekle); state['fact_state'] = fact_state
+    fact_state, _ = _research_calistir(router, video_state, log_ekle, kullanici_notu=kullanici_notu); state['fact_state'] = fact_state
     _ilerleme(ilerlemeyi_guncelle, 3); log_ekle('🧠 Hikâye seçiliyor (Editorial Brain)...')
-    editorial_state, _ = _editorial_calistir(router, video_state, fact_state, metin_uretim_notlari, log_ekle, icerik_tonu)
-    mod_future = _anlatim_modu_arka_planda(router, video_state, fact_state, editorial_state, sure_saniye, icerik_tonu, metin_uretim_notlari, log_ekle)
+    editorial_state, _ = _editorial_calistir(router, video_state, fact_state, kullanici_notu, log_ekle, icerik_tonu)
+    mod_future = _anlatim_modu_arka_planda(router, video_state, fact_state, editorial_state, sure_saniye, icerik_tonu, kullanici_notu, log_ekle)
     _ilerleme(ilerlemeyi_guncelle, 4); log_ekle('🎙️ Agentic Viral Üretim Döngüsü Başlatılıyor (4 Ajan)...')
     legacy_voice = secilen_ses_ingilizce if isinstance(secilen_ses_ingilizce, str) and secilen_ses_ingilizce.strip() else 'Autonoe'
     reels_state, model_reels, duo_plan, duo_script, ses_basarili, kullanilan_ses_modeli, ses_modu, ses_dosyasi, caption_state, threads_state, qa_state, qa_rounds, model_caption, model_threads, qa_pass = _qa_regeneration_loop(
-        router, video_state, fact_state, editorial_state, {}, {}, {}, {}, {}, sure_saniye, icerik_tonu, legacy_voice, log_ekle, production_notes=metin_uretim_notlari,
+        router, video_state, fact_state, editorial_state, {}, {}, {}, {}, {}, sure_saniye, icerik_tonu, legacy_voice, log_ekle, production_notes=kullanici_notu,
         editorial_hazirlayici=mod_future.result,
     )
     editorial_state = mod_future.result()
@@ -1273,7 +1319,8 @@ def metin_pipeline_calistir(router, metin, icerik_tonu, secilen_ses_ingilizce, l
     video_state = {'video_identity': {'brand': 'UNKNOWN', 'exact_model': 'UNKNOWN', 'confidence': 'unknown', 'source': 'telegram_text'}, 'observed_facts': [metin], 'unknowns': [], 'possible_inference': [], 'viral_arastirma_ihtiyaclari': ['Metindeki araç/konu kimliğini ve güncel iddiaları doğrula.'], 'visual_opportunities': ['Metin tabanlı üretim; video görsel zaman çizelgesi yok.'], 'timeline': []}
     state['video_state'] = video_state
     _ilerleme(ilerlemeyi_guncelle, 1, '📝 Metin girdisi'); log_ekle('📝 Metin girdisi işleniyor (video analizi atlanıyor)...')
-    _ilerleme(ilerlemeyi_guncelle, 2, '🔎 Research / Fact Lock'); fact_state, _ = _research_calistir(router, video_state, log_ekle); state['fact_state'] = fact_state
+    state['kullanici_notu'] = metin
+    _ilerleme(ilerlemeyi_guncelle, 2, '🔎 Research / Fact Lock'); fact_state, _ = _research_calistir(router, video_state, log_ekle, kullanici_notu=metin); state['fact_state'] = fact_state
     _ilerleme(ilerlemeyi_guncelle, 3, '🧠 Editorial Brain'); editorial_state, _ = _editorial_calistir(router, video_state, fact_state, metin, log_ekle, icerik_tonu)
     # Metin modda kullanıcı metni = üretim notu; açık ses modu talebi burada aranır.
     mod_future = _anlatim_modu_arka_planda(router, video_state, fact_state, editorial_state, sure_saniye, icerik_tonu, metin, log_ekle)

@@ -14,10 +14,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
 
-from core.config import TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
+from core.config import SES_HIZ_CARPANI, TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
 from core.pipeline import MAX_QA_REGEN, SOCIAL_QA_EXTRA_REGEN, pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
 from core.media import video_suresini_al
+from core.prompts import kullanici_notu_temizle
 from core.social_fallbacks import caption_fallback, limit_threads_text, threads_fallback, text as _text
 
 
@@ -311,7 +312,38 @@ def _qa_issue_lines(qa, limit=6):
     return lines[:limit]
 
 
-def _final_report(step_status, warnings, errors, result, tone_key):
+def _tts_hiz_etiketi(carpan=SES_HIZ_CARPANI):
+    """Rapor satırındaki hız, core.config'te SESLENDİRMEYİ gerçekten hızlandıran
+    çarpanı gösterir.
+
+    Kök neden (18.10.2026): bu satıra hız değeri SABİT metin olarak yazılmıştı.
+    SES_HIZ_CARPANI her değiştiğinde rapor güncellenmediği için ses gerçekten
+    yeni çarpanla hızlanırken Telegram raporunda eski değer yazmaya devam
+    ediyordu. Değer artık tek kaynaktan (core.config) okunur; buraya sabit
+    sayı yazmak yasak (tests/test_tts_hiz_raporu.py bunu denetler).
+    """
+    try:
+        deger = float(carpan)
+    except (TypeError, ValueError):
+        deger = float(SES_HIZ_CARPANI)
+    return f"⚡ TTS hız: {deger:.2f}x"
+
+
+def _kullanici_notu_etiketi(kullanici_notu="", limit=300):
+    """Raporda kullanıcının yazdığı açıklamanın pipeline'a ULAŞTIĞINI gösterir.
+
+    Kullanıcı "açıklamam dikkate alınmıyor" dediğinde ilk soru notun gelip
+    gelmediğidir; bu satır o soruyu Actions logunu açmadan cevaplar.
+    """
+    not_metni = _scrub(" ".join(str(kullanici_notu or "").split()))
+    if not not_metni:
+        return "📝 Kullanıcı notu: (gönderilmedi)"
+    if len(not_metni) > limit:
+        not_metni = not_metni[:limit].rstrip() + "…"
+    return f"📝 Kullanıcı notu: {not_metni}"
+
+
+def _final_report(step_status, warnings, errors, result, tone_key, kullanici_notu=""):
     warnings = [_scrub(x) for x in (warnings or [])]
     errors = [_scrub(x) for x in (errors or [])]
     lines = ["📊 PIPELINE RAPORU", ""]
@@ -325,12 +357,13 @@ def _final_report(step_status, warnings, errors, result, tone_key):
     lines += [
         "",
         f"🎯 İçerik tonu: {TON_LABELS.get(tone_key, tone_key)}",
+        _kullanici_notu_etiketi(kullanici_notu),
         f"🔥 Ana hikâye kategorisi: {editorial.get('selected_story_category') or 'Bilinmiyor'}",
         f"🧭 İlgi önceliği: {priority_audit.get('status') or 'Bilinmiyor'}",
         f"🇹🇷 Türkiye ilgi kancası: {str(reels.get('turkiye_ilgi_kancasi') or 'Bilinmiyor')[:180]}",
         f"🗣️ Gerçek voice mode: {result.get('ses_modu') or 'Bilinmiyor'}",
         f"🎙️ Gerçek TTS sesi: {result.get('ses_modu_sesi') or result.get('kullanilan_ses_modeli') or result.get('secilen_ses_ingilizce') or 'Bilinmiyor'}",
-        "⚡ TTS hız: 1.20x",
+        _tts_hiz_etiketi(),
         f"🔁 QA regeneration: {result.get('qa_regeneration_rounds', 0)} / {MAX_QA_REGEN}"
         + (f" (+{SOCIAL_QA_EXTRA_REGEN} sosyal)" if SOCIAL_QA_EXTRA_REGEN else ""),
         f"✅ QA final: {_qa_final_label(result)}",
@@ -656,16 +689,21 @@ def process(path):
     mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
     router = SmartRouter()
     step_status, warnings, errors, tone_key, selected_tone, log, progress = _setup_env(PIPELINE_STEPS, loading_id)
-    user_video_note = os.environ.get("VIDEO_ANALYSIS_NOTE", "").strip()
-    video_note = f"KULLANICI TELEGRAM NOTU (MUTLAK ÖNCELİKLİ):\n{user_video_note}" if user_video_note else ""
+    user_video_note = kullanici_notu_temizle(os.environ.get("VIDEO_ANALYSIS_NOTE", ""))
     log(
         f"🚀 PIPELINE INPUT | mode=video | file={path.name} | bytes={len(raw)} | "
         f"duration={duration if duration is not None else 'unknown'}s | mime={mime} | "
         f"tone={tone_key} | update_id={_telegram_update_id() or 'unavailable'} | note_chars={len(user_video_note)}"
     )
+    if user_video_note:
+        # Not ham hâlde pipeline'a gider: etiket + öncelik kuralları tek kaynaktan
+        # (core.prompts) üretilir ve her aşamanın promptuna aynı biçimde girer.
+        log(f"📝 Kullanıcı notu alındı ({len(user_video_note)} karakter); Forensic→QA tüm aşamalara taşınacak.")
+    else:
+        log("📝 Kullanıcı notu gönderilmedi; üretim yalnız video gözlemi + araştırma ile ilerleyecek.")
 
     try:
-        result = pipeline_calistir(router=router, video_bytes=raw, mime_type=mime, temp_input_video=str(path), video_analiz_notlari=video_note, metin_uretim_notlari=video_note, sure_saniye=duration, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
+        result = pipeline_calistir(router=router, video_bytes=raw, mime_type=mime, temp_input_video=str(path), video_analiz_notlari=user_video_note, metin_uretim_notlari=user_video_note, sure_saniye=duration, icerik_tonu=selected_tone, secilen_ses_ingilizce="Autonoe", log_ekle=log, ilerlemeyi_guncelle=progress)
     except Exception as exc:
         errors.append(str(exc))
         log(f"❌ Pipeline exception: {type(exc).__name__}: {str(exc)[:300]}")
@@ -678,7 +716,7 @@ def process(path):
         )
         log.finish_timing("FAIL")
         try:
-            edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key))
+            edit_message(loading_id, _final_report(step_status, warnings, errors, {"secilen_ses_ingilizce": "Autonoe"}, tone_key, kullanici_notu=user_video_note))
         except Exception:
             pass
         raise
@@ -698,7 +736,7 @@ def process(path):
             log,
         )
         log.finish_timing("FAIL_NO_VIDEO")
-        edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key))
+        edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key, kullanici_notu=user_video_note))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
     result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "TTS gerçek WAV süresi doğrulandı")
@@ -709,7 +747,7 @@ def process(path):
     for i in range(len(PIPELINE_STEPS)):
         step_status.setdefault(i, "🟢")
     try:
-        _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key)))
+        _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key, kullanici_notu=user_video_note)))
         _timed_action(log, "Telegram final video upload", lambda: send_video(final, video_caption))
         _timed_action(log, "Telegram başlık seçenekleri", lambda: send_message(_format_title_options(result.get("kapak_basliklari") or [])))
         if threads:

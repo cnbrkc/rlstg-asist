@@ -22,7 +22,10 @@ from core.schemas import (
     DETECTIVE_SCHEMA, HOOK_GEN_SCHEMA, SCRIPT_WRITER_SCHEMA,
     CRITIC_SCHEMA, METADATA_GEN_SCHEMA,
 )
-from core.prompts import durumu_metne_donustur, girdi_birlestir, metadata_promptunu_olustur
+from core.prompts import (
+    durumu_metne_donustur, girdi_birlestir, metadata_promptunu_olustur,
+    kullanici_notu_icerik, kullanici_notu_kurallari, kullanici_notu_temizle,
+)
 from core.media import (
     _ses_suresini_al, gecici_ses_yolu, temp_dosya_temizle,
 )
@@ -487,18 +490,21 @@ def _ses_sure_uyumlu_mu(ses_dosyasi, video_suresi):
 
 # --- 4 ajan çalıştırıcıları ----------------------------------------------------
 
-def _detective_calistir(router, video_state, fact_state, editorial_state, log):
+def _detective_calistir(router, video_state, fact_state, editorial_state, log, production_notes=""):
+    kullanici_notu = kullanici_notu_temizle(production_notes)
     prompt = (
         "Sen otoXtra'nın Dedektif Ajanısın. Görevin: İzleyicinin sinir uçlarına dokunacak kronik şikayetleri, "
         "Türkiye'ye özel vergi/maliyet mağduriyetlerini ve en kışkırtıcı ham bilgiyi bulmak.\n"
         "Aşağıdaki video, fact lock ve editorial brief'e dayanarak sadece JSON şemasına uygun çıktı ver."
         + vergi_kilidi_talimati(fact_state)
         + fiyat_talimati(fact_state)
+        + kullanici_notu_kurallari(kullanici_notu)
     )
     content = girdi_birlestir(
         durumu_metne_donustur('VIDEO', video_state),
         durumu_metne_donustur('FACT LOCK', fact_state),
-        durumu_metne_donustur('EDITORIAL', editorial_state)
+        durumu_metne_donustur('EDITORIAL', editorial_state),
+        kullanici_notu_icerik(kullanici_notu)
     )
     return _run_timed(
         log, "🕵️ Detective Ajan (Derin Analiz)",
@@ -538,7 +544,8 @@ KAPAK_KALITE_KURALI = (
 )
 
 
-def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim=""):
+def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim="", production_notes=""):
+    kullanici_notu = kullanici_notu_temizle(production_notes)
     prompt = (
         "Sen otoXtra'nın Kışkırtıcı Kanca Üreticisisin. Dedektifin bulduğu malzemeyi kullanarak "
         "ilk 3 saniyede izleyiciyi şok edecek bir kanca üreteceksin.\n"
@@ -550,13 +557,15 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
         + KAPAK_KALITE_KURALI
         + vergi_kilidi_talimati(fact_state)
         + fiyat_talimati(fact_state)
+        + kullanici_notu_kurallari(kullanici_notu)
     )
     if geri_bildirim:
         prompt += f"\n\n🚨 FINAL QA GERİ BİLDİRİMİ (kapak/kancayı buna göre düzelt): {geri_bildirim}"
     content = girdi_birlestir(
         durumu_metne_donustur('DETECTIVE', detective_state),
         durumu_metne_donustur('FACT LOCK', fact_state),
-        durumu_metne_donustur('EDITORIAL', editorial_state)
+        durumu_metne_donustur('EDITORIAL', editorial_state),
+        kullanici_notu_icerik(kullanici_notu)
     )
     return _run_timed(
         log, "🪝 Hook Generator Ajan (Kanca Üretimi)",
@@ -564,7 +573,8 @@ def _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log
     )
 
 
-def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO", qa_geri_bildirimi="", hedef_kelime=0, segment_butcesi="", mevcut_script=None, mevcut_kelime=0, eksik_kelime=0):
+def _script_writer_calistir(router, hook_state, detective_state, fact_state, editorial_state, video_state, sure_saniye, log, feedback="", hedef_kelime_bilgisi="", mod="DUO", qa_geri_bildirimi="", hedef_kelime=0, segment_butcesi="", mevcut_script=None, mevcut_kelime=0, eksik_kelime=0, production_notes=""):
+    kullanici_notu = kullanici_notu_temizle(production_notes)
     if mod == "DUO":
         karakter_bilgisi = "Karakterler: Autonoe (şüpheci, zeki kadın), Charon (iddialı, kanıtlayan erkek). İki kişilik doğal muhabbet."
         diyalog_kurallari = (
@@ -659,7 +669,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
             "Fact Lock'ta OBSERVED/VERIFIED olmayan hiçbir iddia, rakam veya özellik kullanma, emin olmadığın bilgiyi çıkar:\n"
             f"{qa_geri_bildirimi}"
         )
-    prompt += vergi_kilidi_talimati(fact_state) + fiyat_talimati(fact_state)
+    prompt += vergi_kilidi_talimati(fact_state) + fiyat_talimati(fact_state) + kullanici_notu_kurallari(kullanici_notu)
 
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
@@ -667,6 +677,7 @@ def _script_writer_calistir(router, hook_state, detective_state, fact_state, edi
         durumu_metne_donustur('FACT LOCK', fact_state),
         durumu_metne_donustur('EDITORIAL', editorial_state),
         durumu_metne_donustur('VIDEO', video_state),
+        kullanici_notu_icerik(kullanici_notu),
         f"VIDEO SÜRESİ: {sure_saniye} saniye"
     )
     return _run_timed(
@@ -706,16 +717,21 @@ def _critic_calistir(router, script_state, hook_state, log, qa_geri_bildirimi=""
     )
 
 
-def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, ton=None):
+def _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, ton=None, production_notes=""):
+    kullanici_notu = kullanici_notu_temizle(production_notes)
     # Caption + hashtag kuralları caption_prompt.txt'teki TEK KAYNAK prompttan
     # gelir (700-850 karakter, TAM 5 hashtag, Fact Lock sınırları, artifact yasağı)
     # + reels_baslik talimatı. Eski 2 satırlık prompt kuralsız çıktı ürettiği
     # için kaldırıldı (Eylül 2026: kısa caption + 7 hashtag).
-    prompt = metadata_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state) + fiyat_talimati(fact_state)
+    prompt = (
+        metadata_promptunu_olustur(ton) + vergi_kilidi_talimati(fact_state) + fiyat_talimati(fact_state)
+        + kullanici_notu_kurallari(kullanici_notu)
+    )
     content = girdi_birlestir(
         durumu_metne_donustur('HOOK', hook_state),
         durumu_metne_donustur('SCRIPT', script_state),
-        durumu_metne_donustur('FACT LOCK', fact_state)
+        durumu_metne_donustur('FACT LOCK', fact_state),
+        kullanici_notu_icerik(kullanici_notu)
     )
     return _run_timed(
         log, "🏷️ Metadata Generator Ajan (Başlık & Caption)",
@@ -823,11 +839,11 @@ def _arka_plan_baslat(fn, ad):
     return future
 
 
-def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log, ton=None):
+def _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log, ton=None, production_notes=""):
     def _calistir():
         return _istege_bagli_ajan(
             log, "🏷️ Metadata Generator Ajan",
-            lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, ton=ton),
+            lambda: _metadata_gen_calistir(router, script_state, hook_state, fact_state, log, ton=ton, production_notes=production_notes),
             {},
             router=router,
             atlanabilir=True,
@@ -859,11 +875,11 @@ def _mod_coz(mod_karari):
     return mod if mod in {"DUO", "SOLO_FEMALE", "SOLO_MALE"} else "DUO"
 
 
-def _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=""):
+def _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim="", production_notes=""):
     """Hook ajanını çalıştırır ve kapak setini kurala göre 5 Üst/Alt'a tamamlar."""
     hook_state, hook_model = _istege_bagli_ajan(
         log, "🪝 Hook Generator Ajan",
-        lambda: _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim=geri_bildirim),
+        lambda: _hook_gen_calistir(router, detective_state, fact_state, editorial_state, log, geri_bildirim=geri_bildirim, production_notes=production_notes),
         _hook_fallback(editorial_state),
         router=router,
     )
@@ -929,7 +945,7 @@ def kapaklari_yeniden_uret(router, reels_state, baglam, fact_state, editorial_st
     return _kapak_alanlarini_guncelle(reels_state, hook_state, kapak_basliklari, ilk_uc_saniye=ilk)
 
 
-def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None, baglam=None, qa_geri_bildirimi=""):
+def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sure_saniye, ton, legacy_voice, log, mod_karari=None, baglam=None, qa_geri_bildirimi="", production_notes=""):
     """4 Ajanlı Viral Üretim Döngüsü (Kelime ve TTS Süre Güvenlik Duvarlı).
 
     mod_karari: dict veya dict döndüren callable. Callable ise yalnızca Script
@@ -940,12 +956,16 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
       çağrılmaz). baglam["hook_yenile"] True ise Hook yeniden üretilir.
     qa_geri_bildirimi: Final QA'nın reddetme gerekçeleri; Script Writer'a ve
       Critic'e verilir (Critic QA düzeltmelerini denetler, geri aldırmaz).
+    production_notes: Kullanıcının videoyla birlikte gönderdiği açıklama. Dört
+      ajanın HEPSİNE taşınır (eski sürümde pipeline bu değeri alıp hiçbir ajana
+      vermiyordu); öncelik kuralları core.prompts'ta tek kaynaktan gelir.
 
     Dönüş (9'luplü):
       (reels_state, model, duo_plan, duo_script, ses_basarili,
        kullanilan_ses_modeli, ses_modu, ses_dosyasi, metadata_state)
     """
     baglam = baglam if isinstance(baglam, dict) else {}
+    kullanici_notu = kullanici_notu_temizle(production_notes)
     hedef, minimum, maksimum, _, _ = _reels_kelime_ayarlarini_hazirla(sure_saniye, KELIME_HIZI_ORANI)
     hedef_kelime_bilgisi = f"Hedef {hedef} kelime. Kesin aralık {minimum}-{maksimum} kelime."
 
@@ -959,7 +979,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
     else:
         detective_state, detective_model = _istege_bagli_ajan(
             log, "🕵️ Detective Ajan",
-            lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log),
+            lambda: _detective_calistir(router, video_state, fact_state, editorial_state, log, production_notes=kullanici_notu),
             {},
             router=router,
             atlanabilir=True,
@@ -981,7 +1001,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         hook_geri_bildirimi = qa_geri_bildirimi if baglam.get("hook_yenile") else ""
         hook_state, kapak_basliklari, hook_basarili = _hook_uret(
             router, detective_state, fact_state, editorial_state, log,
-            geri_bildirim=hook_geri_bildirimi,
+            geri_bildirim=hook_geri_bildirimi, production_notes=kullanici_notu,
         )
         if not hook_basarili and onceki_hook and onceki_hook_basarili:
             # Yenileme düştü: modelin önceki kancası yerel şablondan iyidir.
@@ -998,7 +1018,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
             # kapaklar model kapaklarıyla değiştirilir (kritik yolda bekleme yok).
             log("🪝 Kapak kurtarma: Hook ajanı Script/TTS ile paralel olarak yeniden deneniyor...")
             kapak_kurtarma = _arka_plan_baslat(
-                lambda: _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=hook_geri_bildirimi),
+                lambda: _hook_uret(router, detective_state, fact_state, editorial_state, log, geri_bildirim=hook_geri_bildirimi, production_notes=kullanici_notu),
                 "kapak-kurtarma",
             )
 
@@ -1053,6 +1073,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
                 qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef,
                 mevcut_script=eski_script, mevcut_kelime=onceki_adet, eksik_kelime=hedef - onceki_adet,
+                production_notes=kullanici_notu,
             )
             script_state = _object_state_or_empty(script_state)
             # Model soruyu yeniden replik olarak eklediyse de replik kopyası
@@ -1078,6 +1099,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                 router, hook_state, detective_state, fact_state, editorial_state,
                 video_state, sure_saniye, log, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
                 qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef, segment_butcesi=segment_butcesi,
+                production_notes=kullanici_notu,
             )
             script_state = _object_state_or_empty(script_state)
             # Soru son replik olarak yazıldıysa replik kopyası atılır (bknz.
@@ -1110,6 +1132,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
                     router, hook_state, detective_state, fact_state, editorial_state,
                     video_state, sure_saniye, log, feedback=feedback, hedef_kelime_bilgisi=hedef_kelime_bilgisi, mod=mod,
                     qa_geri_bildirimi=qa_geri_bildirimi, hedef_kelime=hedef, segment_butcesi=segment_butcesi,
+                    production_notes=kullanici_notu,
                 )
                 revize_state = _object_state_or_empty(revize_state)
                 if revize_state.get("segments"):
@@ -1228,7 +1251,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
 
         # Metadata yalnız senaryoya bağlıdır (TTS'e değil): TTS (~45 sn) ile
         # EŞZAMANLI başlatılır; seri çalıştırmada ~15 sn ek bekleme yaratıyordu.
-        metadata_future = _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log, ton=ton)
+        metadata_future = _metadata_arka_planda_baslat(router, script_state, hook_state, fact_state, log, ton=ton, production_notes=kullanici_notu)
 
         # TTS Üretimi
         ses_dosyasi = gecici_ses_yolu()
