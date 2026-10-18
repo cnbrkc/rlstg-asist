@@ -119,7 +119,7 @@ SES_KANAL = 1
 SES_GENISLIK = 2
 VIDEO_CRF = 20
 VIDEO_PRESET = "veryfast"
-SES_HIZ_CARPANI = 1.2
+SES_HIZ_CARPANI = 1.35
 PIPELINE_ADIMLARI = [
     "🎥 Video analiz ediliyor (Forensic)...",
     "🔎 Gerçekler doğrulanıyor (Research / Fact Lock)...",

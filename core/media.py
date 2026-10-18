@@ -1,6 +1,6 @@
 """Ses ve video işleme fonksiyonları (ffmpeg, hızlandırma, birleştirme)."""
 import os, re, wave, shutil, subprocess, tempfile, uuid, json, math
-from core.config import VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK
+from core.config import VIDEO_CRF, VIDEO_PRESET, SES_ORNEK_HIZI, SES_KANAL, SES_GENISLIK, SES_HIZ_CARPANI
 from core.sozlesme import VIDEO_HIZ_MAKS, VIDEO_HIZ_MIN
 
 # Sözleşme sınırları (tek doğruluk kaynağı: core/sozlesme.py).
@@ -196,7 +196,7 @@ def video_suresini_al(video_yolu: str) -> float:
 def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log_ekle) -> bool:
     if not ses_yolu or not os.path.exists(ses_yolu): return False
     input_bilgi = medya_raporu(video_yolu, "INPUT", log_ekle)
-    medya_raporu(ses_yolu, "TTS 1.20x SONRASI", log_ekle)
+    medya_raporu(ses_yolu, f"TTS {SES_HIZ_CARPANI:.2f}x SONRASI", log_ekle)
 
     video_sure = video_suresini_al(video_yolu)
     ses_sure = _ses_suresini_al(ses_yolu)

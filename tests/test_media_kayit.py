@@ -27,6 +27,13 @@ class SenkronKomutuTests(unittest.TestCase):
     def test_komut_t_sureyi_icerir(self):
         komut = media._senkron_komutu("v.mp4", "a.wav", "cikti.mp4", "setpts=PTS/0.5", 12.5, 30.0)
         self.assertIn("-filter:v", komut)
+        # Yavaşlatma yalnız videoya uygulanır; hızlandırılmış TTS ses akışı
+        # doğrudan eşlenir ve final mux aşamasında yeniden yavaşlatılmaz.
+        self.assertEqual(komut[komut.index("-map") + 1], "0:v:0")
+        self.assertEqual(komut[komut.index("-map", komut.index("-map") + 1) + 1], "1:a:0")
+        self.assertNotIn("-filter:a", komut)
+        self.assertNotIn("atempo", komut)
+        self.assertEqual(komut[komut.index("-af") + 1], "apad")
         self.assertIn("-t", komut)
         self.assertIn("12.500000", komut)
         # Son komut argümanı çıktı yolu olmalı.
