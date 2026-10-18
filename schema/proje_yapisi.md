@@ -85,6 +85,11 @@ qa_result, qa_pass, content_tone, pipeline_state{...}, input_media?, output_medi
   - Loga yalnız FAIL veren kontrol **adları** yazılır (gerekçe metni değil, §10).
     Gerekçeler Script Writer'a `qa_geri_bildirimi` olarak ve Telegram raporuna gider.
   - Hiç hedef çıkarılamazsa bu açıkça loglanır ve render durdurulur (sessiz FAIL yok).
+  - **SOLO mod koruması:** `SOLO_FEMALE/SOLO_MALE` için yalnız mod-uyumsuz
+    `DUO_SCRIPT_FAIL` (veya açıkça yalnız ikinci ses/friction/reaksiyon eksikliğini
+    eleştiren `duo_check`) yok sayılır. Gerçek/ambiguous diyalog/başka-konuşmacı
+    eleştirisi VOICEOVER_FAIL'e yöneltilir; diğer voiceover/fact/caption check'leri
+    korunarak FAIL kalır. Gerekçe yoksa sadece desteklenmeyen hedef temizlenir.
 - Maks **1** seslendirme/video yenilemesi (`MAX_QA_REGEN`). Hedef→etki:
   - `VOICEOVER_FAIL|DUO_SCRIPT_FAIL` → Script Writer + **Critic** + TTS (+ paralel
     Metadata) QA geri bildirimiyle yeniden. Critic QA gerekçelerini bilir, düzeltmeleri
@@ -159,12 +164,17 @@ SOLO'da: hook→bilgi→dönüş→callback; diyalog kalıbı yasak.
 
 **TTS segment üretimi:** `segments[].text` yalnız duyulacak sözlerdir.
 `tts_tag` (`[vurgulu]`, `[alaycı]`, `[savunarak]`...) transkripte yazılmaz;
-`core/tts_delivery.py` onu İngilizce prosodi notuna çevirir ve router bu notu
-`#### TRANSCRIPT` sınırının üstünde gönderir. `gemini-2.5-flash-preview-tts`
-köşeli etiketi kelime diye okuduğu için etiket metne eklenmez.
-`yorum_tetikleyici_soru` sona vurgu stiliyle, etiketsiz eklenir (DUO'da son
-konuşmacının karşıtı, SOLO'da tek speaker). `duo_script = {status: ready|fallback,
-segments:[{speaker,text,style}], contract:{mode}, conversation_design:{}, model:"agentic"}`.
+`core/tts_delivery.py` bunu İngilizce prosodi notuna çevirir. Gemini 3.8 TTS'te
+router her repliği ayrı `Part(text=...)` olarak, stil ve (DUO'da) konuşmacıyla
+birlikte `speech_metadata` içinde yollar; tek prompt'a gömülü `#### TRANSCRIPT`
+yerine bu yapılandırılmış turn sözleşmesi kullanılır. Unary Gemini 3.8 audio
+zaten WAV'dir ve RIFF/WAVE olarak doğrudan kaydedilir. Yalnız structured segment
+vermeyen eski dış çağrılar legacy prompt yolunu korur; yeni model/config hatasında
+`gemini-2.5-flash-preview-tts` geçici fallback'i bulunur (17 Kasım 2026 kapanışına
+göre kaldırılmalı). `yorum_tetikleyici_soru` sona vurgu stiliyle, etiketsiz eklenir
+(DUO'da son konuşmacının karşıtı, SOLO'da tek speaker). `duo_script = {status:
+ready|fallback, segments:[{speaker,text,style}], contract:{mode},
+conversation_design:{}, model:"agentic"}`.
 
 **Güvenlik duvarları (döngü içi):**
 - Boş segment → yeniden yazım (≤`VOICE_REGEN_MAX=2`).

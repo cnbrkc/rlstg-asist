@@ -20,7 +20,9 @@ from core.pipeline import (
     _caption_calistir,
     _qa_calistir,
     _qa_regeneration_loop,
+    _qa_sonucunu_coz,
     _research_calistir,
+    _solo_duo_qa_korumasini_uygula,
     _threads_calistir,
     _threads_state_normalize,
 )
@@ -93,25 +95,39 @@ def _mock_duo_ses(router, segments, output_path, log, hiz_carpani=1.0):
 
 
 class QaRegenerationLoopTests(unittest.TestCase):
-    def _run_loop(self, qa_result):
+    def _run_loop(self, qa_result, mode="DUO"):
         wav = _make_wav(gecici_ses_yolu())
+        qa_results = qa_result if isinstance(qa_result, list) else [qa_result]
+        qa_index = {"value": 0}
+        speakers = [{"speaker": "female", "text": "a"}, {"speaker": "male", "text": "b"}]
+        if mode == "SOLO_FEMALE":
+            speakers = [{"speaker": "female", "text": "a"}, {"speaker": "female", "text": "b"}]
+        elif mode == "SOLO_MALE":
+            speakers = [{"speaker": "male", "text": "a"}, {"speaker": "male", "text": "b"}]
         agentic_ret = (
             {"seslendirme_metni": "metin", "kapak_basliklari": [], "turkiye_ilgi_kancasi": "kanca"},
             "m-reels",
-            {"mode": "DUO"},
-            {"status": "ready", "segments": [{"speaker": "female", "text": "a"}, {"speaker": "male", "text": "b"}], "contract": {"mode": "DUO"}},
+            {"mode": mode},
+            {"status": "ready", "segments": speakers, "contract": {"mode": mode}},
             True,
             "m-ses",
-            "DUO",
+            mode,
             wav,
             {"reels_aciklama": "caption", "reels_hashtag": ["#oto"]},
         )
+
+        def _qa_response(*_args, **_kwargs):
+            index = min(qa_index["value"], len(qa_results) - 1)
+            qa_index["value"] += 1
+            return qa_results[index], "m-qa"
+
         with patch("core.pipeline.agentic_icerik_uretimi", return_value=agentic_ret), \
-             patch("core.pipeline._qa_calistir", return_value=(qa_result, "m-qa")), \
+             patch("core.pipeline._qa_calistir", side_effect=_qa_response), \
              patch("core.pipeline._threads_calistir", return_value=({"threads_aciklamasi": "t"}, "m-threads")):
             router = _FakeRouter({})
+            logs = []
             result = _qa_regeneration_loop(
-                router, {}, {}, {}, {}, {}, {}, {}, {}, 30, "dengeli", "Autonoe", lambda m: None,
+                router, {}, {}, {}, {}, {}, {}, {}, {}, 30, "dengeli", "Autonoe", logs.append,
             )
         if os.path.exists(wav):
             os.remove(wav)
@@ -148,6 +164,65 @@ class QaRegenerationLoopTests(unittest.TestCase):
     def test_no_targets_fail_stays_failing(self):
         r = self._run_loop({"overall": "FAIL", "regeneration_targets": []})
         self.assertFalse(r[14])
+
+    def test_solo_mode_ignores_unsubstantiated_duo_target_after_caption_regen(self):
+        qa_caption_fail = {
+            "overall": "FAIL",
+            "regeneration_targets": ["CAPTION_FAIL"],
+            "caption_check": "FAIL: açıklama yeniden yazılmalı",
+        }
+        # CI logundaki durum: model yalnız DUO_SCRIPT_FAIL dedi, duo_check dahil
+        # herhangi bir kontrol alanında FAIL açıklaması döndürmedi.
+        qa_false_duo_fail = {"overall": "FAIL", "regeneration_targets": ["DUO_SCRIPT_FAIL"]}
+        result = self._run_loop([qa_caption_fail, qa_false_duo_fail], mode="SOLO_FEMALE")
+
+        self.assertTrue(result[14], "SOLO moddaki temelsiz DUO etiketi geçerli TTS render'ını durdurmamalı")
+        self.assertEqual(result[11], 1)
+        self.assertEqual(result[10]["overall"], "PASS")
+        self.assertEqual(result[10]["ignored_qa_targets"], ["DUO_SCRIPT_FAIL"])
+        self.assertEqual(result[10]["regeneration_targets"], [])
+
+    def test_solo_mode_ignores_explicit_failure_for_missing_duo_only_features(self):
+        qa_result = {
+            "overall": "FAIL",
+            "regeneration_targets": ["DUO_SCRIPT_FAIL"],
+            "duo_check": "FAIL: no second speaker is present, no friction, reactions, and back-and-forth",
+        }
+        result = self._run_loop(qa_result, mode="SOLO_FEMALE")
+
+        self.assertTrue(result[14], "Eksik duo özellikleri SOLO modda render'ı engellememeli")
+        self.assertIn("duo_check", result[10]["ignored_qa_checks"])
+
+    def test_solo_mode_explicit_dialogue_shaped_failure_is_not_silenced(self):
+        qa_result = {
+            "overall": "FAIL",
+            "regeneration_targets": ["DUO_SCRIPT_FAIL"],
+            "duo_check": "FAIL: metin hâlâ soru-cevap kalıbında",
+        }
+        result = self._run_loop(qa_result, mode="SOLO_FEMALE")
+
+        self.assertFalse(result[14], "Açık script FAIL'i SOLO modda da render'ı durdurmalı")
+
+
+class SoloDuoQaGuardTests(unittest.TestCase):
+    def test_concrete_voiceover_fact_and_caption_failures_remain_blocking(self):
+        failures = {
+            "tts_check": ("FAIL: seslendirme cümlesi kesilmiş", "VOICEOVER_FAIL"),
+            "fact_check": ("FAIL: doğrulanmamış iddia", "VOICEOVER_FAIL"),
+            "caption_check": ("FAIL: açıklama yanlış bilgiyi tekrar ediyor", "CAPTION_FAIL"),
+        }
+        for check, (message, expected_target) in failures.items():
+            with self.subTest(check=check):
+                qa_state = {
+                    "overall": "FAIL",
+                    "regeneration_targets": ["DUO_SCRIPT_FAIL"],
+                    check: message,
+                }
+                qa_state = _solo_duo_qa_korumasini_uygula(qa_state, "SOLO_FEMALE", lambda *_: None)
+                overall, targets, _ = _qa_sonucunu_coz(qa_state, {}, 30, lambda *_: None)
+
+                self.assertEqual(overall, "FAIL")
+                self.assertIn(expected_target, targets)
 
 
 class ResearchFallbackTests(unittest.TestCase):

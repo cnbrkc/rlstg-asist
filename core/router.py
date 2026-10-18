@@ -14,6 +14,7 @@ from core.config import (
     METIN_MODELLERI,
     ARAMA_MODELLERI,
     SES_MODELLERI,
+    SES_LEGACY_MODELLERI,
     VIDEO_ANALIZ_MODELLERI,
     COOLDOWN_BULUNAMADI,
     COOLDOWN_DIGER,
@@ -25,7 +26,7 @@ from core.config import (
 )
 from core.media import sesi_hizlandir, temp_dosya_temizle, wav_yaz, gecici_dosya_yolu
 from core.schema_validation import validate_structured_output
-from core.tts_delivery import teslimatlari_birlestir, transkripti_ayikla
+from core.tts_delivery import segment_konusma, teslimatlari_birlestir, transkripti_ayikla
 
 # İstemci düzeyi varsayılan zaman aşımı (ms). Her istek ayrıca kendi profiline
 # göre daha kısa bir zaman aşımı taşır (bkz. ISTEK_PROFILLERI).
@@ -858,16 +859,97 @@ class SmartRouter:
             pass
         raise ValueError("TTS yanıtında audio bulunamadı")
 
+    @staticmethod
+    def _tts_delivery_style(teslimat: str) -> str:
+        notlar = []
+        for line in str(teslimat or "").splitlines():
+            line = re.sub(r"^\s*Turn\s+\d+(?:\s+\([^)]*\))?:\s*", "", line, flags=re.IGNORECASE).strip()
+            if line and line not in notlar:
+                notlar.append(line)
+        return "; ".join(notlar)
+
+    def _tts_structured_contents(self, metin, segments=None, *, multi_speaker=False, speaker_names=(), teslimat=""):
+        """Gemini 3.8 TTS'nin turn-level transcript + speech_metadata formatı."""
+        parts = []
+        valid_speakers = set(speaker_names or [])
+        default_style = (
+            "Natural, conversational Turkish dialogue; distinct voices; no artificial pauses; speak verbatim."
+            if multi_speaker
+            else "Natural, conversational Turkish narration; clear and grounded; speak verbatim."
+        )
+
+        for segment in segments or []:
+            if not isinstance(segment, dict):
+                continue
+            spoken, style = segment_konusma(segment)
+            if not spoken:
+                continue
+            metadata = {"style": f"{default_style} {style}".strip()}
+            if multi_speaker:
+                speaker = str(segment.get("speech_speaker") or segment.get("speaker") or "").strip()
+                if speaker not in valid_speakers:
+                    raise ValueError(f"TTS segment has unknown speaker {speaker!r}")
+                metadata["speaker"] = speaker
+            parts.append(
+                types.Part(
+                    text=spoken,
+                    speech_metadata=types.SpeechMetadata(**metadata),
+                )
+            )
+
+        if not parts:
+            spoken, extracted = transkripti_ayikla(metin)
+            if not spoken:
+                spoken = str(metin or "").strip()
+            style = self._tts_delivery_style(teslimatlari_birlestir(teslimat, extracted))
+            metadata = {"style": f"{default_style} {style}".strip()}
+            if multi_speaker:
+                raise ValueError("Multi-speaker Gemini 3.8 TTS requires structured speaker turns")
+            parts.append(types.Part(text=spoken, speech_metadata=types.SpeechMetadata(**metadata)))
+
+        return [types.Content(role="user", parts=parts)]
+
+    def _tts_modern_request(self, contents, modern_config, legacy_contents, legacy_config, log_ekle):
+        """Try stable 3.8 TTS first; keep a short-lived 2.5 preview fallback."""
+        with self.istek_profili("tts"):
+            try:
+                return self._make_request(SES_MODELLERI, contents, modern_config, log_ekle)
+            except Exception as modern_error:
+                if not SES_LEGACY_MODELLERI:
+                    raise
+                log_ekle(
+                    "⚠️ Gemini 3.8 TTS isteği başarısız; geçici 2.5 TTS uyumluluk fallback'i deneniyor: "
+                    + str(modern_error)[:140]
+                )
+                return self._make_request(SES_LEGACY_MODELLERI, legacy_contents, legacy_config, log_ekle)
+
+    @staticmethod
+    def _audio_wav_mi(audio: bytes) -> bool:
+        audio = bytes(audio or b"")
+        return len(audio) >= 12 and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"
+
     def _tts_kaydet(self, audio: bytes, cikti_dosyasi: str, hiz_carpani: float, log_ekle) -> Tuple[bool, Optional[str]]:
+        audio = bytes(audio or b"")
+        tam_wav = self._audio_wav_mi(audio)
         if abs(hiz_carpani - 1.0) < 0.001:
-            wav_yaz(cikti_dosyasi, audio)
+            if tam_wav:
+                with open(cikti_dosyasi, "wb") as f:
+                    f.write(audio)
+            else:
+                # Legacy TTS yanıtı ham PCM döndürür.
+                wav_yaz(cikti_dosyasi, audio)
             return True
 
         raw = gecici_dosya_yolu("ses_ham", "wav")
-        wav_yaz(raw, audio)
-        ok = sesi_hizlandir(raw, cikti_dosyasi, hiz_carpani, log_ekle)
-        temp_dosya_temizle(raw)
-        return ok
+        if tam_wav:
+            with open(raw, "wb") as f:
+                f.write(audio)
+        else:
+            wav_yaz(raw, audio)
+        try:
+            return sesi_hizlandir(raw, cikti_dosyasi, hiz_carpani, log_ekle)
+        finally:
+            temp_dosya_temizle(raw)
 
     def ses_uret(
         self,
@@ -877,24 +959,33 @@ class SmartRouter:
         log_ekle,
         hiz_carpani: float = 1.0,
         teslimat: str = "",
+        segments=None,
     ) -> Tuple[bool, Optional[str]]:
-        config = types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=ses_adi)
-                )
-            ),
-        )
         try:
             temiz, cikarilan = transkripti_ayikla(metin)
             teslimat = teslimatlari_birlestir(teslimat, cikarilan)
-            with self.istek_profili("tts"):
-                response, info = self._make_request(
-                    SES_MODELLERI,
-                    self._tts_performans_promptu_olustur(temiz or metin, ses_adi, teslimat),
-                    config,
-                    log_ekle,
+            modern_config = types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=ses_adi)
+                    )
+                ),
+            )
+            legacy_prompt = self._tts_performans_promptu_olustur(temiz or metin, ses_adi, teslimat)
+            if segments is None:
+                # Dış/legacy callers without structured turns retain the original
+                # transcript + prompt path. Internal pipeline passes segments.
+                with self.istek_profili("tts"):
+                    response, info = self._make_request(
+                        SES_LEGACY_MODELLERI, legacy_prompt, modern_config, log_ekle,
+                    )
+            else:
+                modern_contents = self._tts_structured_contents(
+                    temiz or metin, segments=segments, teslimat=teslimat,
+                )
+                response, info = self._tts_modern_request(
+                    modern_contents, modern_config, legacy_prompt, modern_config, log_ekle,
                 )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)
@@ -911,6 +1002,7 @@ class SmartRouter:
         log_ekle,
         hiz_carpani: float = 1.0,
         teslimat: str = "",
+        segments=None,
     ) -> Tuple[bool, Optional[str]]:
         # Gemini multi-speaker TTS tam olarak iki speaker config ister. Tek
         # speaker veya yinelenen etiket kabul edilirse istek başarılı görünse
@@ -942,35 +1034,37 @@ class SmartRouter:
                 log_ekle("❌ Çoklu TTS config reddedildi: speaker etiketleri ve sesler farklı olmalı.")
                 return False, None
 
-            # ÖNEMLİ: GenerateContentConfig.speech_config alanı SpeechConfig
-            # bekler. MultiSpeakerVoiceConfig doğrudan bu alana verilirse
-            # google-genai/Pydantic onu sessizce boş bir SpeechConfig'e çevirir:
-            # API'ye `speechConfig: {}` gider ve model tek bir ses seçer. Önceki
-            # "başarılı ama tek sesli" üretimin kök nedeni buydu.
-            multi_speaker_config = types.MultiSpeakerVoiceConfig(
-                speaker_voice_configs=configs
-            )
-            speech_config = types.SpeechConfig(
-                multi_speaker_voice_config=multi_speaker_config
-            )
-            config = types.GenerateContentConfig(
+            multi_speaker_config = types.MultiSpeakerVoiceConfig(speaker_voice_configs=configs)
+            speech_config = types.SpeechConfig(multi_speaker_voice_config=multi_speaker_config)
+            modern_config = types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=speech_config,
             )
             temiz, cikarilan = transkripti_ayikla(metin)
             teslimat = teslimatlari_birlestir(teslimat, cikarilan)
-            prompt = self._tts_coklu_promptu_olustur(temiz or metin, names, teslimat)
+            legacy_prompt = self._tts_coklu_promptu_olustur(temiz or metin, names, teslimat)
             log_ekle(
                 "🔐 Multi-speaker API config doğrulandı: "
                 + " + ".join(f"{speaker}={voice}" for speaker, voice in zip(names, voices))
             )
 
-            with self.istek_profili("tts"):
-                response, info = self._make_request(
-                    SES_MODELLERI,
-                    prompt,
-                    config,
-                    log_ekle,
+            if segments is None:
+                # Dış/legacy çağrılar, mevcut transcript + prompt sözleşmesini
+                # korur. İç pipeline artık structured `segments` gönderir.
+                with self.istek_profili("tts"):
+                    response, info = self._make_request(
+                        SES_LEGACY_MODELLERI, legacy_prompt, modern_config, log_ekle,
+                    )
+            else:
+                modern_contents = self._tts_structured_contents(
+                    temiz or metin,
+                    segments=segments,
+                    multi_speaker=True,
+                    speaker_names=names,
+                    teslimat=teslimat,
+                )
+                response, info = self._tts_modern_request(
+                    modern_contents, modern_config, legacy_prompt, modern_config, log_ekle,
                 )
             audio = self._tts_response_audio_bytes(response)
             ok = self._tts_kaydet(audio, cikti_dosyasi, hiz_carpani, log_ekle)

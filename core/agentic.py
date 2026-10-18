@@ -473,7 +473,11 @@ def _duo_ses_veya_legacy_uret(router, duo_script, legacy_text, legacy_voice, log
     teslimat = teslimat_blogu((duo_script or {}).get("segments") or [])
     ok, info = _run_timed(
         log, "Legacy tek ses TTS + WAV hazırlama",
-        lambda: router.ses_uret(metin, effective_legacy_voice, output_path, log, hiz_carpani=SES_HIZ_CARPANI, teslimat=teslimat),
+        lambda: router.ses_uret(
+            metin, effective_legacy_voice, output_path, log,
+            hiz_carpani=SES_HIZ_CARPANI, teslimat=teslimat,
+            segments=(duo_script or {}).get("segments") or [],
+        ),
     )
     return ok, info, mode
 
@@ -1172,7 +1176,7 @@ def agentic_icerik_uretimi(router, video_state, fact_state, editorial_state, sur
         }
 
         # TTS segmenti: text = yalnız duyulacak sözler. Vurgu `style` alanındadır;
-        # `[vurgulu]` transkripte yazılmaz (2.5 TTS etiketi kelime diye okur).
+        # router Gemini 3.8'de bunu her turn için speech_metadata olarak gönderir.
         tts_segments = []
         for seg in segments:
             text = str(seg.get("text", "") or "").strip()
