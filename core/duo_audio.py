@@ -57,6 +57,17 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     transcript = _duo_transcript(valid)
     if not transcript:
         return False, None
+    structured_segments = []
+    for segment in valid:
+        text, style = segment_konusma(segment)
+        if not text:
+            continue
+        speaker = str(segment.get("speaker", "")).strip().lower()
+        structured_segments.append({
+            "speaker": voice_for_character(speaker),
+            "text": text,
+            "style": style,
+        })
     teslimat = teslimat_blogu(valid)
     not_sayisi = teslimat.count("\n") + 1 if teslimat else 0
     log_ekle(
@@ -65,7 +76,7 @@ def duo_ses_uret(router, segments, output_path, log_ekle, hiz_carpani=SES_HIZ_CA
     )
     ok, info = router.coklu_ses_uret(
         transcript, speakers_present, output_path, log_ekle,
-        hiz_carpani=hiz_carpani, teslimat=teslimat,
+        hiz_carpani=hiz_carpani, teslimat=teslimat, segments=structured_segments,
     )
     if not ok:
         log_ekle("❌ Tek çağrı DUO TTS başarısız; tek sesli fallback engellendi.")

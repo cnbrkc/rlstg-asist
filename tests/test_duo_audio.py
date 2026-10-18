@@ -79,6 +79,13 @@ class DuoAudioTests(unittest.TestCase):
         self.assertIn("Turn 1 (female)", kwargs["teslimat"])
         self.assertIn("Turn 2 (male)", kwargs["teslimat"])
         self.assertNotIn("Turn 3", kwargs["teslimat"])
+        self.assertEqual(
+            kwargs["segments"],
+            [
+                {"speaker": "Autonoe", "text": thought, "style": "curious, a slight rise if the line is a question"},
+                {"speaker": "Charon", "text": reply, "style": "stress the key claim; slightly slower and firmer on the important words, then return to conversational pace"},
+            ],
+        )
         self.assertEqual(segments[0]["text"], thought)
         self.assertEqual(segments[1]["text"], reply)
 

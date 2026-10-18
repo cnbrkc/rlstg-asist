@@ -1,11 +1,11 @@
 """Seslendirme yönergesini konuşulan metinden ayırır.
 
-Üretim sesi `gemini-2.5-flash-preview-tts`. Bu model transkripti kelimesi
-kelimesine okur; köşeli parantez etiketleri Gemini 3.1'in İngilizce tag
-setine aittir. `[vurgulu]`, `[alaycı]`, `[savunarak]` gibi Türkçe sahne
-yönergeleri 2.5'te (ve 3.1'in eğitilmediği etiketlerde) yüksek sesle
-okunur. Vurgu kalsın, kelime okunmasın: yönerge İngilizce teslimat notuna
-çıkar, transkriptte yalnız duyulacak sözler kalır.
+Gemini 3.8 TTS transcript'i kelimesi kelimesine üretir; iç pipeline her repliği
+ayrı text part olarak gönderir ve stil/konuşmacıyı yapılandırılmış
+`speech_metadata` alanında taşır. Eski, düz prompt kullanan 2.5 Preview yedek
+çağrıları için de transcript ile İngilizce teslimat bloğu üretmeye devam eder.
+`[vurgulu]`, `[alaycı]`, `[savunarak]` gibi Türkçe sahne yönergeleri hiçbir
+zaman duyulacak metinde kalmaz.
 """
 import re
 

@@ -17,40 +17,36 @@ if not API_KEYS:
     raise RuntimeError("GEMINI_API_KEY secret bulunamadı.")
 
 
-# GÜNCEL MODELLER (Eylül 2026) - Ücretli olan Pro modelleri ve limiti düşük olanlar çıkarıldı.
-# Sadece ücretsiz (Free Tier) API'de yüksek limitli çalışan Flash serisi bırakıldı.
+def _env_bool(ad, varsayilan=False):
+    deger = os.getenv(ad)
+    if deger is None or not str(deger).strip():
+        return varsayilan
+    return str(deger).strip().lower() in {"1", "true", "yes", "evet", "on"}
+
+
+# Gemini API model rotasyonu (18.10.2026).
+# Gemini 3.8 Flash kararlı sürüm olarak en yetenekli ve dengeli varsayılandır.
+# Gemini 3.5 Flash-Lite / 3.6 Flash, mevcut üretim loglarında çalışan hızlı
+# yedeklerdir. 3.7 Flash -> 3.8 Flash ve 3.5 Flash -> 3.6 Flash artık alias
+# olarak otomatik yönlendirildiğinden gereksiz denemeleri kaldırdık.
 #
-# SIRALAMA (Eylül 2026 üretim logları): gemini-3.5-flash-lite ve gemini-3.6-flash
-# fiilen yanıt veren modeller; 3.8/3.7/3.5-flash ve 3.1-flash-lite yoğunlukta
-# neredeyse her denemede anında 503 döndü. Kanıtlanmış modeller öne alındı ki
-# ilk model düştüğünde ikinci denemede hemen çalışan modele geçilsin.
+# Gemini 4 Argon kararlı ve en güçlü reasoning modelidir; ancak Google'ın resmi
+# fiyatlandırmasına göre Free Tier'da YOKTUR ve çıktı tokenı maliyeti yüksektir.
+# Ücretli proje kullananlar açıkça GEMINI_ENABLE_GEMINI_4_ARGON=1 diyerek açar.
+# Varsayılan kapalı: ücretsiz anahtarlarda kota-0/429 ve beklenmeyen ücret olmaz.
+GEMINI_ENABLE_GEMINI_4_ARGON = _env_bool("GEMINI_ENABLE_GEMINI_4_ARGON", False)
+GEMINI_PREMIUM_MODELLERI = ["gemini-4-argon"] if GEMINI_ENABLE_GEMINI_4_ARGON else []
 
-VIDEO_ANALIZ_MODELLERI = [
+_GEMINI_FLASH_FALLBACKS = [
+    "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ]
 
-METIN_MODELLERI = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-]
-
-ARAMA_MODELLERI = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-]
+VIDEO_ANALIZ_MODELLERI = [*GEMINI_PREMIUM_MODELLERI, *_GEMINI_FLASH_FALLBACKS]
+METIN_MODELLERI = [*GEMINI_PREMIUM_MODELLERI, *_GEMINI_FLASH_FALLBACKS]
+ARAMA_MODELLERI = [*GEMINI_PREMIUM_MODELLERI, *_GEMINI_FLASH_FALLBACKS]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -96,13 +92,14 @@ ISTEK_BUTCELERI_SANIYE = {
 # ile açılır); ajanlar her zaman denenir.
 ASIRI_YUK_ATLAMA_PENCERESI_SANIYE = _env_int("ROUTER_OVERLOAD_SKIP_WINDOW", 90)
 
+# 3.8 TTS kararlı modeldir; GenerateContent'te speech_metadata ve WAV içerik
+# çıktısı kullanılır. Router 3.8 isteği başarısız olursa, 17 Kasım 2026
+# kapanışına kadar geçici uyumluluk için legacy preview'a düşer.
 SES_MODELLERI = [
-    # gemini-3.1-flash-tts-preview bu kodun gönderdiği multi-speaker/prebuilt
-    # voice config'iyle sürekli 400 (model_config) hatası veriyor; bu yüzden
-    # çalışan gemini-2.5-flash-preview-tts önceliklendirildi.
-    "gemini-2.5-flash-preview-tts",
-    "gemini-3.1-flash-tts-preview",
+    "gemini-3.8-flash-tts",
+    "gemini-3.8-flash-lite-tts",
 ]
+SES_LEGACY_MODELLERI = ["gemini-2.5-flash-preview-tts"]
 
 
 COOLDOWN_BULUNAMADI = 24 * 60 * 60
@@ -139,13 +136,6 @@ PIPELINE_ADIMLARI = [
 
 def model_arama_destekliyor_mu(model_adi: str) -> bool:
     return model_adi in ARAMA_MODELLERI
-
-
-def _env_bool(ad, varsayilan=False):
-    deger = os.getenv(ad)
-    if deger is None or not str(deger).strip():
-        return varsayilan
-    return str(deger).strip().lower() in {"1", "true", "yes", "evet", "on"}
 
 
 # Hız-öncelikli operasyon anahtarları (varsayılan KAPALI = kalite öncelikli).

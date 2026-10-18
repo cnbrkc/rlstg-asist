@@ -774,6 +774,113 @@ def _uzunluk_uygun_mu(reels_state, sure_saniye, ses_dosyasi=None):
     return True
 
 
+def _solo_qa_duo_eksiklik_kontrolu_mu(reason):
+    """True only when a duo_check fails for a missing duo-only feature.
+
+    A real solo violation (another speaker or dialogue-shaped writing) stays
+    blocking; absence of banter, a second voice, reactions, or friction does not.
+    """
+    folded = str(reason or "").casefold().translate(str.maketrans("çğıöşü", "cgiosu"))
+    duo_only_topic = re.search(
+        r"\b(?:second speaker|second voice|second character|another speaker|two speakers|two voices|"
+        r"friction|banter|reactions?|back[- ]and[- ]forth|asymmetric|interlocutor|duo|"
+        r"ikinci (?:konusmaci|ses|karakter)|iki (?:konusmaci|ses)|karsilikli (?:tepki|atisma)|"
+        r"surtusme|asimetrik)\b",
+        folded,
+    )
+    missing = re.search(
+        r"\b(?:missing|no|lack(?:s|ing)?|without|absent|not enough|does not|doesn.t|has no|hasn.t|insufficient|"
+        r"eksik|yok|bulunmuyor|bulunmamasi|olmuyor|olmamasi|yetersiz)\b",
+        folded,
+    )
+    dialogue_shaped = re.search(
+        r"(?:dialogue[- ]shaped|written as (?:a )?(?:dialogue|q.?a)|q.?a format|"
+        r"question[- ]and[- ]answer|question[- ]answer|diyalog kalib|soru[- ]?cevap kalib)",
+        folded,
+    )
+    explicit_not_dialogue = re.search(
+        r"(?:not|isn't|is not) (?:written as (?:a )?)?(?:dialogue|q.?a)|"
+        r"not dialogue[- ]shaped|diyalog kalibinda degil|soru[- ]?cevap kalibinda degil",
+        folded,
+    )
+    another_speaker_present = re.search(
+        r"(?:another speaker (?:appears|speaks|is present|is used)|"
+        r"second speaker (?:appears|speaks|is present)|"
+        r"another voice (?:appears|speaks|is present)|second voice (?:appears|speaks|is present)|"
+        r"baska (?:bir )?(?:konusmaci|ses) (?:konusuyor|var|bulunuyor)|"
+        r"ikinci (?:konusmaci|ses) (?:konusuyor|var|bulunuyor))",
+        folded,
+    )
+    if another_speaker_present:
+        prefix = folded[:another_speaker_present.start()]
+        if re.search(r"\b(?:no|not|without|missing|absent|does not|doesn.t|yok|eksik)\b(?:\s+\w+){0,3}\s*$", prefix):
+            another_speaker_present = None
+    concrete_solo_violation = another_speaker_present or (dialogue_shaped and not explicit_not_dialogue)
+    return bool(duo_only_topic and missing and not concrete_solo_violation)
+
+
+def _solo_duo_qa_korumasini_uygula(qa_state, expected_mode, log):
+    """SOLO modda DUO_SCRIPT_FAIL hedefinin yanlışlıkla render'ı kilitlemesini önler.
+
+    SOLO üretimde eksik ikinci konuşmacı / sürtüşme / duo ritmi QA hatası değildir.
+    Bu mod-uyumsuz hedefi veya açıkça yalnızca duo özelliklerinin yokluğunu eleştiren
+    `duo_check` FAIL'ini kaldırır. Gerçek/ambiguous bir SOLO script FAIL'i ve diğer
+    voiceover, fact, caption kontrolleri blocking kalır.
+    """
+    if expected_mode not in {"SOLO_FEMALE", "SOLO_MALE"} or not isinstance(qa_state, dict):
+        return qa_state
+
+    raw_targets = qa_state.get("regeneration_targets") or []
+    if isinstance(raw_targets, str):
+        raw_targets = re.split(r"[,\s]+", raw_targets)
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+
+    def _normalize(target):
+        return str(target or "").strip().upper().replace(" ", "_")
+
+    duo_targets = {"DUO_SCRIPT_FAIL", "DUO_FAIL"}
+    has_duo_target = any(_normalize(target) in duo_targets for target in raw_targets)
+    duo_check = qa_state.get("duo_check")
+    explicit_duo_fail = _qa_check_fail_mi(duo_check)
+    ignored_duo_check = explicit_duo_fail and _solo_qa_duo_eksiklik_kontrolu_mu(duo_check)
+    if ignored_duo_check:
+        qa_state["duo_check"] = "PASS: SOLO modda yalnızca duo-özgü özelliklerin yokluğu hata değildir."
+        ignored_checks = qa_state.get("ignored_qa_checks") or []
+        if isinstance(ignored_checks, str):
+            ignored_checks = [ignored_checks]
+        qa_state["ignored_qa_checks"] = sorted(set(ignored_checks) | {"duo_check"})
+        explicit_duo_fail = False
+    if not has_duo_target and not explicit_duo_fail and not ignored_duo_check:
+        return qa_state
+
+    cleaned = [target for target in raw_targets if _normalize(target) not in duo_targets]
+    if explicit_duo_fail:
+        # Somut/ambiguous SOLO script eleştirisini kapatma: yenilemeye yönlendir.
+        if not any(_normalize(target) == "VOICEOVER_FAIL" for target in cleaned):
+            cleaned.append("VOICEOVER_FAIL")
+        qa_state["regeneration_targets"] = cleaned
+        if callable(log):
+            log(f"⚠️ QA duo_check SOLO modda gerçek/ambiguous FAIL verdi; {expected_mode} için VOICEOVER_FAIL olarak yenilemeye yönlendiriliyor.")
+        return qa_state
+
+    qa_state["regeneration_targets"] = cleaned
+    ignored_targets = qa_state.get("ignored_qa_targets") or []
+    if isinstance(ignored_targets, str):
+        ignored_targets = [ignored_targets]
+    qa_state["ignored_qa_targets"] = sorted(set(ignored_targets) | {"DUO_SCRIPT_FAIL"})
+    concrete_fail = any(
+        _qa_check_fail_mi(qa_state.get(check))
+        for check in QA_CHECK_TARGETS
+    )
+    if not cleaned and not concrete_fail and _qa_overall_coz(qa_state) == "FAIL":
+        qa_state["overall_model"] = qa_state.get("overall")
+        qa_state["overall"] = "PASS"
+    if callable(log):
+        log(f"⚠️ QA {expected_mode} seçiliyken DUO_SCRIPT_FAIL hedefi döndürdü; yalnızca mod-uyumsuz duo hedefi/eksik duo kriteri yok sayıldı, diğer FAIL kontrolleri korunuyor.")
+    return qa_state
+
+
 def _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log, ses_dosyasi=None):
     """QA çıktısını (overall, desteklenen hedefler, FAIL kontrolleri) üçlüsüne indirger.
 
@@ -1071,6 +1178,8 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
         if not isinstance(qa_state, dict):
             qa_state = _object_state_or_empty(qa_state)
         qa_state = dict(qa_state)
+        expected_mode = _beklenen_gercek_mod(duo_plan, duo_script)
+        qa_state = _solo_duo_qa_korumasini_uygula(qa_state, expected_mode, log)
 
         targets_ham = qa_state.get('regeneration_targets') or []
         if isinstance(targets_ham, str):
@@ -1079,7 +1188,6 @@ def _qa_regeneration_loop(router, video_state, fact_state, editorial_state, reel
         overall, supported_targets, failing_checks = _qa_sonucunu_coz(qa_state, reels_state, sure_saniye, log, ses_dosyasi)
         qa_state["regeneration_targets"] = list(supported_targets)
 
-        expected_mode = _beklenen_gercek_mod(duo_plan, duo_script)
         if overall == 'PASS' and not supported_targets:
             if expected_mode == "DUO" and ses_modu != "DUO":
                 overall = "FAIL"
