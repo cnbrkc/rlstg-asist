@@ -302,6 +302,21 @@ kesin Türkiye fiyatı/ÖTV UYDURMAZ; `turkiye_satis_durumu` mutlaka taşınır.
 - Render timeout 600sn. Kalite (unsharp/lanczos) filtresi kasıtlı olarak YOK.
 - Süre okuma: ffprobe → yoksa `ffmpeg -i` stderr parse (`_parse_ffmpeg_stderr`).
 
+### 8a. Telegram teslimat ve büyük video çözümü (Ekim 2026 413 düzeltmesi)
+
+**Kök neden:** `data/IMG_0370.MP4` (20 MB, 1080x1920 60fps, 97s) giriş → 105s 1080x1920 60fps çıkış `CRF20 veryfast`  > 50 MB. Bot API `sendVideo` 50 MB üstünü `413 Request Entity Too Large` ile reddeder; iş kırmızıya döner, üretim boşa gider.
+
+**Çözüm (hiçbir üretimi bozmadan):**
+- `core/config.py:TELEGRAM_VIDEO_MAX_MB` (varsayılan 45) tek kaynak; env `TELEGRAM_VIDEO_MAX_MB` ile ezilebilir.
+- `core/media.py:telegram_limitine_sigdir()` final videoyu kontrol eder: aşılırsa 4 kademeli `CRF26 → 720p+CRF28 → 720p+30fps+CRF28 → 720p+30fps+CRF30` sıkıştırması, her adım `medya_raporu` ile loglanır; limit altı yakalanır yakalanmaz durur.
+- `telegram/telegram_pipeline_worker.py:_telegram_video_boyutunu_dogrula_ve_sikistir()` render sonrası otomatik çağırılır; küçük videolarda passthrough (ek süre yok). `sendVideo` yine 413 döndürürse 38 MB hedefle bir ek deneme.
+- `_giris_videosu_uyarisi()` 20 MB üstü girişlerde erken uyarı verir (yavaşlama ve büyük çıkış riski).
+- Rapor satırı `📦 Final video: X.Y MB (limit 45 MB)` eklenir; medyada `SIKIŞTIRMA N` çizgileri görünür.
+- Workflow `telegram-video-optimized.yml` artık final video artifact'ını da yükler (`final-video-*`, 7 gün) — e-posta entegrasyonu gelene kadar mail alternatifi yerine geçer; kullanıcı Actions artifact'tan indirebilir.
+- Kalite korunur: 720p H.264 CRF28 30fps hâlâ Instagram Reels için kabul edilebilir; normal videolarda orijinal kalite hiç düşmez.
+
+**Yavaşlama notu (19.10.2026 logu):** Forensic 7.12 dk'nın 407s'i kotaya takılmaktı: `gemini-3.8-flash` ilk 3 key'de `429 PerDay` (121s) ve `503`/`timeout` (144s+141s) → başarılı model `gemini-3.5-flash-lite` yalnız 19s. FFmpeg 60s ise 1080p60 105s için normaldir. Sıkıştırma katmanı büyük videolarda 720p'ye düşerek hem 413'ü hem FFmpeg süresini azaltır; kota tarafı için yeni anahtar eklenmesi veya `gemini-3.5-flash-lite`'a öncelik verilmesi önerilir (lite 19s vs 3.8 427s).
+
 ## 9. Kuyruk yaşam döngüsü (Telegram/Cloudflare)
 
 - Girdi `data/pending/<update_id>.json` olarak GitHub'da tutulur

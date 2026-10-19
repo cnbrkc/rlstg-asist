@@ -203,7 +203,31 @@ jobs:
           print(f"- Errors: {len(data.get('errors') or [])}")
           PY
             fi
+            # Telegram 413 teşhisi: final video boyutu
+            if ls /tmp/output*.mp4 1>/dev/null 2>&1; then
+              echo "- Final video candidates:"
+              ls -lh /tmp/output*.mp4 2>/dev/null || true
+            fi
+            if ls data/*.mp4 1>/dev/null 2>&1; then
+              ls -lh data/*.mp4 2>/dev/null | head -n 20 || true
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Büyük videolarda 413 (Request Entity Too Large) sonrası teşhis ve kullanıcıya
+      # manuel indirme imkânı: GitHub Actions artifact'ı 90 güne kadar erişilebilir;
+      # e-posta entegrasyonu (opsiyonel SMTP) eklenene kadar bu, mail alternatifi
+      # yerine geçer — kullanıcı artifact'tan videoyu indirebilir.
+      - name: Upload final video artifact (on success)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/output*.mp4
+            /tmp/telegram_sikistir_*.mp4
+            data/*.mp4
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Includes generated copy and the user-provided analysis note; keep access
       # to repository collaborators and retention short for privacy.

@@ -14,6 +14,16 @@ FFMPEG_TIMEOUT = 600
 FINAL_AUDIO_SAMPLE_RATE = 48000
 FINAL_AUDIO_BITRATE = "192k"
 
+# Telegram Bot API limiti için sıkıştırma (core/config tek kaynak).
+try:
+    from core.config import TELEGRAM_VIDEO_MAX_MB
+    TELEGRAM_VIDEO_MAX_BYTES = TELEGRAM_VIDEO_MAX_MB * 1024 * 1024
+    TELEGRAM_SAFE_MARGIN_MB = 2
+except Exception:
+    TELEGRAM_VIDEO_MAX_BYTES = 45 * 1024 * 1024
+    TELEGRAM_SAFE_MARGIN_MB = 2
+TELEGRAM_AUDIO_BITRATE_LADDER = ["128k", "96k", "64k"]
+
 def _ffmpeg_yolu_bul() -> str:
     try:
         import imageio_ffmpeg
@@ -253,6 +263,144 @@ def video_ve_sesi_birlestir(video_yolu: str, ses_yolu: str, cikti_yolu: str, log
     except Exception as e:
         log_ekle(f"⚠️ Video render hatası: {e}")
         return False
+
+
+def dosya_boyutu_mb(dosya_yolu: str) -> float:
+    try:
+        return os.path.getsize(dosya_yolu) / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
+def video_telegram_limitini_asar_mi(dosya_yolu: str, limit_mb: float = None, log_ekle=None) -> bool:
+    if limit_mb is None:
+        try:
+            from core.config import TELEGRAM_VIDEO_MAX_MB
+            limit_mb = float(TELEGRAM_VIDEO_MAX_MB)
+        except Exception:
+            limit_mb = 45.0
+    if not dosya_yolu or not os.path.exists(dosya_yolu):
+        return False
+    size_mb = dosya_boyutu_mb(dosya_yolu)
+    asar = size_mb > limit_mb
+    if log_ekle and size_mb > 0:
+        if asar:
+            log_ekle(f"\u26a0\ufe0f Telegram limiti kontrol\u00fc: {size_mb:.1f} MB > {limit_mb:.0f} MB \u2014 s\u0131k\u0131\u015ft\u0131rma gerekli.")
+        else:
+            log_ekle(f"\u2705 Telegram limiti kontrol\u00fc: {size_mb:.1f} MB / {limit_mb:.0f} MB (uygun)")
+    return asar
+
+
+def _telegram_sikistirma_filtreleri(max_dimension: int = None, fps_limit: float = None, giris_bilgisi: dict = None) -> list:
+    filtreler = []
+    if max_dimension and giris_bilgisi:
+        w = giris_bilgisi.get("width") or 0
+        h = giris_bilgisi.get("height") or 0
+        if max(w, h) > max_dimension:
+            filtreler.append("scale=720:1280:force_original_aspect_ratio=decrease")
+            filtreler.append("setsar=1")
+    if fps_limit and giris_bilgisi:
+        fps = giris_bilgisi.get("fps") or 0
+        if fps > (fps_limit + 0.5):
+            filtreler.append(f"fps={int(fps_limit)}")
+    return filtreler
+
+
+def videoyu_telegram_icin_sikistir(
+    giris_yolu: str,
+    cikti_yolu: str,
+    log_ekle,
+    crf: int = 26,
+    preset: str = None,
+    max_dimension: int = None,
+    fps_limit: float = None,
+    audio_bitrate: str = "128k",
+) -> bool:
+    if preset is None:
+        preset = VIDEO_PRESET
+    if not giris_yolu or not os.path.exists(giris_yolu):
+        if callable(log_ekle):
+            log_ekle(f"\u26a0\ufe0f S\u0131k\u0131\u015ft\u0131rma girdisi bulunamad\u0131: {giris_yolu}")
+        return False
+    giris_bilgi = _ffprobe_bilgi_al(giris_yolu)
+    vf_filtreler = _telegram_sikistirma_filtreleri(max_dimension, fps_limit, giris_bilgi)
+    cmd = [FFMPEG_BIN, "-y", "-i", giris_yolu]
+    if vf_filtreler:
+        cmd += ["-vf", ",".join(vf_filtreler)]
+    cmd += ["-c:v", "libx264", "-preset", str(preset), "-crf", str(int(crf)), "-pix_fmt", "yuv420p"]
+    if fps_limit:
+        cmd += ["-r", f"{float(fps_limit):.3f}"]
+    cmd += ["-c:a", "aac", "-b:a", str(audio_bitrate), "-ac", str(SES_KANAL), "-ar", str(FINAL_AUDIO_SAMPLE_RATE), "-movflags", "+faststart", cikti_yolu]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
+        if r.returncode != 0:
+            if callable(log_ekle):
+                log_ekle(f"\u26a0\ufe0f ffmpeg s\u0131k\u0131\u015ft\u0131rma hatas\u0131 (CRF{crf} {preset}): {(r.stderr or '')[-700:]}")
+            return False
+        ok = os.path.exists(cikti_yolu) and os.path.getsize(cikti_yolu) > 1024
+        if not ok and callable(log_ekle):
+            log_ekle(f"\u26a0\ufe0f S\u0131k\u0131\u015ft\u0131rma \u00e7\u0131kt\u0131s\u0131 olu\u015fmad\u0131: {cikti_yolu}")
+        return ok
+    except Exception as exc:
+        if callable(log_ekle):
+            log_ekle(f"\u26a0\ufe0f S\u0131k\u0131\u015ft\u0131rma beklenmeyen hata: {exc}")
+        return False
+
+
+def telegram_limitine_sigdir(video_yolu: str, log_ekle, limit_mb: float = None) -> str:
+    if limit_mb is None:
+        try:
+            from core.config import TELEGRAM_VIDEO_MAX_MB
+            limit_mb = float(TELEGRAM_VIDEO_MAX_MB)
+        except Exception:
+            limit_mb = 45.0
+    limit_bytes = int(limit_mb * 1024 * 1024)
+    if not video_yolu or not os.path.exists(video_yolu):
+        return video_yolu
+    orig_size = os.path.getsize(video_yolu)
+    if orig_size <= limit_bytes:
+        if callable(log_ekle):
+            log_ekle(f"\u2705 Telegram limiti kontrol\u00fc: {orig_size/1024/1024:.1f} MB / {limit_mb:.0f} MB (uygun)")
+        return video_yolu
+    if callable(log_ekle):
+        log_ekle(f"\u26a0\ufe0f Video {orig_size/1024/1024:.1f} MB > Telegram {limit_mb:.0f} MB limiti; otomatik s\u0131k\u0131\u015ft\u0131rma ba\u015fl\u0131yor...")
+    kademeler = [
+        {"crf": 26, "max_dim": None, "fps": None, "audio": "128k", "aciklama": "CRF 26 (hafif)"},
+        {"crf": 28, "max_dim": 1280, "fps": None, "audio": "128k", "aciklama": "720p + CRF 28"},
+        {"crf": 28, "max_dim": 1280, "fps": 30, "audio": "96k", "aciklama": "720p + 30fps + CRF 28"},
+        {"crf": 30, "max_dim": 1280, "fps": 30, "audio": "96k", "aciklama": "720p + 30fps + CRF 30 (agresif)"},
+    ]
+    mevcut_giris = video_yolu
+    en_iyi_cikti = video_yolu
+    en_kucuk_boyut = orig_size
+    for idx, kademe in enumerate(kademeler, 1):
+        cikti = gecici_dosya_yolu(f"telegram_sikistir_{idx}", "mp4")
+        ok = videoyu_telegram_icin_sikistir(
+            mevcut_giris, cikti, log_ekle,
+            crf=kademe["crf"], max_dimension=kademe["max_dim"],
+            fps_limit=kademe["fps"], audio_bitrate=kademe["audio"],
+        )
+        if not ok or not os.path.exists(cikti):
+            if callable(log_ekle):
+                log_ekle(f"\u26a0\ufe0f S\u0131k\u0131\u015ft\u0131rma denemesi {idx} ba\u015far\u0131s\u0131z: {kademe['aciklama']}")
+            continue
+        yeni_boyut = os.path.getsize(cikti)
+        medya_raporu(cikti, f"SIKI\u015eTIRMA {idx} ({kademe['aciklama']})", log_ekle)
+        if callable(log_ekle):
+            log_ekle(f"\U0001f4e6 Deneme {idx}: {yeni_boyut/1024/1024:.1f} MB ({kademe['aciklama']})")
+        if yeni_boyut < en_kucuk_boyut:
+            en_kucuk_boyut = yeni_boyut
+            en_iyi_cikti = cikti
+        if yeni_boyut <= limit_bytes:
+            if callable(log_ekle):
+                log_ekle(f"\u2705 Telegram limitine s\u0131\u011fd\u0131r\u0131ld\u0131: {yeni_boyut/1024/1024:.1f} MB \u2264 {limit_mb:.0f} MB (deneme {idx}: {kademe['aciklama']})")
+            return cikti
+        mevcut_giris = cikti
+    if en_iyi_cikti != video_yolu and callable(log_ekle):
+        if os.path.getsize(en_iyi_cikti) > limit_bytes:
+            log_ekle(f"\u26a0\ufe0f En agresif s\u0131k\u0131\u015ft\u0131rmada h\u00e2l\u00e2 {os.path.getsize(en_iyi_cikti)/1024/1024:.1f} MB > {limit_mb:.0f} MB; en k\u00fc\u00e7\u00fck dosya kullan\u0131lacak (Telegram 413 alabilir).")
+    return en_iyi_cikti
+
 
 def _senkron_komutu(video_yolu, ses_yolu, cikti_yolu, video_filtresi, hedef_sure, output_fps):
     """Video+TTS birleştirme ffmpeg komutunu kurar (test edilebilirlik için ayrı)."""

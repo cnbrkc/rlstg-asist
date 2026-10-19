@@ -14,10 +14,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
 
-from core.config import SES_HIZ_CARPANI, TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK
+from core.config import SES_HIZ_CARPANI, TON_DENGELI, TON_EGLENCE, TON_BILGI, TON_TEKNIK, TELEGRAM_VIDEO_MAX_MB, TELEGRAM_INPUT_WARN_MB
 from core.pipeline import MAX_QA_REGEN, SOCIAL_QA_EXTRA_REGEN, pipeline_calistir, metin_pipeline_calistir
 from core.router import SmartRouter
-from core.media import video_suresini_al
+from core.media import video_suresini_al, dosya_boyutu_mb, telegram_limitine_sigdir
 from core.prompts import kullanici_notu_temizle
 from core.social_fallbacks import caption_fallback, limit_threads_text, threads_fallback, text as _text
 
@@ -373,6 +373,15 @@ def _final_report(step_status, warnings, errors, result, tone_key, kullanici_not
         lines.append(f"📥 Input: {input_media.get('width','?')}x{input_media.get('height','?')} | {input_media.get('fps',0):.3f} FPS | {input_media.get('duration',0):.2f}s")
     if output_media:
         lines.append(f"📤 Output: {output_media.get('width','?')}x{output_media.get('height','?')} | {output_media.get('fps',0):.3f} FPS | {output_media.get('duration',0):.2f}s")
+    try:
+        final_path = result.get("final_video") or ""
+        if final_path and Path(final_path).exists():
+            final_mb = dosya_boyutu_mb(final_path)
+            lines.append(f"📦 Final video: {final_mb:.1f} MB (limit {TELEGRAM_VIDEO_MAX_MB} MB)")
+            if final_mb > TELEGRAM_VIDEO_MAX_MB:
+                lines.append("⚠️ Telegram limit aşıldı; otomatik sıkıştırma uygulandıysa yukarıdaki uyarılara bak.")
+    except Exception:
+        pass
     lines += [f"⚠️ Uyarı: {len(warnings)}", f"❌ Hata: {len(errors)}"]
     media_lines = _extract_media_lines(warnings)
     if media_lines:
@@ -681,6 +690,59 @@ def _ensure_social_outputs(result, warnings):
     return caption, hashtags, threads
 
 
+def _telegram_video_boyutunu_dogrula_ve_sikistir(final_path: str, log, warnings: list) -> str:
+    try:
+        limit_mb = float(os.environ.get("TELEGRAM_VIDEO_MAX_MB", str(TELEGRAM_VIDEO_MAX_MB)))
+    except Exception:
+        limit_mb = 45.0
+    if not final_path or not Path(final_path).exists():
+        return final_path
+    orig_mb = dosya_boyutu_mb(final_path)
+    log(f"📦 Final video boyutu: {orig_mb:.1f} MB (Telegram limiti: {limit_mb:.0f} MB)")
+    if orig_mb <= limit_mb:
+        return final_path
+    warnings.append(f"⚠️ Final video {orig_mb:.1f} MB > Telegram {limit_mb:.0f} MB limiti; otomatik sıkıştırma uygulanacak.")
+    yeni_yol = telegram_limitine_sigdir(final_path, log, limit_mb=limit_mb)
+    if yeni_yol and Path(yeni_yol).exists():
+        yeni_mb = dosya_boyutu_mb(yeni_yol)
+        if yeni_mb < orig_mb:
+            log(f"✅ Sıkıştırma sonucu: {orig_mb:.1f} MB → {yeni_mb:.1f} MB")
+            if yeni_mb > limit_mb:
+                warnings.append(f"⚠️ Sıkıştırma sonrası hâlâ {yeni_mb:.1f} MB > {limit_mb:.0f} MB; Telegram 413 riski sürüyor — kullanıcı bilgilendirilecek.")
+            else:
+                warnings.append(f"✅ Video sıkıştırılarak {yeni_mb:.1f} MB'e indirildi (limit {limit_mb:.0f} MB).")
+            return yeni_yol
+    return final_path
+
+
+def _send_video_with_fallback(final_path: str, caption: str, log, warnings: list):
+    try:
+        return send_video(final_path, caption)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "413" in msg or "Too Large" in msg or "Entity Too Large" in msg:
+            log(f"⚠️ Telegram 413 (dosya çok büyük) alındı; ek sıkıştırma deneniyor: {msg[:180]}")
+            warnings.append("⚠️ Telegram 413: gönderilen video limiti aştı; ek sıkıştırma deneniyor.")
+            try:
+                fallback_path = telegram_limitine_sigdir(final_path, log, limit_mb=38.0)
+                if fallback_path and Path(fallback_path).exists() and fallback_path != final_path:
+                    log(f"🔁 Fallback sıkıştırma sonrası yeniden gönderiliyor: {dosya_boyutu_mb(fallback_path):.1f} MB")
+                    return send_video(fallback_path, caption)
+            except Exception as exc2:
+                log(f"⚠️ Fallback sıkıştırma gönderimi de başarısız: {exc2}")
+        raise
+
+
+def _giris_videosu_uyarisi(path, log, warnings: list):
+    try:
+        size_mb = Path(path).stat().st_size / (1024 * 1024)
+        if size_mb > float(TELEGRAM_INPUT_WARN_MB):
+            warnings.append(f"⚠️ Giriş videosu {size_mb:.1f} MB > {TELEGRAM_INPUT_WARN_MB} MB uyarı eşiği; çıkış videosu da büyük olma riski yüksek (kaynak: yüksek çözünürlük/uzun süre). Sıkıştırma gerekebilir.")
+            log(f"⚠️ Büyük giriş videosu: {size_mb:.1f} MB — çıkışın da büyük olması beklenebilir; gerekirse otomatik sıkıştırma uygulanacak.")
+    except Exception:
+        pass
+
+
 def process(path):
     initial = send_message(_loading_text(0, "Video alındı, pipeline başlatılıyor..."))
     loading_id = initial["result"]["message_id"]
@@ -695,6 +757,8 @@ def process(path):
         f"duration={duration if duration is not None else 'unknown'}s | mime={mime} | "
         f"tone={tone_key} | update_id={_telegram_update_id() or 'unavailable'} | note_chars={len(user_video_note)}"
     )
+    # Büyük giriş videosu erken uyarı: 413'ün en yaygın kaynağı yüksek çözünürlük + uzun süre
+    _giris_videosu_uyarisi(path, log, warnings)
     if user_video_note:
         # Not ham hâlde pipeline'a gider: etiket + öncelik kuralları tek kaynaktan
         # (core.prompts) üretilir ve her aşamanın promptuna aynı biçimde girer.
@@ -739,6 +803,20 @@ def process(path):
         edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key, kullanici_notu=user_video_note))
         raise RuntimeError("Pipeline tamamlandı ancak final video üretilemedi.")
 
+    # --- Telegram limiti için otomatik sıkıştırma (413'ün çözümü) ---
+    try:
+        compressed = _telegram_video_boyutunu_dogrula_ve_sikistir(final, log, warnings)
+        if compressed and compressed != final and Path(compressed).exists():
+            final = compressed
+            result["final_video"] = final
+            try:
+                from core.media import medya_raporu as _medya_raporu
+                result["output_media"] = _medya_raporu(final, "OUTPUT (SIKIŞTIRILDI)", log)
+            except Exception:
+                pass
+    except Exception as exc:
+        log(f"⚠️ Telegram sıkıştırma kontrolü atlandı: {type(exc).__name__}: {str(exc)[:180]}")
+
     result["sync_note"] = next((x for x in warnings if "senkron" in x.lower() or "süre uyumu" in x.lower()), "TTS gerçek WAV süresi doğrulandı")
     caption, hashtags, threads = _ensure_social_outputs(result, warnings)
     video_caption, caption_truncated = _caption_with_hashtags(caption, hashtags)
@@ -748,7 +826,7 @@ def process(path):
         step_status.setdefault(i, "🟢")
     try:
         _timed_action(log, "Telegram final rapor mesajı", lambda: edit_message(loading_id, _final_report(step_status, warnings, errors, result, tone_key, kullanici_notu=user_video_note)))
-        _timed_action(log, "Telegram final video upload", lambda: send_video(final, video_caption))
+        _timed_action(log, "Telegram final video upload", lambda: _send_video_with_fallback(final, video_caption, log, warnings))
         _timed_action(log, "Telegram başlık seçenekleri", lambda: send_message(_format_title_options(result.get("kapak_basliklari") or [])))
         if threads:
             _timed_action(log, "Telegram Threads mesajı", lambda: send_message(_threads_message(threads)))
