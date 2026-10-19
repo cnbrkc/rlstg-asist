@@ -134,6 +134,18 @@ PIPELINE_ADIMLARI = [
     "🎬 Video hazırlanıyor (render)...",
 ]
 
+# Telegram Bot API dosya limiti (varsayılan 45 MB; resmi limit 50 MB, başlık/multipart payı için 5 MB tampon).
+# Büyük giriş videosu → büyük çıkış videosu → HTTP 413 (Request Entity Too Large) hatasının kök nedeni budur.
+# Çıkış videosu bu eşiği aşarsa pipeline otomatik sıkıştırma denemeleri yapar (CRF → 720p → 30fps kademeli).
+TELEGRAM_VIDEO_MAX_MB = _env_int("TELEGRAM_VIDEO_MAX_MB", 45)
+TELEGRAM_VIDEO_MAX_BYTES = TELEGRAM_VIDEO_MAX_MB * 1024 * 1024
+# Telegram'a gönderilecek videoda uzun kenarın tavanı (portrait 1080x1920 → 720x1280). 1280 = 720p'nin uzun kenarı.
+TELEGRAM_VIDEO_MAX_DIMENSION = _env_int("TELEGRAM_VIDEO_MAX_DIMENSION", 1280)
+# Sıkıştırma kademelerinde kullanılacak CRF değerleri (küçük = kaliteli/büyük, büyük = düşük kalite/küçük).
+TELEGRAM_VIDEO_COMPRESS_CRF_LADDER = [26, 28, 30]
+# Kaynak videonun analiz için Telegram'dan indirilmesinde uyarı eşiği (MB).
+TELEGRAM_INPUT_WARN_MB = _env_int("TELEGRAM_INPUT_WARN_MB", 20)
+
 def model_arama_destekliyor_mu(model_adi: str) -> bool:
     return model_adi in ARAMA_MODELLERI
 
