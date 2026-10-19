@@ -37,9 +37,14 @@ def _env_bool(ad, varsayilan=False):
 GEMINI_ENABLE_GEMINI_4_ARGON = _env_bool("GEMINI_ENABLE_GEMINI_4_ARGON", False)
 GEMINI_PREMIUM_MODELLERI = ["gemini-4-argon"] if GEMINI_ENABLE_GEMINI_4_ARGON else []
 
+# Üretim loglarına göre (19.10.2026): gemini-3.8-flash 3 anahtar ile
+# ~407 saniye boşa gitti (kota/503/timeout), gemini-3.5-flash-lite 19 sn'de
+# başarılı oldu. Çalışan ve hızlı model önceliklendirilir; 3.8-flash yedek
+# olarak kalır. Sıralama buradan akıştaki tüm model listelerine (video, metin,
+# arama) döker.
 _GEMINI_FLASH_FALLBACKS = [
-    "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-3.1-flash-lite",
 ]

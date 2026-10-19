@@ -1,4 +1,11 @@
-"""Gemini API model IDs follow the current stable catalog without stale aliases."""
+"""Gemini API model IDs follow the current stable catalog without stale aliases.
+
+Flash sıralaması üretim verisine göre intikal eder: 19.10.2026 logunda
+gemini-3.8-flash 3 anahtar ile ~407 sn boşa gitti (kota/503/timeout),
+gemini-3.5-flash-lite ise 19 sn'de başarılı oldu. Dolayısıyla
+gemini-3.5-flash-lite öncelikli model olarak listenin başında tutulur;
+3.8-flash yedek olarak kalır.
+"""
 import os
 import sys
 from pathlib import Path
@@ -9,12 +16,13 @@ os.environ.setdefault("GEMINI_API_KEY", "test-only")
 from core import config
 
 
-def test_flash_fallbacks_prioritize_current_stable_models():
+def test_flash_fallbacks_prioritize_working_model():
+    """Üretimde kanıtlanmış çalışan model (3.5-flash-lite) önce denenir."""
     for models in (config.VIDEO_ANALIZ_MODELLERI, config.METIN_MODELLERI, config.ARAMA_MODELLERI):
         without_optional_argon = [model for model in models if model != "gemini-4-argon"]
         assert without_optional_argon[:4] == [
-            "gemini-3.8-flash",
             "gemini-3.5-flash-lite",
+            "gemini-3.8-flash",
             "gemini-3.6-flash",
             "gemini-3.1-flash-lite",
         ]
